@@ -1,0 +1,9 @@
+nimcache/
+nimblecache/
+build/
+.nimble/
+.direnv/
+.repro/
+node_modules/
+*.swp
+.DS_Store
