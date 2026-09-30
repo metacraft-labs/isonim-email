@@ -1,12 +1,19 @@
-## isonim_email/transport/mailgun.nim — Mailgun messages API.
+## isonim_email/transport/mailgun.nim — Mailgun MIME sending API.
 ##
-## The thin capture-loop sender: `mailgunPayload` purely builds the
-## messages-API fields (unit-tested, no network) and `sendMailgun`
-## POSTs them. The payload carries one `o:tag` part per tag and sets
-## NO `o:dkim` exclusion, so the ESP's DKIM signature covers
+## The thin capture-loop sender. It posts to Mailgun's MIME endpoint
+## (`POST <base>/v3/<domain>/messages.mime`): one `to` field per
+## envelope recipient, one `o:tag` field per tag, and a `message` file
+## part holding exactly the bytes `toRfc5322` produces. What is sent is
+## therefore the message the rest of the library builds and tests —
+## every header (including `List-Unsubscribe`, `List-Unsubscribe-Post`,
+## Cc and Reply-To), every attachment and every `cid:` part — and
+## nothing can be dropped on the way. No `h:` field is needed and no
+## `o:dkim` option is set, so the ESP's DKIM signature covers
 ## `List-Unsubscribe`(+Post) per the R-SND-04 metadata on the message.
 ##
-## C backend only: HTTPS POST. Never called in tests.
+## `mailgunPayload` is pure; `sendMailgun` POSTs it. The API key only
+## ever travels in the Authorization header: no error message carries
+## it. C backend only (HTTP client).
 
 import std/[base64, httpclient, json, os, strutils]
 import ../mime/message
@@ -15,17 +22,21 @@ export message
 
 type
   MailgunError* = object of CatchableError
-    ## A missing key, a failed POST, or an unparseable reply.
+    ## A missing key, no recipient, a failed POST, or an unparseable
+    ## reply.
 
   MailgunPayload* = object
-    ## The messages-API call, built purely by `mailgunPayload`.
+    ## The MIME-endpoint call, built purely by `mailgunPayload`.
     url*: string
-    fromField*, toField*: string
-    subject*, html*, text*: string
+    recipients*: seq[string]   ## envelope recipients (To + Cc + Bcc)
     tags*: seq[string]
+    message*: string           ## exactly `toRfc5322(m, seed)`
 
 const mailgunKeyEnv* = "MAILGUN_API_KEY"
   ## The env var `sendMailgun` reads when `apiKey` is "".
+
+const mailgunMessageField* = "message"
+  ## The MIME endpoint's file part carrying the RFC 5322 bytes.
 
 proc mailgunApiBase*(region: string): string =
   ## `us` (default) or `eu` — Mailgun's two API hosts. Anything else
@@ -39,30 +50,26 @@ proc mailgunApiBase*(region: string): string =
     raise newException(MailgunError,
       "Mailgun: unknown region '" & region & "' (want \"us\" or \"eu\")")
 
-proc headerValue(headers: seq[(string, string)]; name: string): string =
-  ## The first header value for `name`, or "" when absent.
-  for (n, v) in headers:
-    if n == name:
-      return v
-  ""
-
 proc mailgunPayload*(m: EmailMessage; domain: string;
-                    tags: seq[string] = @[];
-                    region = "us"): MailgunPayload =
-  ## Purely builds the `POST <base>/v3/<domain>/messages` fields from
-  ## the message's decoded parts (From/To/Subject headers plus the
-  ## html+text). The `toField` is the header form; Bcc stays out of
-  ## the payload's visible fields exactly as it stays out of the
-  ## headers. Asserts the R-SND-04 half this side owns: nothing here
-  ## excludes the unsubscribe headers from DKIM (there is no `o:dkim`
-  ## field at all).
-  let parts = toParts(m)
+                    tags: seq[string] = @[]; region = "us";
+                    deterministicSeed = ""; apiBase = ""): MailgunPayload =
+  ## Purely builds the `POST <base>/v3/<domain>/messages.mime` call:
+  ## the envelope recipients (`envelopeTo`: To, Cc and Bcc as bare
+  ## addresses — Bcc reaches Mailgun only here, never in the headers),
+  ## the tags, and the complete message from `toRfc5322`. `apiBase`
+  ## "" selects the region's host; a non-empty one replaces it. No
+  ## recipient at all is a `MailgunError`.
+  let recipients = envelopeTo(m)
+  if recipients.len == 0:
+    raise newException(MailgunError,
+      "Mailgun: no envelope recipients (To/Cc/Bcc are all empty)")
+  let base =
+    if apiBase.len > 0: apiBase.strip(leading = false, chars = {'/'})
+    else: mailgunApiBase(region)
   MailgunPayload(
-    url: mailgunApiBase(region) & "/v3/" & domain & "/messages",
-    fromField: headerValue(parts.headers, "From"),
-    toField: headerValue(parts.headers, "To"),
-    subject: headerValue(parts.headers, "Subject"),
-    html: parts.html, text: parts.text, tags: tags)
+    url: base & "/v3/" & domain & "/messages.mime",
+    recipients: recipients, tags: tags,
+    message: toRfc5322(m, deterministicSeed))
 
 proc encodeMultipart*(fields: seq[(string, string)]; fileField = "";
                      fileName = ""; fileMime = "";
@@ -95,46 +102,70 @@ proc encodeMultipart*(fields: seq[(string, string)]; fileField = "";
   ("multipart/form-data; boundary=" & boundary, body)
 
 proc payloadFields*(p: MailgunPayload): seq[(string, string)] =
-  ## The form fields: from/to/subject/html, text when there is a
-  ## plain-text part, plus one `o:tag` per
-  ## tag — and no `o:dkim` anything (R-SND-04).
-  result = @[("from", p.fromField), ("to", p.toField),
-    ("subject", p.subject), ("html", p.html)]
-  # No plain-text part yet: the field is omitted, never sent empty.
-  if p.text.len > 0:
-    result.add(("text", p.text))
+  ## The text fields: one `to` per envelope recipient and one `o:tag`
+  ## per tag — no `h:` fields (the headers ride in the message) and no
+  ## `o:dkim` anything (R-SND-04). The message is the file part.
+  result = @[]
+  for rcpt in p.recipients:
+    result.add(("to", rcpt))
   for tag in p.tags:
     result.add(("o:tag", tag))
 
+proc payloadMultipart*(p: MailgunPayload): tuple[contentType,
+    body: string] =
+  ## The complete `multipart/form-data` request body: the text fields
+  ## then the `message` file part carrying `p.message` byte for byte.
+  encodeMultipart(payloadFields(p), fileField = mailgunMessageField,
+    fileName = "message.mime", fileMime = "message/rfc822",
+    fileBytes = p.message)
+
 proc sendMailgun*(m: EmailMessage; domain, apiKey: string;
-                 tags: seq[string] = @[];
-                 region = "us"): string =
-  ## POSTs the payload with basic auth `api:<key>` and
-  ## returns the Mailgun id. `apiKey == ""` reads `$MAILGUN_API_KEY`
-  ## (missing → `MailgunError`). Needs `-d:ssl`; never called in
-  ## tests — they pin `mailgunPayload` + `encodeMultipart` only.
+                 tags: seq[string] = @[]; region = "us";
+                 deterministicSeed = ""; apiBase = ""): string =
+  ## POSTs the payload with basic auth `api:<key>` and returns the
+  ## Mailgun id. `apiKey == ""` reads `$MAILGUN_API_KEY` (missing →
+  ## `MailgunError`). An https base needs `-d:ssl`. The key is never
+  ## part of an error message: failures name the URL, the status and
+  ## the start of the reply only.
   var key = apiKey
   if key.len == 0:
     key = getEnv(mailgunKeyEnv)
   if key.len == 0:
     raise newException(MailgunError,
       "Mailgun: no API key (pass apiKey or set $" & mailgunKeyEnv & ")")
-  let payload = mailgunPayload(m, domain, tags, region)
-  let (contentType, body) = encodeMultipart(payloadFields(payload))
+  let payload = mailgunPayload(m, domain, tags, region, deterministicSeed,
+    apiBase)
+  let (contentType, body) = payloadMultipart(payload)
+  let auth = "Basic " & base64.encode("api:" & key)
+  proc redact(text: string): string =
+    ## A reply (or a transport error) that echoes the credentials must
+    ## not carry them into the exception.
+    text.replace(auth, "<redacted>").replace(key, "<redacted>")
+  proc snippet(reply: string): string =
+    ## Redacted first, then cut, so a truncation cannot split the key
+    ## past the redaction.
+    let clean = redact(reply)
+    clean[0 ..< min(clean.len, 200)]
   var client = newHttpClient(timeout = 30_000)
   try:
     client.headers = newHttpHeaders({
       "Content-Type": contentType,
-      "Authorization": "Basic " & base64.encode("api:" & key)})
-    let resp = client.request(payload.url, HttpPost, body)
+      "Authorization": auth})
+    var resp: Response
+    try:
+      resp = client.request(payload.url, HttpPost, body)
+    except CatchableError as e:
+      raise newException(MailgunError,
+        "Mailgun: POST " & payload.url & " failed: " & redact(e.msg))
     if resp.code != Http200:
       raise newException(MailgunError,
         "Mailgun: POST " & payload.url & " failed: " & $resp.code &
-          " " & resp.body[0 ..< min(resp.body.len, 200)])
+          " " & snippet(resp.body))
     try:
       resp.body.parseJson()["id"].getStr()
-    except JsonParsingError as e:
+    except CatchableError:
       raise newException(MailgunError,
-        "Mailgun: unparseable reply: " & e.msg)
+        "Mailgun: unparseable reply: " &
+          snippet(resp.body))
   finally:
     client.close()

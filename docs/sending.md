@@ -44,6 +44,10 @@ transports can see it: `toMessage` sets the message's `dkimHeaders`
 metadata to `List-Unsubscribe` + `List-Unsubscribe-Post` whenever
 the headers are emitted (and to empty when they are not), and the
 Mailgun transport sets no `o:dkim` option that would exclude them.
+It posts the complete `toRfc5322` bytes to Mailgun's MIME endpoint
+(`messages.mime`), so both headers — like every other header,
+attachment and inline image — reach Mailgun exactly as built
+(`tests/t6_mailgun.nim` checks the request a capture server receives).
 If you send through your own transport, sign those two headers.
 
 ## Bulk-sender requirements (R-SND-06)

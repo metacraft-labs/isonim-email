@@ -20,7 +20,8 @@
 ## (Date, Message-ID, flowed stuffing, boundaries), the R-SND-03
 ## one-click endpoint (the library's request check and response in a
 ## real HTTP server, POSTed to from a library-built message's headers),
-## the R-SND-04 DKIM metadata + Mailgun payload, and the R-SND-06 doc.
+## the R-SND-04 DKIM metadata, and the R-SND-06 doc. (The Mailgun
+## transport is pinned by tests/t6_mailgun.nim.)
 ##
 ## C backend only: spawns Mailpit and a fixture HTTP server, reads the
 ## PNG fixture and docs/ off disk. No mocks anywhere (allowed_mocks:
@@ -916,12 +917,14 @@ suite "message assembly, transports and round trip":
       for k, _ in resp.headers.pairs():
         check k.toLowerAscii() != "location"
 
-  test "dkim metadata and the mailgun payload":
+  test "dkim metadata":
     # rule: R-SND-04
 
+    # The metadata half: the message names the unsubscribe pair for
+    # DKIM when it carries one. The transport half (the Mailgun request
+    # sets no `o:dkim` exclusion and carries the headers byte for byte)
+    # is pinned by tests/t6_mailgun.nim against a capture server.
     let pngBytes = readFile(testsDir / "fixtures" / "t6_rgb.png")
-    let logoId = contentIdFor(roundtripLogo(pngBytes))
-    let html = rtHtml(logoId)
     let msg = roundtripMessage(pngBytes)
     check msg.dkimHeaders ==
       @["List-Unsubscribe", "List-Unsubscribe-Post"]
@@ -930,82 +933,6 @@ suite "message assembly, transports and round trip":
     let noUnsub = toMessage(roundtripRendered(pngBytes), bareHeaders,
       isEmbedded, roundtripAttachments())
     check noUnsub.dkimHeaders.len == 0
-
-    # The payload maps the message fields; tags ride one part each;
-    # nothing excludes the unsubscribe headers from DKIM.
-    let payload = mailgunPayload(msg, "example.com",
-      @["receipt", "v2"])
-    check payload.url ==
-      "https://api.mailgun.net/v3/example.com/messages"
-    check payload.fromField ==
-      "=?UTF-8?Q?T=C4=93st_S=C3=ABnder?= <sender@example.com>"
-    check payload.toField ==
-      "=?UTF-8?Q?R=C3=A9cipient?= <recipient@example.com>"
-    check decodeWords(payload.subject) == rtSubject
-    check payload.html == html
-    check payload.text == rtText
-    let fields = payloadFields(payload)
-    check ("from", payload.fromField) in fields
-    check ("to", payload.toField) in fields
-    check ("subject", payload.subject) in fields
-    check ("html", html) in fields
-    check ("text", rtText) in fields
-    var tagParts = 0
-    for (name, _) in fields:
-      check not name.toLowerAscii().startsWith("o:dkim")
-      if name == "o:tag":
-        inc tagParts
-    check tagParts == 2
-
-    # No plain-text part: the `text` field is omitted, never sent empty.
-    var htmlOnly = roundtripRendered(pngBytes)
-    htmlOnly.text = ""
-    let htmlOnlyMsg = toMessage(htmlOnly, roundtripHeaders(), isEmbedded)
-    let htmlOnlyPayload = mailgunPayload(htmlOnlyMsg, "example.com")
-    check htmlOnlyPayload.text == ""
-    check htmlOnlyPayload.html.len > 0
-    let htmlOnlyFields = payloadFields(htmlOnlyPayload)
-    for (name, _) in htmlOnlyFields:
-      check name != "text"
-    check htmlOnlyFields.len == 4   # from, to, subject, html
-    let (_, htmlOnlyBody) = encodeMultipart(htmlOnlyFields)
-    check "name=\"text\"" notin htmlOnlyBody
-    check "name=\"html\"" in htmlOnlyBody
-
-    check mailgunApiBase("eu") == "https://api.eu.mailgun.net"
-    try:
-      discard mailgunApiBase("xx")
-      check false
-    except MailgunError as e:
-      check "xx" in e.msg
-
-    # The multipart encoding is deterministic, keeps repeated names,
-    # and re-suffixes a colliding boundary.
-    let (ct1, body1) = encodeMultipart(fields)
-    let (ct2, body2) = encodeMultipart(fields)
-    check (ct1, body1) == (ct2, body2)
-    check body1.count("name=\"o:tag\"") == 2
-    let boundary = ct1.rsplit("boundary=", maxsplit = 1)[1]
-    check boundary notin body1.replace("--" & boundary, "")
-    let (ct3, body3) = encodeMultipart(
-      @[("text", "carries ----isonim-mailgun inside")])
-    check "----isonim-mailgunx" in ct3
-    let boundary3 = ct3.rsplit("boundary=", maxsplit = 1)[1]
-    check boundary3 notin body3.replace("--" & boundary3, "")
-
-    # No key, no network: the error names the env var (no rule:
-    # error path).
-    let oldKey = getEnv(mailgunKeyEnv)
-    try:
-      delEnv(mailgunKeyEnv)
-      try:
-        discard sendMailgun(msg, "example.com", "")
-        check false
-      except MailgunError as e:
-        check mailgunKeyEnv in e.msg
-    finally:
-      if oldKey.len > 0:
-        putEnv(mailgunKeyEnv, oldKey)
 
   test "bulk sender requirements are documented":
     # rule: R-SND-06
