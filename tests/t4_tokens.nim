@@ -88,7 +88,8 @@ suite "tokens resolve to literals with dark pairs":
     let theme = themeFromDtcg(ts, modes, "fixture")
     # Every required key resolves; the light literal is what P5 inlines
     # (R-CSS-01) and the dark literal is what P6 emits in the dark head
-    # block (R-CSS-02). P5/P6 consume the mapping; here we pin it.
+    # block (R-CSS-02). The mapping is pinned first; the end of this
+    # test proves the passes consume both sides of it.
     check theme.lightFor("color.surface.canvas") == "#f4f5f7"
     check theme.darkFor("color.surface.canvas") == "#0f1115"
     # Capitalised mode names (`Light`/`Dark`, as the design system ships)
@@ -126,6 +127,38 @@ suite "tokens resolve to literals with dark pairs":
       check "var(" notin pair.dark
       check "{" notin pair.light
       check "{" notin pair.dark
+    # The passes consume both sides of the pair: through P5, a token
+    # inline resolves to its light literal and the same token under
+    # @dark: to its dark literal; through P6, the dark head block
+    # carries the dark literals and none of the light ones.
+    let r = EmailRenderer()
+    let card = r.createElement("td")
+    r.setStyle(card, "background-color", tok"color.surface.card")
+    r.setStyle(card, "color", tok"color.accent.primary")
+    r.setStyle(card, "@dark:background-color", tok"color.surface.card")
+    r.setStyle(card, "@dark:color", tok"color.accent.primary")
+    let (head, diags) = applyStyles(card, theme, defaultTarget())
+    check diags.len == 0
+    check card.styles["background-color"] == "#ffffff"
+    check card.styles["color"] == "#1f6feb"
+    check head.len == 2
+    for h in head:
+      check h.variant == "dark"
+      if h.prop == "background-color":
+        check h.value == "#1a1d23"
+      else:
+        check h.prop == "color"
+        check h.value == "#4c8dff"
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    var darkText = ""
+    for b in assembleHead(head, designed).blocks:
+      if "prefers-color-scheme" in b.text:
+        darkText = b.text
+    check "background-color:#1a1d23 !important" in darkText
+    check "color:#4c8dff !important" in darkText
+    check "#ffffff" notin darkText
+    check "#1f6feb" notin darkText
 
   test "tok references resolve against the theme":
     let (ts, modes) = modeSet()

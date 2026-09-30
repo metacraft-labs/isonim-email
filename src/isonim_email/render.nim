@@ -213,7 +213,9 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ##
   ## Residue (`<script>`, hydration attributes) raises unconditionally
   ## — it must never reach output. Other errors are collected, and
-  ## `strict` re-raises the first one. The text is empty: the
+  ## `strict` re-raises the first one; it also raises
+  ## `W-CSS-OVER-BUDGET`, since head CSS Gmail is certain to truncate
+  ## is an error under `strict` (R-CSS-07). The text is empty: the
   ## plain-text pass generates it later, and an honest absence beats
   ## a lossy guess. MIME packaging then sends the HTML alone, never an
   ## empty `text/plain` part (see `toMessage`).
@@ -254,6 +256,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
 
   if strict and hasErrors(diags):
     raiseDiagnostic(firstError(diags))
+  if strict:
+    for d in diags:
+      if d.code == codeCssOverBudget:
+        raiseDiagnostic(d)
   RenderedEmail(
     html: html,
     text: "",

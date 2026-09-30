@@ -35,6 +35,19 @@
 ## tests/t4_head_budget.nim. R-CSS-02 is claimed through the
 ## membership audit over the assembled head.
 ##
+## Golden update, 2026-09-30: both goldens were re-recorded because
+## their head blocks pinned output that contradicted the catalogue:
+## - R-DRK-03: the dark block's `[data-ogsb]` copy carried `color`;
+##   `[data-ogsc]` copies now carry `color` only and `[data-ogsb]`
+##   copies `background-color` only (the fixture's dark group gained a
+##   background colour so both copies stay pinned);
+## - `sm:` is the mobile variant, so the responsive fixture rule sits
+##   under `max-width: 479px`, not `min-width: 480px`;
+## - R-INT-02: the `:hover` rule carries `!important`;
+## - R-CSS-08: class names hash the variant, so the generated names
+##   changed.
+## Every other byte is unchanged.
+##
 ## Backend-independent (tree building + pure passes; the goldens load
 ## via `staticRead`), so `just test` also runs it on JS.
 import std/[os, strutils, unittest]
@@ -50,7 +63,8 @@ proc hd(node: EmailNode; variant, prop, value: string): HeadDecl =
 
 proc fullHead(target: EmailTarget): seq[EmailNode] =
   ## Full P6 assembly: reset + responsive + dark + fonts +
-  ## decorative + mso, nothing dropped.
+  ## decorative + mso, nothing dropped (no dark block under
+  ## `darkMode = dmNone`, which emits no dark rules).
   var big = target
   big.headStyleBudget = 1_000_000
   let r = EmailRenderer()
@@ -60,6 +74,7 @@ proc fullHead(target: EmailTarget): seq[EmailNode] =
   let decls = @[
     hd(sm, "sm", "width", "100%"),
     hd(dark, "dark", "color", "#e5e7eb"),
+    hd(dark, "dark", "background-color", "#111827"),
     hd(hover, "hover", "text-decoration", "underline"),
   ]
   let webfonts = @[@[Declaration(prop: "font-family", value: "Custom"),
@@ -71,7 +86,7 @@ proc fullHead(target: EmailTarget): seq[EmailNode] =
     decls: @[Declaration(prop: "padding", value: "0")])]
   let res = assembleHead(decls, big, webfonts, msoRules)
   doAssert res.diagnostics.len == 0
-  doAssert res.blocks.len == 6
+  doAssert res.blocks.len == (if target.darkMode == dmNone: 5 else: 6)
   res.blocks
 
 proc emptyDoc(): EmailNode =
@@ -217,9 +232,11 @@ suite "document golden skeleton":
     target.darkMode = dmNone
     let html = serializeDocument(lowerDocument(emptyDoc(), nil,
       fullHead(target), target))
-    # The dark @media query still names the feature; the metas go.
+    # The metas go, and so do the dark rules.
     check "<meta name=\"color-scheme\"" notin html
     check "<meta name=\"supported-color-schemes\"" notin html
+    check "prefers-color-scheme" notin html
+    check "data-ogs" notin html
 
   test "test_document_outlook_conditionals":
     # rule: R-DOC-08
@@ -276,7 +293,7 @@ suite "document golden skeleton":
     check noword.count("<style>") == 5
     checkIncreasing(word, [
       "<style>html,body{margin:0 auto !important;",
-      "@media only screen and (min-width: 480px)",
+      "@media only screen and (max-width: 479px)",
       "(prefers-color-scheme: dark)",
       "<!--[if !mso]><!--><style>@font-face{font-family:Custom;" &
         "src:url(a.woff2)}</style><!--<![endif]-->",
@@ -286,7 +303,7 @@ suite "document golden skeleton":
     ])
     checkIncreasing(noword, [
       "<style>html,body{margin:0 auto !important;",
-      "@media only screen and (min-width: 480px)",
+      "@media only screen and (max-width: 479px)",
       "(prefers-color-scheme: dark)",
       "<!--[if !mso]><!--><style>@font-face",
       ":hover",

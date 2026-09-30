@@ -53,6 +53,10 @@ const
   codeCssBlockDropped* = "W-CSS-BLOCK-DROPPED"
     ## P6 dropped a head block for budget (R-CSS-07). Collected from
     ## `passes/head.nim` (the registered budget code).
+  codeCssOverBudget* = "W-CSS-OVER-BUDGET"
+    ## The head blocks P6 never drops (reset, responsive) alone exceed
+    ## `headStyleBudget`, so Gmail will truncate them (R-CSS-07).
+    ## Collected from `passes/head.nim`; `strict` raises it.
   codeStructNoDocument* = "E-STRUCT-NO-DOCUMENT"
     ## P1 found zero or more than one `mailDocument`.
     ## Collected from `passes/validate.nim`.

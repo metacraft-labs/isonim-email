@@ -1,10 +1,14 @@
 ## isonim_email/style/classes.nim — deterministic safe class names
 ## (R-CSS-08).
 ##
-## Names are `e-` plus base36 of the FNV-1a hash over the declaration
-## set's canonical serialisation (`css.serializeDecls`, so declaration
-## order never matters), at the shortest prefix — at least 3
-## characters — unique within the render. The same declarations yield
+## Names are `e-` plus base36 of the FNV-1a hash over the variant and
+## the declaration set's canonical serialisation (`css.serializeDecls`,
+## so declaration order never matters), at the shortest prefix — at
+## least 3 characters — unique within the render. The variant (`sm`,
+## `dark`, `hover`) is part of the hash input: the same declarations
+## under two variants get two names, so a rule written for one variant's
+## element never matches another variant's element. The empty variant
+## hashes the declarations alone. The same declarations yield
 ## the same name across runs and templates; on a hash-prefix collision
 ## the later claim extends its prefix, deterministically per render.
 ## Names match `[a-z][a-z0-9-]*`: no escapes, no Tailwind-style
@@ -54,14 +58,18 @@ proc isSafeClassName*(name: string): bool =
   ## validation (R-CSS-09), so a generated name always passes it.
   validClassName(name)
 
-proc classFor*(g: var ClassGen; decls: openArray[Declaration]): string =
-  ## The class name for a declaration set: `e-` plus the shortest
-  ## base36-hash prefix (≥ 3 characters) unique in this render.
-  ## Re-claiming the same declarations returns the same name.
+proc classFor*(g: var ClassGen; decls: openArray[Declaration];
+    variant = ""): string =
+  ## The class name for a declaration set under `variant`: `e-` plus the
+  ## shortest base36-hash prefix (≥ 3 characters) unique in this render.
+  ## Re-claiming the same declarations under the same variant returns
+  ## the same name; another variant yields another name.
   if decls.len == 0:
     raise invalidCss("empty declaration set has no class name " &
       "(R-CSS-05: no empty declarations)")
-  let canon = serializeDecls(decls)
+  let canon =
+    if variant == "": serializeDecls(decls)
+    else: "@" & variant & ":" & serializeDecls(decls)
   let digest = base36(fnv1a64(canon))
   for length in 3 .. digest.len:
     let candidate = "e-" & digest[0 ..< length]

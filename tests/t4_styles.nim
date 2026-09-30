@@ -129,6 +129,48 @@ suite "variant keys split out of inline for P6":
     check (qHead[0].variant, qHead[0].prop, qHead[0].value) ==
       ("sm", "display", "flex")
 
+suite "dark variants resolve tokens to their dark literal":
+  test "test_dark_variant_tokens_resolve_dark":
+    # A tok"…" value under @dark: resolves through the theme's dark
+    # literal — the value the dark rules exist to carry — while the same
+    # token inline and under sm:/hover: resolves to the light literal.
+    let theme = defaultTheme()
+    let key = "color.text.primary"
+    check theme.lightFor(key) != theme.darkFor(key)
+    let r = EmailRenderer()
+    let p = r.createElement("p")
+    r.setStyle(p, "color", tok"color.text.primary")
+    r.setStyle(p, "@dark:color", tok"color.text.primary")
+    r.setStyle(p, "@dark:background-color", tok"color.surface.canvas")
+    r.setStyle(p, "@hover:color", tok"color.text.primary")
+    r.setStyle(p, "@sm:color", tok"color.text.primary")
+    let (head, diags) = applyStyles(p, theme, defaultTarget())
+    check diags.len == 0
+    check p.styles["color"] == theme.lightFor(key)
+    check head.len == 4
+    for h in head:
+      case h.variant
+      of "dark":
+        if h.prop == "color":
+          check h.value == theme.darkFor(key)
+        else:
+          check h.prop == "background-color"
+          check h.value == theme.darkFor("color.surface.canvas")
+          check h.value != theme.lightFor("color.surface.canvas")
+      else:
+        check h.value == theme.lightFor(key)
+    # End to end: the dark head block carries the dark literal, never
+    # the light one.
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let blocks = assembleHead(head, designed).blocks
+    var darkText = ""
+    for b in blocks:
+      if "prefers-color-scheme" in b.text:
+        darkText = b.text
+    check ("color:" & theme.darkFor(key) & " !important") in darkText
+    check theme.lightFor(key) notin darkText
+
 suite "margins convert to cell padding":
   test "test_margins_convert_to_cell_padding":
     let inner = styled("div", [("margin", "8px 0")])

@@ -15,11 +15,16 @@
 ##   construction, no empty declarations, every property name in the
 ##   known-property table, no brace- or semicolon-bearing values
 ##   (R-CSS-05);
+## - no value, selector or query can break out of its `<style>` element
+##   or comment out the rest of the block: `<`, `/*`, `*/`, backslashes
+##   and unbalanced quotes or parentheses are rejected (R-CSS-05);
 ## - selectors are class, element or ID selectors, apart from the
 ##   fixed client-targeting set (R-CSS-09);
 ## - declarations sort by property name, rules by selector, both
-##   deterministically (R-CSS-16). The declaration sort is stable, so
-##   R-CSS-14's blend-then-`rgba()` declaration pairs keep their
+##   deterministically (R-CSS-16), except that a shorthand always
+##   precedes its own longhands, so a longhand written to refine a
+##   shorthand still wins after sorting. The declaration sort is stable,
+##   so R-CSS-14's blend-then-`rgba()` declaration pairs keep their
 ##   order.
 ##
 ## Media-query contents are enforced here (`checkQuery`, R-CSS-10);
@@ -186,10 +191,49 @@ proc validSelector*(selector: string): bool =
       return false
   true
 
+proc checkCssText*(what, text: string) =
+  ## Rejects text that could escape its `<style>` element or change the
+  ## meaning of the rest of the block (R-CSS-05): any `<` (so `</style>`
+  ## cannot close the element early), comment delimiters `/*` and `*/`,
+  ## backslash escapes, and unbalanced quotes or parentheses. Brackets
+  ## inside a quoted string do not count towards the balance. `what`
+  ## names the checked text in the error.
+  proc reject(reason: string) =
+    raise invalidCss(what & " '" & text & "' " & reason &
+      " (R-CSS-05: nothing may break out of the block)")
+  if "/*" in text or "*/" in text:
+    reject("contains a comment delimiter")
+  var depth = 0
+  var quote = '\0'
+  for c in text:
+    if c == '<':
+      reject("contains '<'")
+    if c == '\\':
+      reject("contains a backslash")
+    if quote != '\0':
+      if c == quote:
+        quote = '\0'
+      continue
+    case c
+    of '"', '\'':
+      quote = c
+    of '(':
+      inc depth
+    of ')':
+      if depth == 0:
+        reject("has an unbalanced ')'")
+      dec depth
+    else:
+      discard
+  if quote != '\0':
+    reject("has an unbalanced quote")
+  if depth != 0:
+    reject("has an unbalanced '('")
+
 proc checkDeclaration*(d: Declaration) =
   ## Rejects unknown properties, empty values, and values that would
-  ## break the block: braces, semicolons, or a raw `!` marker
-  ## (R-CSS-03/05).
+  ## break the block: braces, semicolons, a raw `!` marker, or anything
+  ## `checkCssText` rejects (R-CSS-03/05).
   if not knownProperty(d.prop):
     raise invalidCss("unknown property '" & d.prop &
       "' (R-CSS-05: every property name is in the known-property table)")
@@ -205,18 +249,42 @@ proc checkDeclaration*(d: Declaration) =
       raise invalidCss("value '" & d.value & "' for property '" & d.prop &
         "' carries a raw '!' marker; importance comes only from the " &
         "declaration flag, which serialises lower-case (R-CSS-03)")
+  checkCssText("value for property '" & d.prop & "'", v)
+
+const shorthandFamilies = ["background", "border", "font", "list-style",
+  "margin", "outline", "padding"]
+  ## Shorthand roots whose longhands extend the name with `-<part>`.
+
+proc declSortKey*(prop: string): tuple[family: string; level: int;
+    name: string] =
+  ## The R-CSS-16 sort key: property name, except that a shorthand
+  ## always sorts before its own longhands. Within a shorthand family
+  ## (`border`, `margin`, …) properties order first by depth — `border`,
+  ## then `border-top`/`border-color`, then `border-top-color` — and
+  ## then by name, so the order is total and every shorthand precedes
+  ## each of its longhands, even where plain name order would not
+  ## (`border-bottom-color` sorts before `border-color` by name). Other
+  ## properties sort by name alone.
+  let p = prop.toLowerAscii()
+  for fam in shorthandFamilies:
+    if p == fam:
+      return (fam, 0, p)
+    if p.startsWith(fam & "-"):
+      return (fam, p[fam.len + 1 .. ^1].count('-') + 1, p)
+  (p, 0, p)
 
 proc serializeDecls*(decls: openArray[Declaration]): string =
-  ## `prop:value` pairs joined by `;`, sorted by property name with a
-  ## stable tiebreak (R-CSS-16), `!important` lower-case (R-CSS-03).
-  ## Property names canonicalise to lowercase.
+  ## `prop:value` pairs joined by `;`, sorted by `declSortKey` (property
+  ## name, shorthands before their longhands) with a stable tiebreak
+  ## (R-CSS-16), `!important` lower-case (R-CSS-03). Property names
+  ## canonicalise to lowercase.
   var indexed: seq[tuple[prop, value: string; important: bool; idx: int]] = @[]
   for i, d in decls:
     checkDeclaration(d)
     indexed.add((d.prop.toLowerAscii(), d.value.strip(), d.important, i))
   indexed.sort(proc(x, y: tuple[prop, value: string; important: bool;
       idx: int]): int =
-    let c = cmp(x.prop, y.prop)
+    let c = cmp(declSortKey(x.prop), declSortKey(y.prop))
     if c != 0: c else: cmp(x.idx, y.idx))
   var parts: seq[string] = @[]
   for (prop, value, important, _) in indexed:
@@ -288,6 +356,7 @@ proc checkQuery*(query: string) =
   let q = query.strip()
   if q == "":
     raise invalidCss("empty @media query (R-CSS-05)")
+  checkCssText("@media query", q)
   for c in q:
     if c in {'{', '}', '@'}:
       raise invalidCss("@media query '" & query & "' contains '" & $c &
@@ -297,6 +366,7 @@ proc checkQuery*(query: string) =
 
 proc serializeStyleRule*(selector: string;
     decls: openArray[Declaration]): string =
+  checkCssText("selector", selector)
   if not validSelector(selector):
     raise invalidCss("selector '" & selector &
       "' is not a class, element or ID selector from the fixed " &

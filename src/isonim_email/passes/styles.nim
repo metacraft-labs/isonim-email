@@ -1,7 +1,9 @@
 ## isonim_email/passes/styles.nim — P5: the inline style pass.
 ##
 ## Resolves every declaration to its final inline form: `tok"…"` sentinels
-## (stored by the `setStyle` overload) become light literals (R-CSS-01),
+## (stored by the `setStyle` overload) become light literals (R-CSS-01) —
+## except under the `@dark:` variant, where they become the token's dark
+## literal (`darkFor`), the value the dark head rules exist to carry —
 ## variant keys (`@sm:`/`@dark:`/`@hover:`) move into the head
 ## list P6 serialises, units/colours/shorthands normalise through
 ## `style/*`, the closed MSO list applies when `outlookWord`, and
@@ -255,8 +257,9 @@ proc convertMarginToCell(cell: EmailNode; sides: array[4, string];
 proc resolveToken(node: EmailNode; raw: string; theme: EmailTheme;
                   diags: var seq[EmailDiagnostic];
                   val: var string; fromToken: var bool;
-                  tkey: var string): bool =
-  ## Resolves a `tok:` sentinel to its light literal. False after recording
+                  tkey: var string; dark = false): bool =
+  ## Resolves a `tok:` sentinel to its light literal, or to its dark
+  ## literal when `dark` (the `@dark:` variant). False after recording
   ## the `E-THEME-MISSING-TOKEN` diagnostic — the caller keeps the raw
   ## value and moves on.
   tkey = splitTokenKey(raw)
@@ -266,7 +269,7 @@ proc resolveToken(node: EmailNode; raw: string; theme: EmailTheme;
     return true
   fromToken = true
   try:
-    val = theme.lightFor(tkey)
+    val = if dark: theme.darkFor(tkey) else: theme.lightFor(tkey)
   except ThemeError as e:
     diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
     return false
@@ -467,7 +470,8 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     if variant != "":
       var val, tkey: string
       var fromToken = false
-      if not resolveToken(node, raw, theme, diags, val, fromToken, tkey):
+      if not resolveToken(node, raw, theme, diags, val, fromToken, tkey,
+          dark = variant == "dark"):
         res[key] = raw
         continue
       if variant notin headVariants:

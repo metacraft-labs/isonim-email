@@ -23,9 +23,23 @@
 ## Budget (R-CSS-07): total bytes over reset+responsive+dark+fonts+
 ## decorative; while over `headStyleBudget` whole blocks drop from the
 ## lowest priority up (decorative, fonts, dark — never reset, responsive
-## or mso), one `W-CSS-BLOCK-DROPPED` diagnostic per dropped block. A
-## dropped block leaves no dangling class: classes attach to elements
-## only for surviving blocks.
+## or mso), one `W-CSS-BLOCK-DROPPED` diagnostic per dropped block. When
+## the blocks that are never dropped still exceed the budget, one
+## `W-CSS-OVER-BUDGET` follows (Gmail will truncate them). A dropped
+## block leaves no dangling class: classes attach to elements only for
+## surviving blocks.
+##
+## Variants: `sm:` means mobile, so its rules sit under
+## `@media only screen and (max-width:{breakpoint-1}px)`; desktop is the
+## inline style. Every variant rule — responsive, dark and `:hover` —
+## carries `!important`, because each must beat an inline value
+## (R-CSS-03, R-INT-02). Class names hash the variant with the
+## declarations (R-CSS-08), so one variant's rule never matches another
+## variant's element. The dark block is not emitted at all under
+## `darkMode = dmNone`; otherwise its Outlook copies split by property
+## (R-DRK-03): `[data-ogsc]` rules carry `color` only and `[data-ogsb]`
+## rules `background-color` only, while the media query carries every
+## dark declaration.
 ##
 ## `webfonts`/`msoRules` arrive as parameters: the component work owns
 ## feeding them; this pass only places them (`@font-face`
@@ -87,6 +101,7 @@ proc emitStyleRule(selector: string; decls: seq[Declaration]): string =
     raise invalidCss("selector '" & selector &
       "' has no declarations (R-CSS-05: no empty declarations)")
   let sel = selector.strip()
+  checkCssText("selector", sel)
   if isHeadPatternSelector(sel) or validSelector(sel):
     return sel & "{" & serializeDecls(decls) & "}"
   raise invalidCss("selector '" & selector &
@@ -183,6 +198,7 @@ proc resetBlockText*(): string =
   var parts: seq[string] = @[]
   for r in resetRules():
     let sel = r.selector.strip()
+    checkCssText("selector", sel)
     if not validSelector(sel):
       raise invalidCss("selector '" & r.selector &
         "' is not a class, element or ID selector from the fixed " &
@@ -206,13 +222,11 @@ proc groupDecls(decls: seq[HeadDecl]; variant: string): seq[HeadGroup] =
   for d in decls:
     if d.variant != variant:
       continue
-    # Media-query (sm) and dark rules carry `!important` (R-CSS-03:
-    # head rules that must beat inline styles — a
-    # responsive override without it loses to the inline value in every
-    # client). Decorative (`:hover`) rules are neither media-query nor
-    # dark rules, so they stay unflagged.
-    let decl = Declaration(prop: d.prop, value: d.value,
-      important: variant == "sm" or variant == "dark")
+    # Every variant rule carries `!important` (R-CSS-03: head rules
+    # that must beat inline styles). A responsive, dark or hover
+    # override without it loses to the inline value in every client
+    # (R-INT-02 for `:hover`).
+    let decl = Declaration(prop: d.prop, value: d.value, important: true)
     var found = -1
     for i, g in result:
       if g.node == d.node:
@@ -241,6 +255,32 @@ proc blockDropped(blockName: string; blockBytes, totalBytes,
     origin: SourceSpan(), families: {}, weight: 0.0, rules: @["R-CSS-07"],
   )
 
+proc overBudget(protectedBytes, budget: int): EmailDiagnostic =
+  EmailDiagnostic(
+    severity: sevWarning, code: codeCssOverBudget,
+    message: "head blocks that are never dropped (reset, responsive) " &
+      "total " & $protectedBytes & " bytes, over headStyleBudget " &
+      $budget & ": Gmail will truncate them (R-CSS-07)",
+    origin: SourceSpan(), families: {cfGmailWeb, cfGmailApp}, weight: 0.0,
+    rules: @["R-CSS-07"],
+  )
+
+proc ogsCopies(cls: string; decls: seq[Declaration]): seq[string] =
+  ## R-DRK-03's Outlook copies, split by property: `[data-ogsc]` (text
+  ## recolouring) carries the `color` declarations only and
+  ## `[data-ogsb]` (background recolouring) the `background-color`
+  ## declarations only. A group with neither gets no copy.
+  var fg, bg: seq[Declaration] = @[]
+  for d in decls:
+    case d.prop.toLowerAscii()
+    of "color": fg.add(d)
+    of "background-color": bg.add(d)
+    else: discard
+  if fg.len > 0:
+    result.add(emitStyleRule("[data-ogsc] ." & cls, fg))
+  if bg.len > 0:
+    result.add(emitStyleRule("[data-ogsb] ." & cls, bg))
+
 proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     webfonts: seq[seq[Declaration]] = @[];
     msoRules: seq[Rule] = @[]
@@ -258,7 +298,7 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   var respAttach: seq[tuple[node: EmailNode; cls: string]] = @[]
   var seenResp: seq[string] = @[]
   for g in groupDecls(decls, "sm"):
-    let cls = gen.classFor(g.decls)
+    let cls = gen.classFor(g.decls, "sm")
     respAttach.add((g.node, cls))
     if cls in seenResp:
       continue
@@ -273,14 +313,18 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
         inner.add((".moz-text-html ." & cls, ds))
       if target.owaDesktop:
         inner.add(("[owa] ." & cls, ds))
-    respText = emitMediaRule("only screen and (min-width: " &
-      $target.breakpoint & "px)", inner)
+    # `sm:` is the mobile variant: below the breakpoint.
+    respText = emitMediaRule("only screen and (max-width: " &
+      $(target.breakpoint - 1) & "px)", inner)
 
   var darkGroups: seq[tuple[cls: string; decls: seq[Declaration]]] = @[]
   var darkAttach: seq[tuple[node: EmailNode; cls: string]] = @[]
   var seenDark: seq[string] = @[]
-  for g in groupDecls(decls, "dark"):
-    let cls = gen.classFor(g.decls)
+  let darkGroupsIn =
+    if target.darkMode == dmNone: @[] # No dark rules at all.
+    else: groupDecls(decls, "dark")
+  for g in darkGroupsIn:
+    let cls = gen.classFor(g.decls, "dark")
     darkAttach.add((g.node, cls))
     if cls in seenDark:
       continue
@@ -292,8 +336,7 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     var inner: seq[tuple[selector: string; decls: seq[Declaration]]] = @[]
     for (cls, ds) in darkGroups:
       inner.add(("." & cls, ds))
-      copies.add(emitStyleRule("[data-ogsc] ." & cls, ds))
-      copies.add(emitStyleRule("[data-ogsb] ." & cls, ds))
+      copies.add(ogsCopies(cls, ds))
     copies.sort()
     darkText = copies.join("") &
       emitMediaRule("(prefers-color-scheme: dark)", inner)
@@ -310,7 +353,7 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   var hoverAttach: seq[tuple[node: EmailNode; cls: string]] = @[]
   var seenHover: seq[string] = @[]
   for g in groupDecls(decls, "hover"):
-    let cls = gen.classFor(g.decls)
+    let cls = gen.classFor(g.decls, "hover")
     hoverAttach.add((g.node, cls))
     if cls in seenHover:
       continue
@@ -364,6 +407,9 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     diags.add(blockDropped(victim, budgeted[idx].text.len, totalBytes(),
       target.headStyleBudget))
     budgeted.delete(idx)
+  if totalBytes() > target.headStyleBudget:
+    # Only the never-dropped blocks remain over budget.
+    diags.add(overBudget(totalBytes(), target.headStyleBudget))
 
   var blocks: seq[EmailNode] = @[]
   var kept: seq[string] = @[]
