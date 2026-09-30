@@ -124,9 +124,9 @@ proc sendMailgun*(m: EmailMessage; domain, apiKey: string;
                  deterministicSeed = ""; apiBase = ""): string =
   ## POSTs the payload with basic auth `api:<key>` and returns the
   ## Mailgun id. `apiKey == ""` reads `$MAILGUN_API_KEY` (missing →
-  ## `MailgunError`). An https base needs `-d:ssl`. The key is never
-  ## part of an error message: failures name the URL, the status and
-  ## the start of the reply only.
+  ## `MailgunError`). An https base needs `-d:ssl`. Neither the key nor
+  ## its base64 token is ever part of an error message: failures name
+  ## the URL, the status and the start of the reply only.
   var key = apiKey
   if key.len == 0:
     key = getEnv(mailgunKeyEnv)
@@ -136,11 +136,16 @@ proc sendMailgun*(m: EmailMessage; domain, apiKey: string;
   let payload = mailgunPayload(m, domain, tags, region, deterministicSeed,
     apiBase)
   let (contentType, body) = payloadMultipart(payload)
-  let auth = "Basic " & base64.encode("api:" & key)
+  let token = base64.encode("api:" & key)
+  let auth = "Basic " & token
   proc redact(text: string): string =
     ## A reply (or a transport error) that echoes the credentials must
-    ## not carry them into the exception.
-    text.replace(auth, "<redacted>").replace(key, "<redacted>")
+    ## not carry them into the exception — in any form this transport
+    ## produces: the whole Authorization value, the bare base64 token
+    ## (an encoded form of the key) and the key itself (which also
+    ## covers the `api:<key>` pair the token encodes).
+    text.replace(auth, "<redacted>").replace(token, "<redacted>").
+      replace(key, "<redacted>")
   proc snippet(reply: string): string =
     ## Redacted first, then cut, so a truncation cannot split the key
     ## past the redaction.

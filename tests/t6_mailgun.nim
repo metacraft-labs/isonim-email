@@ -414,6 +414,25 @@ suite "mailgun transport":
     check mgKey notin err
     check base64.encode("api:" & mgKey) notin err
 
+    # A failing reply that echoes the bare base64 token (no "Basic "
+    # prefix) and the key: neither survives into the error.
+    let token = base64.encode("api:" & mgKey)
+    var bareErr = ""
+    let bareGot = capture(500, "token=" & token & " key=" & mgKey, false,
+      proc (base: string) =
+        try:
+          discard sendMailgun(msg, "example.com", mgKey,
+            apiBase = base)
+        except MailgunError as e:
+          bareErr = e.msg)
+    check bareGot.reqLine.startsWith("POST ")
+    check "500" in bareErr
+    # The whole echo, exactly: a redaction that left any tail of the
+    # token (or of the key) behind would not produce these bytes.
+    check bareErr.endsWith(" token=<redacted> key=<redacted>")
+    check token notin bareErr
+    check mgKey notin bareErr
+
     # A connection refused: the transport error is wrapped, key-free.
     let dead = freePort()
     try:
