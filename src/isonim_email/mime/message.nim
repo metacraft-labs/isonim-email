@@ -11,11 +11,18 @@
 ## (R-MIME-10), flowed space-stuffing (R-MIME-06) and the R-SND-04 DKIM
 ## metadata.
 ##
-## Invalid header values raise `EmailRenderError` carrying `E-MIME-HEADER`
-## — the contract returns the message, not diagnostics, so there is
-## nothing to collect into. A token-less unsubscribe URI is still
-## emitted; `validateUnsubscribe` reports the R-SND-02 warning for
-## callers that want it.
+## Invalid header values raise `EmailRenderError` carrying `E-MIME-HEADER`.
+## Everything below error severity that `toMessage` finds rides on
+## `EmailMessage.diagnostics`: a token-less unsubscribe URI is still
+## emitted with `W-MIME-UNSUB-TOKEN` (R-SND-02 refuses by warning), and
+## a rendered email without a plain-text part is sent as HTML alone
+## with `I-TEXT-OMITTED` — an empty `text/plain` part is never sent.
+##
+## With `images = isEmbedded`, each asset the HTML references by its
+## published URL is rewritten to `cid:<content-id>` (no angle
+## brackets, R-MIME-11) and becomes one `multipart/related` part; an
+## asset the HTML does not reference is not embedded, so no part is
+## orphaned.
 ## Backend-independent: pure string code plus the facade clock.
 
 import std/[options, random, strutils, times]
@@ -25,6 +32,7 @@ import ./headers
 import ../render
 import ../assets
 import ../diagnostics
+import ../serialize
 
 type
   Mailbox* = object
@@ -48,13 +56,15 @@ type
 
   EmailMessage* = object
     ## One email ready to send: headers plus the rendered email, the
-    ## image strategy, and the file attachments. `images = isEmbedded`
-    ## embeds `rendered.assets` as `cid:` parts; `isHosted` leaves the
-    ## HTML references alone.
+    ## image strategy, the file attachments, and the diagnostics
+    ## `toMessage` produced (the render's own stay on `rendered`).
+    ## `images = isEmbedded` embeds the referenced `rendered.assets`
+    ## as `cid:` parts; `isHosted` leaves the HTML references alone.
     headers*: MessageHeaders
     rendered*: RenderedEmail
     images*: ImageStrategy
     attachments*: seq[Attachment]
+    diagnostics*: seq[EmailDiagnostic]
 
 proc mailbox*(name, address: string): Mailbox =
   ## A display name plus a bare addr-spec.
@@ -296,9 +306,9 @@ proc wireHeaders(m: EmailMessage; seed: string): seq[MimeHeader] =
   let owned = ownedHeaders(unsubscribe = h.unsubscribe,
     autoSubmitted = h.autoSubmitted, feedbackId = h.feedbackId,
     entityRefId = h.entityRefId)
-  # Errors are impossible here: checkHeaders raised on them above, so
-  # only the token warning can ride along, and it has no channel on
-  # this return path (see the module comment).
+  # Errors are impossible here: checkHeaders raised on them above.
+  # The token warning is `toMessage`'s to report, on
+  # `EmailMessage.diagnostics`; serialising does not repeat it.
   result.add(owned.headers)
   for (name, value) in h.extra:
     result.add(header(name, value))
@@ -316,21 +326,69 @@ proc embedAssets(assets: seq[AssetRef]): seq[MimePart] =
       contentId: contentIdFor(a), contentType: a.mime,
       filename: assetBaseName(a.name), data: a.bytes)))
 
+proc cidRef(a: AssetRef): string =
+  ## The `src` attribute that references `a` as an embedded part.
+  "src=\"" & cidUrl(contentIdFor(a)) & "\""
+
+proc embeddedHtml(html: string; assets: seq[AssetRef]): tuple[
+    html: string; inline: seq[AssetRef]] =
+  ## The embedded strategy's HTML and parts. Every `src` that carries
+  ## an asset's published URL becomes `cid:<content-id>` — the
+  ## Content-ID value without angle brackets (R-MIME-11) — and only
+  ## assets the HTML then references become parts, each once.
+  ## Idempotent: a second pass finds no URL left to rewrite. An asset
+  ## without bytes (a hand-built record) cannot be embedded and raises
+  ## `E-ASSET-UNKNOWN` — the store resolves bytes.
+  result = (html, @[])
+  for a in assets:
+    if a.bytes.len == 0 or a.sha256.len < 16:
+      raise newException(EmailRenderError,
+        "E-ASSET-UNKNOWN: cannot embed asset '" & a.name &
+          "' without bytes (resolve it through an AssetStore first)")
+  for a in assets:
+    if a.url.len > 0:
+      result.html = result.html.replace(
+        "src=\"" & escapeEmailAttr(a.url) & "\"", cidRef(a))
+  for a in assets:
+    if cidRef(a) notin result.html:
+      continue
+    var listed = false
+    for known in result.inline:
+      if contentIdFor(known) == contentIdFor(a):
+        listed = true
+    if not listed:
+      result.inline.add(a)
+
+proc bodyParts(m: EmailMessage): tuple[html: string; inline: seq[AssetRef]] =
+  ## The HTML as sent plus the parts to embed: rewritten for the
+  ## embedded strategy, untouched (and nothing inline) for hosted.
+  if m.images == isEmbedded:
+    embeddedHtml(m.rendered.html, m.rendered.assets)
+  else:
+    (m.rendered.html, @[])
+
 proc wireRoot(m: EmailMessage; seed: string): MimePart =
   ## The entity tree: `alternative[plain, related[html, images]]`
-  ## under `mixed` only with attachments (R-MIME-01/02/03).
+  ## under `mixed` only with attachments (R-MIME-01/02/03). Without a
+  ## plain-text part the HTML (or its `related` wrapper) stands alone:
+  ## an empty `text/plain` part is never sent.
   let src =
     if seed.len > 0: seededBoundarySource(seed)
     else: defaultBoundarySource
-  let plain = textPart("text/plain", spaceStuffFlowed(m.rendered.text),
-    flowed = true)
-  let htmlPart = textPart("text/html", m.rendered.html)
+  let body = bodyParts(m)
+  let htmlPart = textPart("text/html", body.html)
   let htmlOrRelated =
-    if m.images == isEmbedded and m.rendered.assets.len > 0:
-      newRelated(htmlPart, embedAssets(m.rendered.assets), src, "rel")
+    if body.inline.len > 0:
+      newRelated(htmlPart, embedAssets(body.inline), src, "rel")
     else:
       htmlPart
-  let alt = newAlternative(plain, htmlOrRelated, src, "alt")
+  let alt =
+    if m.rendered.text.len == 0:
+      htmlOrRelated
+    else:
+      newAlternative(textPart("text/plain",
+        spaceStuffFlowed(m.rendered.text), flowed = true),
+        htmlOrRelated, src, "alt")
   if m.attachments.len == 0:
     return alt
   var attParts: seq[MimePart] = @[]
@@ -345,9 +403,28 @@ proc toMessage*(r: RenderedEmail; headers: MessageHeaders;
   ## up front (`E-MIME-HEADER` on the first invalid one); the stored
   ## headers are the normalised form. Bcc validates but is never
   ## emitted — the envelope carries it.
+  ##
+  ## Non-error findings land on `diagnostics`: `W-MIME-UNSUB-TOKEN`
+  ## for an unsubscribe URI without an opaque token (R-SND-02), and
+  ## `I-TEXT-OMITTED` when `r.text` is empty (the message then carries
+  ## the HTML alone). With `images = isEmbedded` the stored
+  ## `rendered.html` already references its images as `cid:`.
   let checked = checkHeaders(headers, systemClock())
-  EmailMessage(headers: checked, rendered: r, images: images,
-    attachments: attachments)
+  var diags: seq[EmailDiagnostic] = @[]
+  if checked.unsubscribe.isSome:
+    for d in validateUnsubscribe(checked.unsubscribe.get()):
+      if d.severity != sevError:
+        diags.add(d)
+  if r.text.len == 0:
+    diags.add(EmailDiagnostic(severity: sevInfo, code: codeTextOmitted,
+      message: "no plain-text part: the message is sent as text/html " &
+        "only (an empty text/plain part is never sent)"))
+  var rendered = r
+  if images == isEmbedded:
+    rendered.html = embeddedHtml(r.html, r.assets).html
+    rendered.htmlBytes = rendered.html.len
+  EmailMessage(headers: checked, rendered: rendered, images: images,
+    attachments: attachments, diagnostics: diags)
 
 proc toRfc5322*(m: EmailMessage; deterministicSeed = ""): string =
   ## The complete bytes, ready for SMTP or ESP "raw" APIs. A
@@ -360,19 +437,20 @@ proc toRfc5322*(m: EmailMessage; deterministicSeed = ""): string =
 
 proc toParts*(m: EmailMessage): tuple[html, text: string;
     headers: seq[(string, string)]; inline: seq[AssetRef]] =
-  ## The decoded fields for ESP APIs that take fields: the original
-  ## html+text, the wire headers as pairs (a missing Message-ID is
-  ## omitted — only `toRfc5322` generates one), and the embedded
-  ## images (empty unless the strategy is `isEmbedded`).
+  ## The decoded fields for ESP APIs that take fields: the html as
+  ## sent (with `cid:` references under the embedded strategy) and
+  ## the text (`""` when there is no plain-text part — a transport
+  ## omits the field rather than send it empty), the wire headers as
+  ## pairs (a missing Message-ID is omitted — only `toRfc5322`
+  ## generates one), and the embedded images (the referenced assets
+  ## under `isEmbedded`, else none).
   var heads: seq[(string, string)] = @[]
   for h in wireHeaders(m, ""):
     if h.name == "Message-ID" and m.headers.messageId.len == 0:
       continue
     heads.add((h.name, h.value))
-  let inline =
-    if m.images == isEmbedded: m.rendered.assets
-    else: @[]
-  (m.rendered.html, m.rendered.text, heads, inline)
+  let body = bodyParts(m)
+  (body.html, m.rendered.text, heads, body.inline)
 
 proc envelopeFrom*(m: EmailMessage): string =
   ## The SMTP envelope sender: the From address.

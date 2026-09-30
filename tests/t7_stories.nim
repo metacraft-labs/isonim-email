@@ -13,8 +13,15 @@ import stories/email_stories
 
 registerSeedStories()
 
+proc welcomeTpl(r: EmailRenderer; name: string): EmailNode =
+  ui(r):
+    mailDocument(lang = "en", title = "Welcome"):
+      mailSection:
+        h1: text "Welcome, " & name
+        p: text "Glad you are here."
+
 suite "story registry":
-  test "test_story_registry_lists_the_m7a1_set":
+  test "test_story_registry_lists_the_seed_set":
     check listStories() == @["canary", "receipt", "alert"]
     check hasStory("canary")
     check hasStory("receipt")
@@ -81,3 +88,27 @@ suite "story registry":
     check "<title>Security alert</title>" in alertHtml
     check "New sign-in detected." in alertHtml
     check "Security alert" in alertText
+
+  test "story registers a template with its data; stories iterates":
+    # Registered here, after the set pins above ran.
+    story("welcome/typical", welcomeTpl, "Ada")
+    story("welcome/wide", welcomeTpl, "Grace"):
+      target.outlookWord = false
+    var names: seq[string] = @[]
+    for entry in stories():
+      names.add(entry.name)
+    check names == @["canary", "receipt", "alert", "welcome/typical",
+      "welcome/wide"]
+    let typical = getStory("welcome/typical")
+    check typical.group == "welcome"
+    let (html, _) = typical.render()
+    check html.startsWith("<!doctype html><html")
+    check "Welcome, Ada" in html
+    # The body's override reaches the render; the default does not
+    # carry it.
+    let (wide, _) = getStory("welcome/wide").render()
+    check "Welcome, Grace" in wide
+    check "OfficeDocumentSettings" notin wide
+    check "OfficeDocumentSettings" in html
+    expect StoryError:
+      story("welcome/typical", welcomeTpl, "Duplicate")

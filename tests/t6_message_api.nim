@@ -206,15 +206,27 @@ suite "message API":
     check toParts(msg).inline.len == 0
 
   test "embedded assets become the related parts":
+    # rule: R-MIME-11
+    # The HTML references the published URL; embedding rewrites it to
+    # `cid:` + the Content-ID value without angle brackets, and the
+    # part carries the same id inside them.
     let logo = AssetRef(name: "brand/logo.png", mime: "image/png",
-      bytes: "PNGDATA", sha256: sha256Hex("PNGDATA"))
+      bytes: "PNGDATA", sha256: sha256Hex("PNGDATA"),
+      url: "https://assets.example.com/abc/logo.png?v=1&s=2")
+    let html = "<p><img src=\"https://assets.example.com/abc/logo.png" &
+      "?v=1&amp;s=2\" alt=\"Logo\"></p>"
     let msg = toMessage(
-      RenderedEmail(html: "<p>x</p>", text: "x", assets: @[logo]),
+      RenderedEmail(html: html, text: "x", assets: @[logo]),
       MessageHeaders(
         fromAddr: mailbox("", "a@example.com"),
         to: @[mailbox("", "b@example.com")],
         date: fromUnix(1767268800)),
       images = isEmbedded)
+    let cid = "cid:" & contentIdFor(logo)
+    check "src=\"" & cid & "\"" in msg.rendered.html
+    check "https://assets.example.com" notin msg.rendered.html
+    check "<" & contentIdFor(logo) notin msg.rendered.html
+    check toParts(msg).html == msg.rendered.html
     let bytes = toRfc5322(msg, "t")
     check "multipart/related" in bytes
     check "type=\"text/html\"" in bytes
@@ -222,23 +234,102 @@ suite "message API":
     check "inline; filename=\"logo.png\"" in bytes
     check base64.encode("PNGDATA") in bytes
     check toParts(msg).inline == @[logo]
+    # A hand-built message gets the same rewrite at wire time.
+    let hand = EmailMessage(headers: msg.headers, images: isEmbedded,
+      rendered: RenderedEmail(html: html, text: "x", assets: @[logo]))
+    check toParts(hand).html == msg.rendered.html
+    check toParts(hand).inline == @[logo]
 
-  test "embedding without bytes raises":
-    let hollow = AssetRef(name: "logo.png", mime: "image/png")
+  test "an asset the HTML does not reference is never an orphaned part":
+    let used = AssetRef(name: "used.png", mime: "image/png",
+      bytes: "USED", sha256: sha256Hex("USED"),
+      url: "https://assets.example.com/u/used.png")
+    let unused = AssetRef(name: "unused.png", mime: "image/png",
+      bytes: "UNUSED", sha256: sha256Hex("UNUSED"),
+      url: "https://assets.example.com/n/unused.png")
     let msg = toMessage(
-      RenderedEmail(html: "<p>x</p>", text: "x", assets: @[hollow]),
+      RenderedEmail(html: "<img src=\"https://assets.example.com/u/" &
+        "used.png\" alt=\"u\">", text: "x", assets: @[used, unused]),
       MessageHeaders(
         fromAddr: mailbox("", "a@example.com"),
         to: @[mailbox("", "b@example.com")],
         date: fromUnix(1767268800)),
       images = isEmbedded)
+    check toParts(msg).inline == @[used]
+    let bytes = toRfc5322(msg, "t")
+    check "Content-ID: <" & contentIdFor(used) & ">" in bytes
+    check contentIdFor(unused) notin bytes
+    check base64.encode("UNUSED") notin bytes
+
+  test "embedding without bytes raises":
+    let hollow = AssetRef(name: "logo.png", mime: "image/png",
+      url: "https://assets.example.com/h/logo.png")
     var err = ""
     try:
+      let msg = toMessage(
+        RenderedEmail(html: "<img src=\"https://assets.example.com/h/" &
+          "logo.png\" alt=\"x\">", text: "x", assets: @[hollow]),
+        MessageHeaders(
+          fromAddr: mailbox("", "a@example.com"),
+          to: @[mailbox("", "b@example.com")],
+          date: fromUnix(1767268800)),
+        images = isEmbedded)
       discard toRfc5322(msg, "t")
     except EmailRenderError as e:
       err = e.msg
     check err.startsWith("E-ASSET-UNKNOWN:")
     check "logo.png" in err
+
+  test "no plain-text part: HTML alone, never an empty text/plain part":
+    let headers = MessageHeaders(
+      fromAddr: mailbox("", "a@example.com"),
+      to: @[mailbox("", "b@example.com")],
+      date: fromUnix(1767268800))
+    let msg = toMessage(RenderedEmail(html: "<p>x</p>", text: ""), headers)
+    check msg.diagnostics.len == 1
+    check msg.diagnostics[0].code == codeTextOmitted
+    check msg.diagnostics[0].severity == sevInfo
+    check not hasErrors(msg.diagnostics)
+    let bytes = toRfc5322(msg, "t")
+    check "text/plain" notin bytes
+    check "multipart/alternative" notin bytes
+    check "Content-Type: text/html; charset=utf-8" in bytes
+    check bytes.endsWith("<p>x</p>" & crlf)
+    check toParts(msg).text == ""
+    # With attachments the HTML stands alone under multipart/mixed.
+    let mixed = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>"),
+      headers, attachments = @[Attachment(filename: "a.txt",
+        mime: "text/plain", bytes: "hi")]), "t")
+    check "multipart/mixed" in mixed
+    check "multipart/alternative" notin mixed
+    check "format=flowed" notin mixed
+    # Negative control: a real text part keeps the alternative and
+    # raises no diagnostic.
+    let full = toMessage(RenderedEmail(html: "<p>x</p>", text: "x"), headers)
+    check full.diagnostics.len == 0
+    check "multipart/alternative" in toRfc5322(full, "t")
+
+  test "toMessage returns the unsubscribe token warning":
+    # rule: R-SND-02
+    var headers = MessageHeaders(
+      fromAddr: mailbox("", "a@example.com"),
+      to: @[mailbox("", "b@example.com")],
+      date: fromUnix(1767268800),
+      unsubscribe: some(Unsubscribe(
+        httpsUri: "https://example.com/unsubscribe")))
+    let warned = toMessage(RenderedEmail(html: "<p>x</p>", text: "x"),
+      headers)
+    check warned.diagnostics.len == 1
+    check warned.diagnostics[0].code == codeMimeUnsubToken
+    check warned.diagnostics[0].severity == sevWarning
+    # The header is still emitted: R-SND-02 refuses by warning.
+    check "List-Unsubscribe: <https://example.com/unsubscribe>" in
+      toRfc5322(warned, "t")
+    headers.unsubscribe = some(Unsubscribe(
+      httpsUri: "https://example.com/u/Zx8Kq2Lm9Tt4Vw7Rb3Nc"))
+    let clean = toMessage(RenderedEmail(html: "<p>x</p>", text: "x"),
+      headers)
+    check clean.diagnostics.len == 0
 
   test "invalid headers raise at toMessage":
     var headers = MessageHeaders(

@@ -26,7 +26,8 @@ type
 
   Url* = distinct string
     ## An email-safe URL. `asset"…"` yields the content-hashed path;
-    ## the render joins the asset base in front.
+    ## a render given a store publishes the asset and rewrites the
+    ## path to the published URL.
 
   ImageStrategy* = enum
     ## Hosted (default) or `cid:`-embedded. `data:` URIs are
@@ -49,6 +50,9 @@ type
     width*, height*: int
     hasAlpha*: bool
     bytes*: string ## Empty when not embedded.
+    url*: string
+      ## The URL the rendered HTML references: set when the render
+      ## publishes the asset through its store; "" otherwise.
 
 proc `$`*(u: Url): string =
   string(u)
@@ -480,6 +484,28 @@ method get*(s: FileAssetStore; name: string): AssetRef =
 
 # ------------------------------------------------- compile-time assets
 
+var compiledAssets: seq[AssetRef]
+  ## Every `asset"…"` the program embeds, registered
+  ## once at program start, so the render can publish a compile-time
+  ## asset from the content-hashed path the template wrote into `src`.
+
+proc registerCompiledAsset*(a: AssetRef): bool =
+  ## Records one compile-time asset (idempotent on name plus hash).
+  ## Returns true so the templates can bind it to a start-up global.
+  for known in compiledAssets:
+    if known.sha256 == a.sha256 and known.name == a.name:
+      return true
+  compiledAssets.add(a)
+  true
+
+proc compiledAssetAt*(path: string): tuple[found: bool; asset: AssetRef] =
+  ## The compile-time asset whose content-hashed path is `path`
+  ## (`/{sha256[0:16]}/{base}`), if the program embeds one.
+  for known in compiledAssets:
+    if hostedPath(known) == path:
+      return (true, known)
+  (false, AssetRef())
+
 proc callerDirOf(path: string): string =
   var cut = 0
   for i in 0 ..< path.len:
@@ -498,7 +524,9 @@ template asset*(name: static string): Url =
   ## Resolves `name` (caller-file-relative, like `include`)
   ## at compile time and yields the content-hashed path. Hash,
   ## dimensions and alpha are computed before the binary runs; a
-  ## `data:` name fails the build. Render-time resolution through an
+  ## `data:` name fails the build. The asset is registered at program
+  ## start, so a render given a store publishes it and rewrites the
+  ## path to the published URL. Render-time resolution through an
   ## `AssetStore` (missing files, dynamic names) is the render
   ## pipeline's half — `MemoryAssetStore`/`FileAssetStore.get` above.
   when isDataUri(name):
@@ -509,6 +537,7 @@ template asset*(name: static string): Url =
       callerJoin(callerDirOf(caller.filename), name)
     const srcBytes {.gensym.} = staticRead(srcPath)
     const loaded {.gensym.} = loadAsset(name, srcBytes)
+    let registered {.global, gensym, used.} = registerCompiledAsset(loaded)
     Url(hostedPath(loaded))
 
 template templateAsset*(name: static string): AssetRef =

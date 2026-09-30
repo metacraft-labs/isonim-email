@@ -4,6 +4,13 @@
 ## `just email-shots`, the golden tests, the preview server and the
 ## IsoNim editor's story contract.
 ##
+## The public surface is the `story` template (register a template
+## with its fixture data, optionally overriding the target and the
+## audience profile) and the `stories` iterator. `registerStory`,
+## `listStories`, `hasStory` and `getStory` are the registry plumbing
+## underneath, used by the capture and review drivers and by stories
+## whose bytes are pinned by hand-built trees.
+##
 ## Shape mirrors the editor contract (`isonim/editor/types.nim`:
 ## `StoryRef` group/name + `StoryItem` description) where it fits; the
 ## deliberate deviation is that template proc + fixed data are fused
@@ -15,6 +22,7 @@
 
 import std/[strutils, tables]
 import ./renderer
+import ./render
 import ./serialize
 import ./target
 import ./diagnostics
@@ -43,6 +51,9 @@ type
     description*: string
     render*: StoryRenderProc
 
+  StoryEntry* = Story
+    ## What the `stories` iterator yields.
+
   StoryError* = object of ValueError
     ## Duplicate registration, unknown story, or a story whose tree
     ## fails validation (stories are fixed, so that is a bug).
@@ -61,6 +72,47 @@ proc registerStory*(story: Story) =
     raise newException(StoryError,
       "story '" & story.name & "' has no render proc")
   storyRegistry[story.name] = story
+
+iterator stories*(): StoryEntry =
+  ## Every registered story, in registration order.
+  for entry in storyRegistry.values:
+    yield entry
+
+proc groupOf(name: string): string =
+  ## The editor-contract group: the part of `name` before the first
+  ## `/` (`invoiceReady/typical` → `invoiceReady`), or all of it.
+  let slash = name.find('/')
+  if slash < 0: name
+  else: name[0 ..< slash]
+
+proc templateStory*[T](name: string; tpl: EmailTemplate[T]; data: T;
+                       target: EmailTarget;
+                       profile: AudienceProfile): Story =
+  ## The `Story` the `story` template registers: `render` runs the full
+  ## `renderEmail` pipeline on the fixture data with the overrides.
+  let render = proc(): StoryHtml {.closure.} =
+    let res = renderEmail(tpl, data, target = target, profile = profile)
+    (res.html, res.text)
+  Story(name: name, group: groupOf(name), description: "",
+    render: render)
+
+template story*(name: static string; tpl: typed; data: typed) =
+  ## Registers the template `tpl` with its fixture `data` under `name`
+  ## (default target and the consumer profile). A duplicate name
+  ## raises `StoryError`.
+  registerStory(templateStory(name, tpl, data, defaultTarget(), consumer))
+
+template story*(name: static string; tpl: typed; data: typed;
+                body: untyped) =
+  ## As above, with overrides: `body` runs once, at registration, with
+  ## `target` (an `EmailTarget`, default `defaultTarget()`) and
+  ## `profile` (an `AudienceProfile`, default `consumer`) in scope as
+  ## variables, e.g. `story("alert/dark", alertTpl, data): target.darkMode = dmDesigned`.
+  block:
+    var target {.inject.} = defaultTarget()
+    var profile {.inject.} = consumer
+    body
+    registerStory(templateStory(name, tpl, data, target, profile))
 
 proc listStories*(): seq[string] =
   ## Registry keys in registration order.

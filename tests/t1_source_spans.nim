@@ -47,6 +47,11 @@ suite "template source spans":
     let sec = tree.children[0]
     check sec.tag == "mailSection"
     check sec.origin.line == 15
+    # `tag:` elements are anchored at the tag's first character (Nim's
+    # 0-based column: six spaces of indentation). `tag(args)` elements
+    # are anchored at the `(`, which the renderer cannot correct (see
+    # `noteElement`).
+    check sec.origin.col == 6
     let h1 = sec.children[0]
     check h1.tag == "h1"
     check h1.origin.line == 16

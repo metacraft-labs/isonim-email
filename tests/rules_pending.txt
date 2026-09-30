@@ -1,5 +1,6 @@
 # Rules catalogue IDs with no naming test yet.
 # Shrink-only: remove an ID when a test gains its `# rule:` comment; never add one.
+# Enforced against the grow-only high-water list tests/rules_tested.txt (tests/t1_rule_traceability.nim).
 # Implemented: R-OL-01 (tests/t1_conditional_comments.nim), R-LAY-05 (tests/t1_serializer_determinism.nim).
 # Implemented (lint side): R-OL-10 (tests/t3_lint_flex.nim).
 # Implemented: R-CSS-03, R-CSS-04, R-CSS-05, R-CSS-09, R-CSS-16 (tests/t4_head_css.nim), R-CSS-06, R-CSS-12, R-CSS-13 (tests/t4_normalisation.nim), R-CSS-08 (tests/t4_class_names.nim).

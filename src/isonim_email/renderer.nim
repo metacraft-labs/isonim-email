@@ -18,6 +18,7 @@
 import std/[strutils, tables]
 import isonim/renderers/abstract_renderer
 import isonim/core/owner
+import isonim/core/[types, graph, signals, computation, resource]
 import isonim/viewmodel
 import ./style/tokens
 
@@ -272,6 +273,17 @@ proc noteElement*(el: EmailNode; id, tag, loc, parentId: string) =
   ## lineinfo in its origin. Only `loc` is read; the scene-graph id, tag
   ## and parent id are accepted and ignored. Text nodes have no hook call
   ## and keep empty origins.
+  ##
+  ## The column is the macro's, unchanged: Nim's 0-based line-info
+  ## column of the element's call node. For the `tag:` form that is the
+  ## tag's first character; for `tag(args)` Nim anchors the call node at
+  ## the `(`, so the column points there rather than at the tag. It is
+  ## not corrected here because it cannot be: `loc` carries one position
+  ## and nothing that tells the two forms apart (both `p(…)` at column
+  ## 9 and `p:` at column 9 arrive as `…:9`), and subtracting the tag
+  ## length would move the `tag:` form's correct column. Anchoring every
+  ## element at its tag needs the `ui` macro to report the callee's line
+  ## info instead of the call's. The line is exact in both forms.
   el.origin = parseSourceSpan(loc)
 
 # ----------------------------------------------------------------------------
@@ -360,7 +372,7 @@ template trackAsync*(r: EmailRenderer): EmailAsyncResource =
   ## resource starts pending; set `state` to `asReady` or `asError` once
   ## it resolves — anything still pending when the render disposes its
   ## root fails the render, citing this call site.
-  registerAsyncResource(r, instantiationInfo())
+  registerAsyncResource(r, instantiationInfo(fullPaths = true))
 
 proc assertNoPendingAsync*(r: EmailRenderer) =
   ## The render-owned half of the async guard: every resource the
@@ -374,3 +386,113 @@ proc assertNoPendingAsync*(r: EmailRenderer) =
       raise newException(EmailRenderError,
         "E-STRUCT-REACTIVE-RESIDUE: pending async resource (asLoading) at " &
         $res.origin & " (resolve async resources before rendering email)")
+
+# ----------------------------------------------------------------------------
+# Pending async state read by the template (isonim's own primitives)
+# ----------------------------------------------------------------------------
+#
+# An isonim signal registers nowhere when it is created: the owner tree
+# records computations and cleanups, not signals or resources. What the
+# reactive core does record is every tracked READ: a read made while a
+# computation is the current listener lands in that computation's
+# `sources`. The render therefore runs the template with a probe
+# computation as the listener. Every signal the template body reads
+# lands in the probe's sources; reads inside the render effects and
+# memos the template creates land in theirs, and those computations are
+# owned by the render's root. After the template returns, the guard
+# walks the probe plus the root's owned computations and inspects each
+# source's current value: an `AsyncState` still `asLoading`, or a
+# `ResourceState` still `rsPending`/`rsRefreshing` (what `loading`
+# reads), is pending async state that shaped the output — the email
+# would carry a spinner — so the render fails.
+#
+# The probe has no body (`fn` is nil). If the template writes a signal
+# it read, the core queues the probe as an observer and
+# `updateComputation` returns at once on the nil body, so the template
+# never re-runs. The probe is unlinked from every source before the
+# root is disposed (`releaseAsyncProbe`), so it outlives no render.
+#
+# Limits, stated plainly: a resource whose state is never read (only
+# its `data`) is invisible here, because the core keeps no record of
+# resources and a data signal cannot be told from any other signal; so
+# are reads made under `untrack`, inside a nested `createRoot` (which
+# clears the listener and is not owned by its parent), or of a memo
+# created outside the render whose own sources are pending. `trackAsync`
+# remains the explicit way to register such a load.
+
+proc newAsyncProbe*(): ComputationBase =
+  ## A body-less computation used as the listener while a template runs,
+  ## so the template's top-level signal reads are recorded. Created under
+  ## the current owner but never added to its `owned` list: disposing the
+  ## root does not touch it; `releaseAsyncProbe` does.
+  ComputationBase(sources: @[], sourceSlots: @[], owned: @[], cleanups: @[],
+    owner: getOwner(), state: csClean, pure: true, fn: nil)
+
+proc runWithAsyncProbe*(probe: ComputationBase; fn: proc()) =
+  ## Runs `fn` with `probe` as the tracking listener, restoring the
+  ## previous listener on every path.
+  let prev = Listener
+  Listener = probe
+  try:
+    fn()
+  finally:
+    Listener = prev
+
+proc releaseAsyncProbe*(probe: ComputationBase) =
+  ## Unlinks the probe from every signal it observed.
+  if probe != nil:
+    cleanNode(probe)
+
+proc pendingStateOf(s: SignalStateBase): string =
+  ## The pending state `s` currently holds, named for the diagnostic, or
+  ## "" when it holds none (or is not an async-state signal at all).
+  if s of SignalState[AsyncState]:
+    if SignalState[AsyncState](s).value == asLoading:
+      return "AsyncState asLoading"
+  elif s of MemoSignalState[AsyncState]:
+    if MemoSignalState[AsyncState](s).value == asLoading:
+      return "AsyncState asLoading (memo)"
+  elif s of SignalState[ResourceState]:
+    let v = SignalState[ResourceState](s).value
+    if v in {rsPending, rsRefreshing}:
+      return "resource state " & $v
+  elif s of MemoSignalState[ResourceState]:
+    let v = MemoSignalState[ResourceState](s).value
+    if v in {rsPending, rsRefreshing}:
+      return "resource state " & $v & " (memo)"
+  ""
+
+proc findPendingRead(o: OwnerBase): string =
+  ## Depth-first over `o` and everything it owns: the first pending
+  ## state some computation read, or "".
+  if o == nil:
+    return ""
+  if o of ComputationBase:
+    for s in ComputationBase(o).sources:
+      let found = pendingStateOf(s)
+      if found.len > 0:
+        return found
+  for child in o.owned:
+    let found = findPendingRead(child)
+    if found.len > 0:
+      return found
+  ""
+
+proc assertNoPendingReads*(root: OwnerBase; probe: ComputationBase;
+                           tree: EmailNode) =
+  ## Fails the render when the template (through `probe`) or any
+  ## computation owned by `root` read async state that is still pending.
+  ## Raises `EmailRenderError` (E-STRUCT-REACTIVE-RESIDUE) naming the
+  ## pending state and the template's root element.
+  var found = findPendingRead(probe)
+  if found.len == 0:
+    found = findPendingRead(root)
+  if found.len > 0:
+    let where =
+      if tree == nil: "unknown location"
+      else: $tree.origin
+    raise newException(EmailRenderError,
+      "E-STRUCT-REACTIVE-RESIDUE: the template read pending async state (" &
+      found & ") at render time, in the template rooted at " & where &
+      " (resolve async resources before rendering email; an email cannot " &
+      "show a spinner)")

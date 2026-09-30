@@ -110,7 +110,14 @@ const
     ## is not https (R-SND-01). Emitted by `mime/headers.ownedHeaders`.
   codeMimeUnsubToken* = "W-MIME-UNSUB-TOKEN"
     ## An unsubscribe URI without an opaque token of at least 16
-    ## characters (R-SND-02). Emitted by `mime/headers.ownedHeaders`.
+    ## characters (R-SND-02). Emitted by `mime/headers.ownedHeaders`
+    ## and returned to the caller on `EmailMessage.diagnostics` by
+    ## `mime/message.toMessage`.
+  codeTextOmitted* = "I-TEXT-OMITTED"
+    ## The rendered email carries no plain-text part yet, so the
+    ## message is sent as HTML only — never with an empty `text/plain`
+    ## part. Emitted by `mime/message.toMessage` on
+    ## `EmailMessage.diagnostics`.
   codeUrlScheme* = "E-URL-SCHEME"
     ## A forbidden URL scheme, e.g. a `data:` URI (R-IMG-08). Raised
     ## from `assets.nim` as `AssetError` (framework-free, same seam as

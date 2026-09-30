@@ -18,6 +18,7 @@
 ## Backend-independent: tree building plus pure passes, runs on C and JS.
 
 import std/[strutils, tables]
+import isonim/core/graph
 import ./renderer
 import ./target
 import ./diagnostics
@@ -55,25 +56,36 @@ proc renderAuthoringTree*[T](tpl: EmailTemplate[T]; data: T): EmailNode =
   ## run exactly once and nothing observes later writes.
   ##
   ## Asserts the residue invariants before disposing the root: no
-  ## `data-hk`, no `data-isonim-*`, no `<script>`, and no async resource
-  ## the template tracked but never resolved. A script, a hydration
-  ## attribute or a pending load can never reach email output, so this
-  ## raises even when the full render would otherwise only collect.
+  ## `data-hk`, no `data-isonim-*`, no `<script>`, no async resource
+  ## the template tracked but never resolved, and no pending async
+  ## state (an `AsyncState` signal still `asLoading`, a resource still
+  ## pending) that the template read while it ran. A script, a
+  ## hydration attribute or a pending load can never reach email
+  ## output, so this raises even when the full render would otherwise
+  ## only collect.
   var tree: EmailNode
   var r: EmailRenderer
+  var root: OwnerBase
+  var probe: ComputationBase
   var disposeRoot: proc()
   try:
     createRoot(proc(dispose: proc()) =
       disposeRoot = dispose
+      root = getOwner()
+      probe = newAsyncProbe()
       r = newEmailRenderer()
-      tree = tpl(r, data)
+      runWithAsyncProbe(probe, proc() =
+        tree = tpl(r, data))
     )
     assertNoReactiveResidue(tree)
     assertNoPendingAsync(r)
+    assertNoPendingReads(root, probe, tree)
   finally:
-    # The root is disposed on every path: a template that raises
-    # mid-render and a guard that raises after it built must both
-    # still run the root's cleanups, or the render leaks.
+    # The probe is unlinked and the root disposed on every path: a
+    # template that raises mid-render and a guard that raises after it
+    # built must both still run the root's cleanups, or the render
+    # leaks.
+    releaseAsyncProbe(probe)
     if disposeRoot != nil:
       disposeRoot()
   tree
@@ -113,17 +125,26 @@ proc isResolvableName(src: string): bool =
     return false
   true
 
-proc collectAssets(doc: EmailNode; store: AssetStore): tuple[
+proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
     assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]] =
-  ## Every distinct `img`/`mailImage` source the tree references,
-  ## resolved through the store. A nil store resolves nothing (the
-  ## render keeps the sources as written); an unresolvable name is
-  ## collected as `E-ASSET-UNKNOWN`, and a `data:` source as
-  ## `E-URL-SCHEME` (R-IMG-08 forbids embedded data URIs).
+  ## P8's asset half. Every `img`/`mailImage` source the tree
+  ## references is resolved — a store name through `store.get`, a
+  ## compile-time `asset"…"` path through the program's embedded
+  ## assets — then published through `store.publish` before the HTML
+  ## is serialised, and the node's `src` is rewritten to the URL the
+  ## store returned (R-IMG-07: the upload completes before the message
+  ## exists). Each distinct asset is listed once, carrying that URL.
+  ##
+  ## A nil store resolves and publishes nothing: sources stay as
+  ## written. An unresolvable name is collected as `E-ASSET-UNKNOWN`,
+  ## and a `data:` source as `E-URL-SCHEME` (R-IMG-08 forbids embedded
+  ## data URIs). A failing upload hook propagates: sending with an
+  ## image that never published is worse than not sending.
   result = (@[], @[])
   if doc == nil or store == nil:
     return
-  var seen: seq[string] = @[]
+  var resolved: seq[tuple[src: string; url: string]] = @[]
+  var failed: seq[string] = @[]
   var stack: seq[EmailNode] = @[doc]
   while stack.len > 0:
     let node = stack.pop()
@@ -132,19 +153,43 @@ proc collectAssets(doc: EmailNode; store: AssetStore): tuple[
     if node.kind == enElement and
         node.tag.toLowerAscii() in ["img", "mailimage"]:
       let src = node.attrs.getOrDefault("src", "")
-      if src.len > 0 and src notin seen:
-        seen.add(src)
+      var known = ""
+      for entry in resolved:
+        if entry.src == src:
+          known = entry.url
+      if known.len > 0:
+        node.attrs["src"] = known
+      elif src.len > 0 and src notin failed:
+        var asset: AssetRef
+        var found = false
+        let compiled = compiledAssetAt(src)
         if isDataUri(src):
+          failed.add(src)
           result.diagnostics.add(EmailDiagnostic(
             severity: sevError, code: codeUrlScheme,
             message: "data: URIs are forbidden (R-IMG-08): '" & src & "'",
             origin: node.origin, rules: @["R-IMG-08"]))
+        elif compiled.found:
+          asset = compiled.asset
+          found = true
         elif isResolvableName(src):
           try:
-            result.assets.add(store.get(src))
+            asset = store.get(src)
+            found = true
           except AssetError as e:
+            failed.add(src)
             result.diagnostics.add(toDiagnostic(e.msg,
               origin = node.origin))
+        if found:
+          asset.url = store.publish(asset)
+          resolved.add((src, asset.url))
+          node.attrs["src"] = asset.url
+          var listed = false
+          for a in result.assets:
+            if a.url == asset.url:
+              listed = true
+          if not listed:
+            result.assets.add(asset)
     for i in countdown(node.children.high, 0):
       stack.add(node.children[i])
 
@@ -165,9 +210,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ##
   ## Residue (`<script>`, hydration attributes) raises unconditionally
   ## — it must never reach output. Other errors are collected, and
-  ## `strict` re-raises the first one. The text part is empty: the
-  ## plain-text pass generates it later, and an honest empty part
-  ## beats a lossy guess. MIME packaging carries it through unchanged.
+  ## `strict` re-raises the first one. The text is empty: the
+  ## plain-text pass generates it later, and an honest absence beats
+  ## a lossy guess. MIME packaging then sends the HTML alone, never an
+  ## empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
   var diags = validate(doc)
   let styled = applyStyles(doc, theme, target)
@@ -176,7 +222,7 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   diags.add(headRes.diagnostics)
   diags.add(applyA11y(doc))
   diags.add(lintTree(doc, profile))
-  let found = collectAssets(doc, assets)
+  let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
 
   # Lowering reads the same tree the passes just walked; a failure

@@ -8,7 +8,7 @@
 ##
 ## Backend-independent (pure hashing, probing and strings; the file
 ## store guards its reads), so `just test` also runs it on JS.
-import std/[strutils, unittest]
+import std/[strutils, times, unittest]
 import isonim_email
 
 when not defined(js):
@@ -30,6 +30,25 @@ proc countingHook(a: AssetRef): string =
   ## the JS backend (`jsgen env is missing`), a global does not.
   inc hookCalls
   "https://cdn.example.com" & hostedPath(a)
+
+proc imgTpl(r: EmailRenderer; src: string): EmailNode =
+  ui(r):
+    mailDocument(lang = "en", title = "Img"):
+      mailSection:
+        h1: text "Img"
+        mailImage(src = src, alt = "logo")
+
+var cdnCalls: seq[string]
+
+proc cdnHook(a: AssetRef): string =
+  ## A stand-in CDN uploader whose URLs differ from the store base, so
+  ## the tests can tell the published URL from any derived one.
+  cdnCalls.add(a.name)
+  "https://cdn.example.net/u" & hostedPath(a)
+
+proc testHeaders(): MessageHeaders =
+  MessageHeaders(fromAddr: mailbox("", "a@example.com"),
+    to: @[mailbox("", "b@example.com")], date: fromUnix(1767268800))
 
 suite "assets":
   test "sha256 matches the FIPS vector through the public path":
@@ -185,3 +204,61 @@ suite "assets":
       check url == hostedUrl("https://assets.example.com", fromDisk)
       check readFile(sinkDir / hostedPath(fromDisk)) == rgbBytes
       removeDir(sinkDir)
+
+  test "the render publishes every referenced asset and rewrites src":
+    # rule: R-IMG-07
+    cdnCalls = @[]
+    let store = memoryAssetStore("https://assets.example.com",
+      upload = cdnHook)
+    store.put("brand/logo.png", rgbBytes)
+    let res = renderEmail(imgTpl, "brand/logo.png", assets = store)
+    check res.diagnostics.len == 0
+    # Published through the store's hook before the HTML was final,
+    # and the HTML carries exactly the URL the hook returned.
+    check cdnCalls == @["brand/logo.png"]
+    check res.assets.len == 1
+    let url = "https://cdn.example.net/u" & hostedPath(res.assets[0])
+    check res.assets[0].url == url
+    check "src=\"" & url & "\"" in res.html
+    check "src=\"brand/logo.png\"" notin res.html
+    check store.published.len == 1
+    # A second render republishes idempotently: same URL, no upload.
+    let again = renderEmail(imgTpl, "brand/logo.png", assets = store)
+    check again.html == res.html
+    check cdnCalls.len == 1
+    # Hosted messages keep the published URL and embed nothing.
+    let hosted = toMessage(res, testHeaders())
+    check "src=\"" & url & "\"" in hosted.rendered.html
+    check toParts(hosted).inline.len == 0
+
+  test "compile-time assets are published from their hashed path":
+    # rule: R-IMG-07
+    let path = $asset"fixtures/t6_rgba.png"
+    let store = memoryAssetStore("https://assets.example.com")
+    let res = renderEmail(imgTpl, path, assets = store)
+    check res.diagnostics.len == 0
+    check res.assets.len == 1
+    check res.assets[0].bytes == rgbaBytes
+    check res.assets[0].url == "https://assets.example.com" & path
+    check "src=\"https://assets.example.com" & path & "\"" in res.html
+    check store.published.len == 1
+    # Without a store the path stays as written and nothing publishes.
+    let bare = renderEmail(imgTpl, path)
+    check bare.assets.len == 0
+    check "src=\"" & path & "\"" in bare.html
+
+  test "embedded messages reference cid: parts matching the Content-IDs":
+    # rule: R-MIME-11
+    let store = memoryAssetStore("https://assets.example.com")
+    store.put("logo.png", rgbBytes)
+    let res = renderEmail(imgTpl, "logo.png", assets = store)
+    let msg = toMessage(res, testHeaders(), images = isEmbedded)
+    let id = contentIdFor(res.assets[0])
+    check "src=\"cid:" & id & "\"" in msg.rendered.html
+    check res.assets[0].url notin msg.rendered.html
+    let parts = toParts(msg)
+    check parts.inline.len == 1
+    check contentIdFor(parts.inline[0]) == id
+    let bytes = toRfc5322(msg, "t")
+    check "Content-ID: <" & id & ">" in bytes.replace("\r\n ", " ")
+    check "multipart/related" in bytes

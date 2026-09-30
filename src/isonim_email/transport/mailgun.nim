@@ -95,10 +95,14 @@ proc encodeMultipart*(fields: seq[(string, string)]; fileField = "";
   ("multipart/form-data; boundary=" & boundary, body)
 
 proc payloadFields*(p: MailgunPayload): seq[(string, string)] =
-  ## The form fields: from/to/subject/html/text plus one `o:tag` per
+  ## The form fields: from/to/subject/html, text when there is a
+  ## plain-text part, plus one `o:tag` per
   ## tag — and no `o:dkim` anything (R-SND-04).
   result = @[("from", p.fromField), ("to", p.toField),
-    ("subject", p.subject), ("html", p.html), ("text", p.text)]
+    ("subject", p.subject), ("html", p.html)]
+  # No plain-text part yet: the field is omitted, never sent empty.
+  if p.text.len > 0:
+    result.add(("text", p.text))
   for tag in p.tags:
     result.add(("o:tag", tag))
 

@@ -4,12 +4,20 @@
 ## `assertNoPendingAsync` (an email cannot show a spinner): caller-supplied
 ## states via the list overload, and resources a template tracks via
 ## `trackAsync` against the render's own registry — the async halves are
-## pinned directly below.
+## pinned directly below. Pending state held by isonim's own primitives
+## (an `AsyncState` signal left `asLoading`, an async `createResource`
+## whose future never completes) fails the render when the template reads
+## it, with no opt-in call; resolved resources are the negative control.
+##
+## No mocks: the templates use the real reactive core and real
+## cross-target futures.
 ##
 ## Backend-independent (reactive core + tree walk), so `just test` also runs
 ## it on JS.
 import std/[strutils, tables, unittest]
 import isonim/core/computation
+import isonim/core/resource
+import nim_everywhere/async_compat
 import isonim_email
 
 # Vocabulary-valid (a top-level `div` with `id` fails the vocabulary check); the
@@ -40,6 +48,71 @@ proc doneTpl(r: EmailRenderer; x: int): EmailNode =
     mailDocument(lang = "en", title = "Done"):
       mailSection:
         h1: text "Done"
+
+# Pending state held by isonim's own primitives, created inside the
+# template and read by it: the output would carry a loading placeholder.
+proc loadingSignalTpl(r: EmailRenderer; x: int): EmailNode =
+  let status = createSignal(asLoading)
+  ui(r):
+    mailDocument(lang = "en", title = "Loading"):
+      mailSection:
+        h1: text "Your order"
+        if status.val == asLoading:
+          p: text "Loading…"
+        else:
+          p: text "Ready"
+
+proc neverFuture(): PlatformFuture[string] =
+  ## A future nothing ever completes.
+  when defined(js):
+    newPromise(proc(resolve: proc(v: string)) = discard)
+  else:
+    newFuture[string]("never completes")
+
+proc pendingResourceTpl(r: EmailRenderer; x: int): EmailNode =
+  let user = createResource(proc(info: ResourceFetcherInfo[string]):
+      PlatformFuture[string] = neverFuture())
+  ui(r):
+    mailDocument(lang = "en", title = "Resource"):
+      mailSection:
+        h1: text "Account"
+        if user.loading:
+          p: text "Spinner"
+        else:
+          p: text user.val
+
+proc memoOverLoadingTpl(r: EmailRenderer; x: int): EmailNode =
+  # The read happens inside a memo the template owns, not in the body.
+  let status = createSignal(asLoading)
+  let label = createMemo(proc(): string =
+    if status.val == asLoading: "Loading…" else: "Ready")
+  ui(r):
+    mailDocument(lang = "en", title = "Memo"):
+      mailSection:
+        h1: text "Status"
+        p: text label.val
+
+var readyUser: Resource[string]
+  ## Resolved before the render, as the contract requires.
+
+proc resolvedTpl(r: EmailRenderer; x: int): EmailNode =
+  let status = createSignal(asLoading)
+  status.val = asReady # resolved before the template returns
+  ui(r):
+    mailDocument(lang = "en", title = "Resolved"):
+      mailSection:
+        h1: text "Account"
+        if readyUser.loading or status.val == asLoading:
+          p: text "Spinner"
+        else:
+          p: text readyUser.val
+
+proc renderError(fn: proc()): string =
+  try:
+    fn()
+  except EmailRenderError as e:
+    return e.msg
+  ""
 
 suite "no hydration residue":
   test "signals and memos resolve; output carries no residue":
@@ -112,7 +185,8 @@ suite "no hydration residue":
       msg = e.msg
     check "E-STRUCT-REACTIVE-RESIDUE" in msg
     check "asLoading" in msg
-    check "t1_no_hydration_residue.nim:28" in msg
+    # A full path, like element spans: the basename alone is ambiguous.
+    check "/tests/t1_no_hydration_residue.nim:36:" in msg
     check "unknown location" notin msg
 
   test "a template that resolves its async renders; registries do not leak":
@@ -136,3 +210,34 @@ suite "no hydration residue":
       assertNoPendingAsync(r)
     res.state = asReady
     assertNoPendingAsync(r)
+
+  test "an AsyncState signal left asLoading fails the render":
+    let msg = renderError(proc() = discard renderEmail(loadingSignalTpl, 0))
+    check "E-STRUCT-REACTIVE-RESIDUE" in msg
+    check "asLoading" in msg
+    check "t1_no_hydration_residue.nim" in msg
+
+  test "an async createResource that never completes fails the render":
+    let msg = renderError(proc() = discard renderEmail(pendingResourceTpl, 0))
+    check "E-STRUCT-REACTIVE-RESIDUE" in msg
+    check "rsPending" in msg
+
+  test "pending state read through a template-owned memo fails the render":
+    let msg = renderError(proc() = discard renderEmail(memoOverLoadingTpl, 0))
+    check "E-STRUCT-REACTIVE-RESIDUE" in msg
+    check "asLoading" in msg
+
+  test "resources resolved before the render pass; no probe outlives it":
+    var root: proc()
+    createRoot(proc(dispose: proc()) =
+      root = dispose
+      readyUser = createResource(proc(info: ResourceFetcherInfo[string]):
+          PlatformFuture[string] = newCompletedFuture("Ada")))
+    drainPlatformCallbacks()
+    check readyUser.state.value == rsReady
+    let res = renderEmail(resolvedTpl, 0)
+    check "Ada" in res.html
+    check "Spinner" notin res.html
+    # The render's probe listener was unlinked from the signal it read.
+    check readyUser.state.observers.len == 0
+    root()

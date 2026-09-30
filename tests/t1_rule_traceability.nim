@@ -2,6 +2,15 @@
 ## by at least one test's `# rule: R-…` comment, or is listed in
 ## `tests/rules_pending.txt` (which may only shrink).
 ##
+## Shrink-only is enforced without git history through a committed
+## high-water list, `tests/rules_tested.txt`, of every rule a test has
+## ever named. The list must record every rule tested now, every rule
+## on it must still be tested, and none may be pending. Moving a tested
+## rule back to pending therefore fails twice over (it stops being
+## tested, and it is pending while on the high-water list) unless the
+## high-water list is edited too, which is a visible, reviewable
+## removal from a file whose header says grow-only.
+##
 ## The catalogue ships in this repo, so this test reads it directly and
 ## fails loudly when it is absent — there are no skip paths.
 ##
@@ -104,3 +113,23 @@ suite "rule traceability":
     # And everything untested must be listed.
     let missing = sorted(toSeq(catalogue - tested - pending))
     check missing.len == 0
+
+  test "the pending list only shrinks (high-water list of tested rules)":
+    let catalogue = catalogueRuleIds(cataloguePath)
+    let tested = testedRuleIds(testsDir)
+    let pending = ruleIdsFromFile(testsDir / "rules_pending.txt")
+    let highWater = ruleIdsFromFile(testsDir / "rules_tested.txt")
+    # Every rule tested now is recorded: a new test's rule joins the
+    # high-water list in the same change.
+    let unrecorded = sorted(toSeq(tested - highWater))
+    check unrecorded.len == 0
+    # A rule once tested stays tested: dropping its last `# rule:`
+    # claim fails here.
+    let untested = sorted(toSeq(highWater - tested))
+    check untested.len == 0
+    # And it never returns to pending.
+    let reverted = sorted(toSeq(highWater * pending))
+    check reverted.len == 0
+    # The high-water list names real catalogue rules only.
+    let bogus = sorted(toSeq(highWater - catalogue))
+    check bogus.len == 0
