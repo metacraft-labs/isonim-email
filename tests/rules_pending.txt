@@ -12,6 +12,7 @@
 # Implemented: R-MIME-05, R-MIME-07 (tests/t6_qp.nim).
 # Implemented: R-SND-01, R-SND-02, R-SND-05 (tests/t6_unsubscribe.nim), R-IMG-07 (tests/t6_assets.nim), R-SIZE-01, R-SIZE-02 (tests/t6_size.nim).
 # Implemented: R-MIME-01, R-MIME-02, R-MIME-03, R-MIME-04, R-MIME-06, R-MIME-08, R-MIME-09, R-MIME-10, R-MIME-11, R-MIME-12, R-MIME-13, R-SND-03, R-SND-04 (tests/t6_roundtrip.nim), R-SND-06 (docs/sending.md, pinned by tests/t6_roundtrip.nim).
+# Also: R-MIME-08, R-MIME-10 (tests/t6_headers.nim; fuzzed against Python's email package in tests/t6_header_fuzz.nim), R-SND-03 (the library's one-click check, tests/t6_unsubscribe.nim), R-SIZE-02 (the render's computed breakdown, tests/t6_size.nim).
 # R-CSS-14 moved BACK here 2026-09-27 (the one exception to shrink-only): emitColorDecls computes the blend-then-rgba() pair (still unit-tested, unclaimed, in tests/t4_normalisation.nim) but P5 inline carries the blend alone — no clean duplicate-prop carrier exists in the OrderedTable tree shape. Owner is the content-leaves work, as the catalogue row records.
 # R-RST-13 added 2026-09-29: a new rule (reset line 8, `a{text-decoration:none}`), not yet covered by any test. Owner is the reset-content work that owns R-RST-01..11.
 R-A11Y-09

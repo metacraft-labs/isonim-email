@@ -116,12 +116,14 @@ proc utf8SeqLen(b: byte): int =
 proc isQSafe(b: byte; phrase: bool): bool =
   ## Bytes a Q-encoding may leave literal. The Subject set (RFC 2047
   ## §4.2 rule 3) is printable ASCII except `=`, `?`, `_`; the phrase
-  ## set (§5 rule 3) is further restricted to letters, digits and
-  ## `!*+-/=_`. SPACE is never literal (it becomes `_`).
+  ## set (§5 rule 3) is letters, digits and `!*+-/` only. `=` and `_`
+  ## are never literal in either: `=` introduces `=XX` and `_` decodes
+  ## to SPACE (§4.2 rules 1-2), so a literal one would corrupt the
+  ## decoded text. SPACE is never literal (it becomes `_`).
   if phrase:
     return (b >= 'a'.byte and b <= 'z'.byte) or
       (b >= 'A'.byte and b <= 'Z'.byte) or (b >= '0'.byte and b <= '9'.byte) or
-      b in [0x21.byte, 0x2A, 0x2B, 0x2D, 0x2F, 0x3D, 0x5F]
+      b in [0x21.byte, 0x2A, 0x2B, 0x2D, 0x2F]
   (b >= 33 and b <= 126) and b != '='.byte and b != '?'.byte and
     b != '_'.byte
 
@@ -159,11 +161,47 @@ proc chooseWordEncoding(text: string): char =
       inc other
   if other * 2 > ascii: 'B' else: 'Q'
 
-proc needsEncoding(text: string): bool =
+proc isWsp(c: char): bool {.inline.} =
+  c == ' ' or c == '\t'
+
+proc longestFoldUnit*(text: string): int =
+  ## The longest run folding can never break: a whitespace run plus the
+  ## word after it (a fold goes only before whitespace, RFC 5322
+  ## §2.2.3), or the first word.
+  var i = 0
+  while i < text.len:
+    let start = i
+    while i < text.len and isWsp(text[i]):
+      inc i
+    while i < text.len and not isWsp(text[i]):
+      inc i
+    result = max(result, i - start)
+
+proc headerTextNeedsEncoding*(text: string): bool =
+  ## True when header text cannot travel as plain ASCII without
+  ## changing meaning (R-MIME-10):
+  ## - any byte outside printable ASCII (control characters, TAB
+  ##   included, and UTF-8);
+  ## - anything a decoder could mistake for an encoded-word: `=?`
+  ##   opens one (RFC 2047 §6.1 decodes any word shaped
+  ##   `=?charset?X?text?=`), so a look-alike is encoded rather than
+  ##   left for the reader to "decode";
+  ## - leading or trailing whitespace, which parsers strip from an
+  ##   unencoded value;
+  ## - a word so long that folding cannot keep its line within the
+  ##   78-column recommendation (RFC 5322 §2.1.1) — encoded-words split
+  ##   it into ≤ 75-char pieces, which also keeps every line far under
+  ##   the 998-character hard limit (RFC 5322 §2.1.1 MUST).
+  if text.len == 0:
+    return false
   for c in text:
     if c.byte < 32 or c.byte > 126:
       return true
-  false
+  if "=?" in text:
+    return true
+  if isWsp(text[0]) or isWsp(text[^1]):
+    return true
+  longestFoldUnit(text) > headerFoldLimit - 1
 
 proc splitWordsB(text: string; charset: string): seq[string] =
   ## Splits raw text into B-encoded words of ≤ 75 chars. Each word
@@ -208,11 +246,14 @@ proc splitWordsQ(text: string; charset: string; phrase: bool): seq[string] =
 
 proc encodeHeaderText*(text: string; charset = "UTF-8"; phrase = false): string =
   ## Encodes header text with RFC 2047 encoded-words (R-MIME-10).
-  ## Pure-ASCII text passes through; otherwise B or Q is chosen per
-  ## RFC 2047 §4 (Q when mostly ASCII) and long text becomes several
-  ## ≤ 75-char words separated by CRLF SPACE. `phrase` selects the
-  ## restricted Q set for display names (RFC 2047 §5 rule 3).
-  if not needsEncoding(text):
+  ## Text that `headerTextNeedsEncoding` accepts passes through
+  ## verbatim (whitespace runs included); otherwise the whole text is
+  ## encoded — B or Q per RFC 2047 §4 (Q when mostly ASCII) — as
+  ## ≤ 75-char words separated by CRLF SPACE, so every space survives
+  ## inside the words and decoders drop only the separators. `phrase`
+  ## selects the restricted Q set for display names (RFC 2047 §5
+  ## rule 3).
+  if not headerTextNeedsEncoding(text):
     return text
   let words =
     if chooseWordEncoding(text) == 'B':
@@ -221,57 +262,89 @@ proc encodeHeaderText*(text: string; charset = "UTF-8"; phrase = false): string 
       splitWordsQ(text, charset, phrase)
   words.join(crlf & " ")
 
+const maxHeaderLine* = 998
+  ## RFC 5322 §2.1.1: a line MUST NOT exceed 998 characters (CRLF
+  ## excluded).
+
+proc hardSplit(line: string; limit: int): string =
+  ## Last resort for a line folding cannot shorten: CRLF SPACE every
+  ## `limit - 1` characters, so no line exceeds `limit`. Unfolding
+  ## leaves a SPACE at each split — which is why the encodable headers
+  ## (Subject, display names) never get here: they fall back to
+  ## encoded-words instead.
+  result = line[0 ..< min(limit, line.len)]
+  var at = min(limit, line.len)
+  while at < line.len:
+    let take = min(limit - 1, line.len - at)
+    result.add(crlf & " " & line[at ..< at + take])
+    at += take
+
 proc foldHeader*(name, value: string): string =
   ## Folds one `Name: value` header (RFC 5322 §2.2.3; R-MIME-08).
-  ## Lines are ≤ 78 chars, or ≤ 76 when the value carries
-  ## encoded-words (RFC 2047 §2). Existing CRLF SPACE folds (as
-  ## produced by `encodeHeaderText`) are kept; further breaks go
-  ## before spaces with a single-space continuation.
+  ## Lines are ≤ 78 chars where a fold point exists, or ≤ 76 when the
+  ## value carries encoded-words (RFC 2047 §2). A fold is a CRLF
+  ## inserted *before* existing whitespace, so unfolding (removing the
+  ## CRLFs) restores the value byte for byte: whitespace runs, tabs and
+  ## all. Existing CRLF WSP folds (as `encodeHeaderText` produces) are
+  ## kept. A trailing whitespace run never becomes a line of its own.
+  ## No line ever exceeds 998 characters: a word too long for that is
+  ## hard-split as a last resort (`hardSplit`).
   let limit =
     if "=?" in value: encodedWordLineLimit
     else: headerFoldLimit
-  # Split into words, remembering which separators were forced folds.
-  var words: seq[string] = @[]
-  var forced: seq[bool] = @[] # forced[i]: break before words[i]
-  var cur = ""
+  # Units: a whitespace run plus the word after it; `forced` marks a
+  # unit that followed an existing CRLF fold.
+  var units: seq[string] = @[]
+  var forced: seq[bool] = @[]
   var i = 0
   var pendingForced = false
   while i < value.len:
     if value[i] == '\r' and i + 2 < value.len and value[i + 1] == '\n' and
-        value[i + 2] in {' ', '\t'}:
-      if cur.len > 0:
-        words.add(cur)
-        forced.add(pendingForced)
-        cur = ""
+        isWsp(value[i + 2]):
       pendingForced = true
-      i += 3
-    elif value[i] in {' ', '\t'}:
-      if cur.len > 0:
-        words.add(cur)
-        forced.add(pendingForced)
-        cur = ""
-        pendingForced = false
-      while i < value.len and value[i] in {' ', '\t'}:
-        inc i
-    else:
-      cur.add(value[i])
+      i += 2
+      continue
+    let start = i
+    while i < value.len and isWsp(value[i]):
       inc i
-  if cur.len > 0:
-    words.add(cur)
+    while i < value.len and not isWsp(value[i]) and
+        not (value[i] == '\r' and i + 1 < value.len and value[i + 1] == '\n'):
+      inc i
+    if i == start:
+      # A lone CR/LF not starting a fold: keep it inside the unit
+      # (callers reject header breaks before folding).
+      inc i
+    units.add(value[start ..< i])
     forced.add(pendingForced)
-  if words.len == 0:
-    return name & ":"
+    pendingForced = false
+  # A trailing whitespace-only unit rides on the unit before it.
+  if units.len > 1 and units[^1].len > 0 and isWsp(units[^1][0]):
+    var allWsp = true
+    for c in units[^1]:
+      if not isWsp(c):
+        allWsp = false
+    if allWsp:
+      units[^2].add(units[^1])
+      units.setLen(units.len - 1)
+      forced.setLen(forced.len - 1)
 
-  proc curLineLen(s: string): int =
-    let p = s.rfind(crlf)
-    if p < 0: s.len
-    else: s.len - p - crlf.len
-
-  # Every word, including the first, may start a continuation line: a
-  # 75-char encoded-word never fits beside `Subject: ` in 76 columns.
-  result = name & ":"
-  for w in 0 ..< words.len:
-    if forced[w] or curLineLen(result) + 1 + words[w].len > limit:
-      result.add(crlf & " " & words[w])
+  var lines: seq[string] = @[name & ":"]
+  for u in 0 ..< units.len:
+    # The first unit gains the conventional separator after the colon;
+    # every later unit starts with whitespace by construction, so a
+    # fold before any unit is a legal CRLF-before-WSP.
+    let unit = if u == 0: " " & units[u] else: units[u]
+    let foldable = isWsp(unit[0])
+    # A unit longer than a whole line gains nothing from a fold right
+    # after the colon; later units always fold (lossless), and the
+    # hard split below takes care of what still exceeds 998.
+    let overflow = lines[^1].len + unit.len > limit and
+      (u > 0 or unit.len <= limit)
+    if foldable and (forced[u] or overflow):
+      lines.add(unit)
     else:
-      result.add(" " & words[w])
+      lines[^1].add(unit)
+  for k in 0 ..< lines.len:
+    if lines[k].len > maxHeaderLine:
+      lines[k] = hardSplit(lines[k], maxHeaderLine)
+  lines.join(crlf)

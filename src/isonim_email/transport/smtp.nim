@@ -22,8 +22,11 @@ const smtpTimeoutMs* = 10_000
 
 proc dotStuff*(data: string): string =
   ## RFC 5321 §4.5.2 transparency: a line starting with `.` gains one
-  ## more. Our encoders never emit one (R-MIME-07; base64 has no dot),
-  ## but the transport guarantees it regardless of the payload.
+  ## more, so no payload line can end the DATA phase early. Our
+  ## encoders never emit one (R-MIME-07; base64 has no dot), but the
+  ## transport guarantees it regardless of the payload. Line endings
+  ## are canonicalised on the way: bare LF and bare CR become CRLF
+  ## (RFC 5321 §2.3.8), and the dot rule applies after each.
   if data.len == 0:
     return ""
   result = newStringOfCap(data.len + 16)
@@ -36,7 +39,9 @@ proc dotStuff*(data: string): string =
       result.add("\r\n")
       i += 2
       atLineStart = true
-    elif data[i] == '\n':
+    elif data[i] == '\n' or data[i] == '\r':
+      # A bare LF or bare CR becomes CRLF: RFC 5321 §2.3.8 allows CR
+      # and LF on the wire only as the CRLF pair.
       result.add("\r\n")
       inc i
       atLineStart = true

@@ -129,6 +129,9 @@
               fontconfig
               # Markdown linting (`just lint-markdown`).
               markdownlint-cli2
+              # The independent RFC 2047 / MIME oracle for the header
+              # fuzz test (Python's `email` package, stdlib only).
+              python3
             ];
 
             # Playwright must use the Nix-provided browsers, never download.

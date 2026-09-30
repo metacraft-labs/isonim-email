@@ -122,18 +122,25 @@ proc seededBoundarySource*(seed: string): BoundarySource =
   result = proc (salt: string): string {.closure.} =
     "=_e_" & flat & "_" & sha256Hex(seed & ":" & salt)[0 ..< 12]
 
+type BoundaryError* = object of ValueError
+  ## A boundary source produced an invalid boundary. Message assembly
+  ## converts it to `E-MIME-HEADER` rather than crash.
+
 proc uniqueBoundary*(src: BoundarySource; salt: string;
                      bodies: openArray[string]): string =
   ## A boundary from `src` verified absent from every body
   ## (RFC 2046 §5.1.1: delimiters must not appear in the encapsulated
-  ## material). Retries with a fresh salt suffix until one fits.
+  ## material). Retries with a fresh salt suffix until one fits. An
+  ## invalid candidate raises `BoundaryError` naming it.
   var attempt = 0
   while true:
     let candidate =
       if attempt == 0: src(salt)
       else: src(salt & "-retry" & $attempt)
-    doAssert isValidBoundary(candidate),
-      "boundary source produced an invalid boundary: '" & candidate & "'"
+    if not isValidBoundary(candidate):
+      raise newException(BoundaryError,
+        "boundary source produced an invalid boundary: '" & candidate &
+          "' (1-70 characters from the RFC 2046 bcharsnospace set)")
     var found = false
     for body in bodies:
       if candidate in body:
@@ -158,26 +165,92 @@ proc textPart*(mimeType, rawBody: string; charset = "utf-8";
     header("Content-Transfer-Encoding", "quoted-printable"),
   ], body: encodeQuotedPrintable(rawBody))
 
+const
+  maxQuotedFilename* = 60
+    ## Longest filename emitted as a plain quoted-string parameter; a
+    ## longer one uses RFC 2231 continuations so no header line grows
+    ## past the fold limit.
+  rfc2231SegmentLen* = 40
+    ## Longest percent-encoded RFC 2231 segment: with its
+    ## `filename*NN*=UTF-8''` head and `;` it stays within 78 columns.
+
+proc isAttributeChar(c: char): bool =
+  ## RFC 2231 §7 `attribute-char`: any printable ASCII except SPACE,
+  ## `*`, `'`, `%` and the RFC 2045 tspecials.
+  c.isAlphaNumeric() or c in {'!', '#', '$', '&', '+', '-', '.', '^',
+    '_', '`', '|', '~'}
+
+proc isPlainFilename(filename: string): bool =
+  ## Printable ASCII only (no controls, no UTF-8), short, without edge
+  ## spaces (readers strip them) and without `=?` (readers decode
+  ## RFC 2047 look-alikes even inside a quoted parameter): safe as a
+  ## quoted-string once `"` and `\` are escaped.
+  if filename.len == 0 or filename.len > maxQuotedFilename:
+    return false
+  if filename[0] == ' ' or filename[^1] == ' ' or "=?" in filename:
+    return false
+  for c in filename:
+    if c.byte < 32 or c.byte > 126:
+      return false
+  true
+
+proc filenameParam*(key, filename: string): string =
+  ## One `; key=…` parameter carrying `filename` safely:
+  ## - short printable ASCII: a quoted-string with `"` and `\`
+  ##   backslash-escaped (RFC 5322 §3.2.4 `quoted-pair`);
+  ## - anything else (UTF-8, control bytes, a long name): RFC 2231
+  ##   `key*0*=UTF-8''…; key*1*=…` — percent-encoded octets in ≤ 40-char
+  ##   segments, never splitting a `%XX`.
+  ## Control bytes (CR and LF included) can therefore never reach the
+  ## header raw: callers reject them first (`E-MIME-HEADER`), and this
+  ## percent-encodes whatever gets past.
+  if isPlainFilename(filename):
+    var quoted = ""
+    for c in filename:
+      if c in {'"', '\\'}:
+        quoted.add('\\')
+      quoted.add(c)
+    return "; " & key & "=\"" & quoted & "\""
+  const digits = "0123456789ABCDEF"
+  var atoms: seq[string] = @[]
+  for c in filename:
+    if isAttributeChar(c):
+      atoms.add($c)
+    else:
+      atoms.add("%" & digits[c.byte shr 4] & digits[c.byte and 0x0F])
+  var segments: seq[string] = @[""]
+  for a in atoms:
+    if segments[^1].len + a.len > rfc2231SegmentLen:
+      segments.add("")
+    segments[^1].add(a)
+  result = ""
+  for i, seg in segments:
+    result.add("; " & key & "*" & $i & "*=")
+    if i == 0:
+      result.add("UTF-8''")
+    result.add(seg)
+
 proc imagePart*(img: InlineImage): MimePart =
   ## A base64 inline image with `Content-ID: <…>` and
-  ## `Content-Disposition: inline` (R-MIME-09, R-MIME-11).
+  ## `Content-Disposition: inline` (R-MIME-09, R-MIME-11). The filename
+  ## is escaped by `filenameParam`.
   MimePart(kind: mpkSingle, headers: @[
-    header("Content-Type", img.contentType & "; name=\"" &
-      img.filename & "\""),
+    header("Content-Type", img.contentType &
+      filenameParam("name", img.filename)),
     header("Content-Transfer-Encoding", "base64"),
     header("Content-ID", "<" & img.contentId & ">"),
-    header("Content-Disposition", "inline; filename=\"" &
-      img.filename & "\""),
+    header("Content-Disposition", "inline" &
+      filenameParam("filename", img.filename)),
   ], body: encodeBase64(img.data))
 
 proc attachmentPart*(att: Attachment): MimePart =
-  ## A base64 attachment (`multipart/mixed` member, R-MIME-03).
+  ## A base64 attachment (`multipart/mixed` member, R-MIME-03). The
+  ## filename is escaped by `filenameParam`.
   MimePart(kind: mpkSingle, headers: @[
-    header("Content-Type", att.mime & "; name=\"" &
-      att.filename & "\""),
+    header("Content-Type", att.mime & filenameParam("name", att.filename)),
     header("Content-Transfer-Encoding", "base64"),
-    header("Content-Disposition", "attachment; filename=\"" &
-      att.filename & "\""),
+    header("Content-Disposition", "attachment" &
+      filenameParam("filename", att.filename)),
   ], body: encodeBase64(att.bytes))
 
 proc serializePart*(part: MimePart): string
@@ -266,17 +339,20 @@ proc newMessage*(headers: seq[MimeHeader]; root: MimePart): MimeMessage =
 
 proc serializeMessage*(msg: MimeMessage): string =
   ## The full message bytes: folded headers, a blank line, the root
-  ## entity, all CRLF-terminated (R-MIME-13). A multipart root's
-  ## `Content-Type` rides in the message headers (emitting it
-  ## past the blank line would strand it in the body).
+  ## entity's body, all CRLF-terminated (R-MIME-13). The root's own
+  ## headers belong to the message header block — a multipart root's
+  ## `Content-Type`, and a single-part root's `Content-Type` and
+  ## `Content-Transfer-Encoding` — so the blank line separates exactly
+  ## the header block from the body (RFC 5322 §2.1; emitting the root's
+  ## headers past it would strand them in the body).
   result = serializeHeaders(msg.headers)
+  result.add(serializeHeaders(msg.root.headers))
   if msg.root.kind == mpkMultipart:
     result.add(foldHeader("Content-Type", contentTypeValue(msg.root)))
     result.add(crlf)
   result.add(crlf)
   case msg.root.kind
   of mpkSingle:
-    result.add(serializePart(msg.root))
+    result.add(msg.root.body)
   of mpkMultipart:
-    result.add(serializeHeaders(msg.root.headers))
     result.add(serializeMultipartFraming(msg.root))

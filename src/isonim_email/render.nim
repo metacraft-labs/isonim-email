@@ -128,6 +128,14 @@ proc isResolvableName(src: string): bool =
     return false
   true
 
+proc isPublishedUrl(url: string): bool =
+  ## An absolute https URL with a host: what `AssetStore.publish` must
+  ## return.
+  let lower = url.toLowerAscii()
+  lower.startsWith("https://") and url.len > "https://".len and
+    url["https://".len] notin {'/', '?', '#'} and
+    not url.contains({' ', '\t', '\r', '\n', '"', '<', '>'})
+
 proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
     assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]] =
   ## P8's asset half. Every `img`/`mailImage` source the tree
@@ -142,7 +150,9 @@ proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
   ## written. An unresolvable name is collected as `E-ASSET-UNKNOWN`,
   ## and a `data:` source as `E-URL-SCHEME` (R-IMG-08 forbids embedded
   ## data URIs). A failing upload hook propagates: sending with an
-  ## image that never published is worse than not sending.
+  ## image that never published is worse than not sending. A publish
+  ## that returns no absolute https URL is collected as `E-URL-SCHEME`
+  ## (R-IMG-07) and its `src` is left unrewritten and unlisted.
   result = (@[], @[])
   if doc == nil or store == nil:
     return
@@ -184,15 +194,28 @@ proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
             result.diagnostics.add(toDiagnostic(e.msg,
               origin = node.origin))
         if found:
-          asset.url = store.publish(asset)
-          resolved.add((src, asset.url))
-          node.attrs["src"] = asset.url
-          var listed = false
-          for a in result.assets:
-            if a.url == asset.url:
-              listed = true
-          if not listed:
-            result.assets.add(asset)
+          let url = store.publish(asset)
+          if not isPublishedUrl(url):
+            # R-IMG-07: the HTML may only reference what the upload
+            # returned, and the upload must return where the image now
+            # lives. An empty or non-https answer means it did not.
+            failed.add(src)
+            result.diagnostics.add(EmailDiagnostic(
+              severity: sevError, code: codeUrlScheme,
+              message: "publishing asset '" & asset.name & "' returned '" &
+                url & "', not an absolute https URL; the upload must " &
+                "complete before the HTML references it (R-IMG-07)",
+              origin: node.origin, rules: @["R-IMG-07"]))
+          else:
+            asset.url = url
+            resolved.add((src, asset.url))
+            node.attrs["src"] = asset.url
+            var listed = false
+            for a in result.assets:
+              if a.url == asset.url:
+                listed = true
+            if not listed:
+              result.assets.add(asset)
     for i in countdown(node.children.high, 0):
       stack.add(node.children[i])
 
@@ -240,18 +263,16 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
     else: work.children # Copy: appendChild detaches as it moves.
   for c in kids:
     r.appendChild(sections, c)
-  let html = serializeDocument(lowerDocument(work, sections,
-    headRes.blocks, target))
+  # The breakdown is counted while the bytes are written (R-SIZE-02),
+  # so it partitions the document exactly.
+  let (html, sizeBreakdown) = serializeDocumentMeasured(lowerDocument(
+    work, sections, headRes.blocks, target))
 
   var headCssBytes = 0
   for blk in headRes.blocks:
     if blk.kind == enHeadStyle:
       headCssBytes += blk.text.len
   let htmlBytes = html.len
-  let sizeBreakdown = @[
-    ("headCss", headCssBytes),
-    ("markup", htmlBytes - headCssBytes),
-  ]
   diags.add(checkSize(html, target, sizeBreakdown))
 
   if strict and hasErrors(diags):

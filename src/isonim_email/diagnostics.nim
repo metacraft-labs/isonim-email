@@ -110,8 +110,11 @@ const
     ## Decoded HTML exceeds 100,000 bytes: Gmail will clip it
     ## (R-SIZE-01). Emitted by `passes/lint.checkSize` (P10).
   codeMimeHeader* = "E-MIME-HEADER"
-    ## An owned header value is invalid, e.g. an unsubscribe URI that
-    ## is not https (R-SND-01). Emitted by `mime/headers.ownedHeaders`.
+    ## An invalid header value, e.g. an unsubscribe URI that is not
+    ## https (R-SND-01), an attachment filename with CR or LF, or a
+    ## deterministic seed that cannot derive a valid Message-ID.
+    ## Emitted by `mime/headers.ownedHeaders`; raised by
+    ## `mime/message.toMessage` and `toRfc5322`.
   codeMimeUnsubToken* = "W-MIME-UNSUB-TOKEN"
     ## An unsubscribe URI without an opaque token of at least 16
     ## characters (R-SND-02). Emitted by `mime/headers.ownedHeaders`
@@ -130,6 +133,11 @@ const
   codeAssetUnknown* = "E-ASSET-UNKNOWN"
     ## An asset the store cannot resolve. Raised from `assets.nim` as
     ## `AssetError`, like `codeUrlScheme`.
+  codeAssetUnpublished* = "E-ASSET-UNPUBLISHED"
+    ## A hosted message references an asset that was never published
+    ## (its `url` is empty), so the upload did not complete before the
+    ## message was built (R-IMG-07). Raised by `mime/message.toMessage`
+    ## and `toRfc5322`.
 
 type EmailDiagnostic* = object
   severity*: Severity

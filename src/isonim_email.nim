@@ -22,6 +22,7 @@ import isonim_email/style/metacraft_theme
 import isonim_email/mime/model
 import isonim_email/mime/headers
 import isonim_email/mime/message
+import isonim_email/mime/one_click
 import isonim_email/assets
 when not defined(js):
   import isonim_email/transport/smtp
@@ -57,6 +58,7 @@ export a11y
 export model
 export headers
 export message
+export one_click
 export assets
 when not defined(js):
   export smtp

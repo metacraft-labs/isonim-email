@@ -17,9 +17,10 @@
 ## sent to a real Mailpit spawned
 ## by the test, and comes back with identical parts; the raw view
 ## parses as the intended tree. The same file pins the assembly units
-## (Date, Message-ID, flowed stuffing, boundaries), the R-SND-03 POST
-## fixture, the R-SND-04 DKIM metadata + Mailgun payload, and the
-## R-SND-06 doc.
+## (Date, Message-ID, flowed stuffing, boundaries), the R-SND-03
+## one-click endpoint (the library's request check and response in a
+## real HTTP server, POSTed to from a library-built message's headers),
+## the R-SND-04 DKIM metadata + Mailgun payload, and the R-SND-06 doc.
 ##
 ## C backend only: spawns Mailpit and a fixture HTTP server, reads the
 ## PNG fixture and docs/ off disk. No mocks anywhere (allowed_mocks:
@@ -360,17 +361,22 @@ proc stopMailpit(p: Process; dir: string) =
 # ------------------------------------------------- unsubscribe rig
 
 type FixtureHit = object
-  ## One request the R-SND-03 fixture server recorded.
+  ## One request the R-SND-03 fixture server recorded, with the
+  ## library's verdict on it and the status the server answered.
   reqLine: string
   headers: seq[(string, string)]
   body: string
+  verdict: OneClickVerdict
+  status: int
 
 proc fixtureWorker(arg: tuple[port, hits: int;
                                ch: ptr Channel[FixtureHit]]) {.thread.} =
-  ## A minimal reference sender's server (R-SND-03, docs/sending.md):
-  ## records `hits` POSTs and answers a fixed 200 with no `Location`.
-  ## Every accepted connection yields exactly one hit — including
-  ## dropped ones — so the main thread's recvs always terminate.
+  ## A minimal sender's server built on the library's one-click half
+  ## (R-SND-03, docs/sending.md): every request goes through
+  ## `checkOneClickRequest`, and the answer is exactly what
+  ## `oneClickResponse` returns. Every accepted connection yields
+  ## exactly one hit — including dropped ones — so the main thread's
+  ## recvs always terminate.
   var server = newSocket()
   try:
     server.setSockOpt(OptReuseAddr, true)
@@ -410,13 +416,19 @@ proc fixtureWorker(arg: tuple[port, hits: int;
               break
             body.add(chunk)
             remaining -= chunk.len
-          const respBody = "unsubscribed"
-          client.send("HTTP/1.1 200 OK\r\n" &
-            "Content-Type: text/plain\r\n" &
-            "Content-Length: " & $respBody.len & "\r\n" &
-            "Connection: close\r\n\r\n" & respBody)
-          arg.ch[].send(FixtureHit(reqLine: lines[0], headers: heads,
+          let verdict = checkOneClickRequest(OneClickRequest(
+            httpMethod: lines[0].split(' ')[0], headers: heads,
             body: body))
+          let resp = oneClickResponse(verdict)
+          var wire = "HTTP/1.1 " & $resp.status &
+            (if resp.status == 200: " OK" else: " Bad Request") & "\r\n"
+          for (n, v) in resp.headers:
+            wire.add(n & ": " & v & "\r\n")
+          wire.add("Content-Length: " & $resp.body.len & "\r\n" &
+            "Connection: close\r\n\r\n" & resp.body)
+          client.send(wire)
+          arg.ch[].send(FixtureHit(reqLine: lines[0], headers: heads,
+            body: body, verdict: verdict, status: resp.status))
       except CatchableError as e:
         arg.ch[].send(FixtureHit(reqLine: "ERROR: " & e.msg,
           headers: @[], body: ""))
@@ -786,17 +798,39 @@ suite "message assembly, transports and round trip":
   test "unsubscribe post fixture pins the server contract":
     # rule: R-SND-03
 
-    # Three accepts: the readiness probe plus the two POSTs. No
-    # checks until every hit is received: each accepted connection
-    # yields exactly one hit, so the recvs below always terminate and
-    # the worker never strands the join.
-    const totalHits = 3
+    # The mail-receiver side, driven from a library-built message: the
+    # URI comes out of the serialised List-Unsubscribe header, the body
+    # out of List-Unsubscribe-Post. The server side is the library's
+    # `checkOneClickRequest` + `oneClickResponse` in a real HTTP server.
+    # The fixture has no TLS, so the https URI is POSTed over plain
+    # http to the same host, port and path (the scheme is the one
+    # thing swapped). Five accepts: the readiness probe, two one-click
+    # POSTs (both body shapes), and two that must be refused (a cookie,
+    # a GET). No checks until every hit is received: each accepted
+    # connection yields exactly one hit, so the recvs below terminate.
+    const totalHits = 5
+    const token = "Zx8Kq2Lm9Tt4Vw7Rb3Nc"
     var ch: Channel[FixtureHit]
     ch.open()
     let port = freePort()
     var thr: Thread[tuple[port, hits: int; ch: ptr Channel[FixtureHit]]]
     createThread(thr, fixtureWorker, (port, totalHits, addr ch))
     var got: seq[FixtureHit] = @[]
+    var responses: seq[Response] = @[]
+    let msg = toMessage(RenderedEmail(html: "<p>x</p>", text: "x"),
+      MessageHeaders(fromAddr: mailbox("", "a@example.com"),
+        to: @[mailbox("", "b@example.com")],
+        unsubscribe: some(Unsubscribe(
+          httpsUri: "https://127.0.0.1:" & $port & "/u/" & token,
+          mailto: "mailto:unsub@example.com"))))
+    let root = parsePart(toRfc5322(msg, "u1"))
+    let listHeader = parsedHeader(root, "List-Unsubscribe")
+    let postBody = parsedHeader(root, "List-Unsubscribe-Post")
+    check postBody == "List-Unsubscribe=One-Click"
+    let httpsUri = listHeader[listHeader.find('<') + 1 ..<
+      listHeader.find('>')]
+    check httpsUri == "https://127.0.0.1:" & $port & "/u/" & token
+    let target = "http://" & httpsUri["https://".len .. ^1]
     try:
       var serverUp = false
       for _ in 0 ..< 100:
@@ -813,27 +847,31 @@ suite "message assembly, transports and round trip":
       got.add(ch.recv())
       doAssert got[0].reqLine == "(closed)"
 
-      var client = newHttpClient()
+      # A bare client, as a mailbox provider sends it: no cookie jar,
+      # no auth, and no redirect following (a 3xx would show as is).
+      var client = newHttpClient(maxRedirects = 0)
       try:
         client.headers = newHttpHeaders({
           "Content-Type": "application/x-www-form-urlencoded"})
-        let r1 = client.post("http://127.0.0.1:" & $port & "/u/abc",
-          body = "List-Unsubscribe=One-Click")
+        responses.add(client.post(target, body = postBody))
         got.add(ch.recv())
-        doAssert r1.code == Http200, "urlencoded POST failed"
 
+        let eq = postBody.find('=')
         var mp = newMultipartData()
-        mp["List-Unsubscribe"] = "One-Click"
-        let r2 = client.post("http://127.0.0.1:" & $port & "/u/abc",
-          multipart = mp)
+        mp[postBody[0 ..< eq]] = postBody[eq + 1 .. ^1]
+        client.headers = newHttpHeaders()
+        responses.add(client.post(target, multipart = mp))
         got.add(ch.recv())
-        doAssert r2.code == Http200, "multipart POST failed"
-        doAssert r1.body == "unsubscribed"
-        doAssert r2.body == "unsubscribed"
-        for resp in [r1, r2]:
-          for k, _ in resp.headers.pairs():
-            doAssert k.toLowerAscii() != "location",
-              "fixture answered with a redirect"
+
+        client.headers = newHttpHeaders({
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Cookie": "session=abc"})
+        responses.add(client.post(target, body = postBody))
+        got.add(ch.recv())
+
+        client.headers = newHttpHeaders()
+        responses.add(client.get(target))
+        got.add(ch.recv())
       finally:
         client.close()
     finally:
@@ -845,21 +883,38 @@ suite "message assembly, transports and round trip":
       ch.close()
 
     check got.len == totalHits
+    check responses.len == 4
+    # Every request reached the path the header named.
+    for hit in got[1 .. ^1]:
+      check (" /u/" & token & " ") in hit.reqLine
+    # The two one-click POSTs: accepted by the library, 200 back.
     let form = got[1]
-    check form.reqLine.startsWith("POST /u/abc ")
+    check form.reqLine.startsWith("POST ")
     check fixtureHeader(form, "Content-Type") ==
       "application/x-www-form-urlencoded"
     check fixtureHeader(form, "Cookie") == ""
     check fixtureHeader(form, "Authorization") == ""
     check form.body == "List-Unsubscribe=One-Click"
+    check form.verdict.ok
     let multi = got[2]
-    check multi.reqLine.startsWith("POST /u/abc ")
     check fixtureHeader(multi, "Content-Type").startsWith(
       "multipart/form-data; boundary=")
-    check fixtureHeader(multi, "Cookie") == ""
-    check fixtureHeader(multi, "Authorization") == ""
     check "name=\"List-Unsubscribe\"" in multi.body
-    check "One-Click" in multi.body
+    check multi.verdict.ok
+    check responses[0].code == Http200
+    check responses[1].code == Http200
+    check responses[0].body == "unsubscribed"
+    # A POST carrying a cookie, and a GET: refused, 400, never a 3xx.
+    check not got[3].verdict.ok
+    check "cookies" in got[3].verdict.reason
+    check not got[4].verdict.ok
+    check "POST" in got[4].verdict.reason
+    check responses[2].code == Http400
+    check responses[3].code == Http400
+    for resp in responses:
+      check resp.code.int notin 300 .. 399
+      for k, _ in resp.headers.pairs():
+        check k.toLowerAscii() != "location"
 
   test "dkim metadata and the mailgun payload":
     # rule: R-SND-04

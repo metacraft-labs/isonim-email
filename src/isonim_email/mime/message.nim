@@ -11,7 +11,10 @@
 ## (R-MIME-10), flowed space-stuffing (R-MIME-06) and the R-SND-04 DKIM
 ## metadata.
 ##
-## Invalid header values raise `EmailRenderError` carrying `E-MIME-HEADER`.
+## Invalid header values, attachment filenames or media types, and
+## invalid deterministic seeds raise `EmailRenderError` carrying
+## `E-MIME-HEADER`; a hosted message that references an unpublished
+## asset raises `E-ASSET-UNPUBLISHED` (R-IMG-07).
 ## Everything below error severity that `toMessage` finds rides on
 ## `EmailMessage.diagnostics`: a token-less unsubscribe URI is still
 ## emitted with `W-MIME-UNSUB-TOKEN` (R-SND-02 refuses by warning), and
@@ -117,6 +120,10 @@ proc rfc5322Date*(unixMillis: int64): string =
 const mailboxSpecials = {'(', ')', '<', '>', '[', ']', ':', ';', '@',
   '\\', ',', '.', '"'}
 
+const maxAddressLen* = 254
+  ## Longest addr-spec: RFC 5321 §4.5.3.1.3 caps a path at 256 octets
+  ## including the angle brackets.
+
 proc validateMailbox*(m: Mailbox; field: string): seq[EmailDiagnostic] =
   ## `E-MIME-HEADER` when the address is not a bare addr-spec: it must
   ## contain `@` and stay ASCII (encoded-words never appear inside an
@@ -126,7 +133,12 @@ proc validateMailbox*(m: Mailbox; field: string): seq[EmailDiagnostic] =
     result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
       message: "'" & field & "' mailbox must not contain CR or LF",
       rules: @["R-SND-01"]))
-  elif '@' notin m.address:
+  elif m.address.len > maxAddressLen:
+    result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
+      message: "'" & field & "' address is " & $m.address.len &
+        " characters (at most " & $maxAddressLen & ", RFC 5321 §4.5.3.1.3)",
+      rules: @["R-MIME-10"]))
+  elif '@' notin m.address or ' ' in m.address or '\t' in m.address:
     result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
       message: "'" & field & "' address '" & m.address &
         "' is not an addr-spec (R-MIME-10)",
@@ -143,22 +155,23 @@ proc validateMailbox*(m: Mailbox; field: string): seq[EmailDiagnostic] =
         break
 
 proc formatMailbox*(m: Mailbox): string =
-  ## `Name <addr>`, with quoting when the name needs it and RFC 2047
-  ## `phrase` encoded-words when it is not ASCII (R-MIME-10); a bare
-  ## addr-spec when the name is empty. Emits as given — the caller
-  ## validates with `validateMailbox` (the headers.nim
-  ## `unsubscribeHeaders` contract).
+  ## `Name <addr>`, a bare addr-spec when the name is empty
+  ## (R-MIME-10). The name travels as:
+  ## - RFC 2047 `phrase` encoded-words when `headerTextNeedsEncoding`
+  ##   says so (non-ASCII, control characters, an `=?` look-alike, edge
+  ##   whitespace, an overlong word);
+  ## - a quoted-string when it holds specials or a whitespace run (a
+  ##   phrase's inter-word whitespace is folding whitespace, which
+  ##   parsers collapse; a quoted-string keeps it);
+  ## - atoms otherwise.
+  ## Emits as given — the caller validates with `validateMailbox` (the
+  ## headers.nim `unsubscribeHeaders` contract).
   if m.name.len == 0:
     return m.address
-  var needsEncoding = false
-  for c in m.name:
-    if c.byte > 126 or c.byte < 32:
-      needsEncoding = true
-      break
-  if needsEncoding:
+  if headerTextNeedsEncoding(m.name):
     return encodeHeaderText(m.name, phrase = true) & " <" & m.address &
       ">"
-  var needsQuotes = m.name[0] == ' ' or m.name[^1] == ' '
+  var needsQuotes = "  " in m.name
   if not needsQuotes:
     for c in m.name:
       if c in mailboxSpecials:
@@ -177,11 +190,16 @@ proc formatMailbox*(m: Mailbox): string =
 # ------------------------------------------------------------- assembly
 
 proc spaceStuffFlowed*(text: string): string =
-  ## RFC 3676 §4.4 space-stuffing (R-MIME-06): a line starting with a
-  ## space, `>`, or `From ` gains one leading space, so a flowed
-  ## receiver's unstuffing restores the original bytes. Lines split on
-  ## LF (a trailing CR per line is stripped); the trailing-newline
-  ## shape of the input is preserved.
+  ## Prepares a plain-text part for `format=flowed` (RFC 3676, R-MIME-06).
+  ## Every line of the input ends in a hard break, so:
+  ## - trailing spaces are trimmed (§4.2 "trim spaces before
+  ##   user-inserted hard line breaks": a line ending in a space is a
+  ##   *flowed* line, and the receiver would join it to the next);
+  ##   the signature separator `-- ` is sent as-is (§4.3);
+  ## - a line starting with a space, `>`, or `From ` gains one leading
+  ##   space (§4.4 space-stuffing), which a flowed receiver removes.
+  ## Lines split on LF (a trailing CR per line is stripped); the
+  ## trailing-newline shape of the input is preserved.
   if text.len == 0:
     return ""
   var lines: seq[string] = @[]
@@ -189,6 +207,11 @@ proc spaceStuffFlowed*(text: string): string =
     var line = rawLine
     if line.endsWith('\r'):
       line.setLen(line.len - 1)
+    if line != "-- ":
+      var keep = line.len
+      while keep > 0 and line[keep - 1] == ' ':
+        dec keep
+      line.setLen(keep)
     if line.len > 0 and (line[0] == ' ' or line[0] == '>' or
         line.startsWith("From ")):
       line = " " & line
@@ -221,6 +244,10 @@ proc checkMailbox(m: Mailbox; field: string) =
   if hasErrors(found):
     raiseDiagnostic(found[0])
 
+const maxMessageIdLen* = 900
+  ## Longest supplied Message-ID: a msg-id cannot fold, so it must fit
+  ## RFC 5322's 998-character line on its own.
+
 proc checkHeaders(h: MessageHeaders; clock: Clock): MessageHeaders =
   ## Validates every header value, raising `E-MIME-HEADER` on the
   ## first invalid one, and normalises: `messageId` gains `<>`, a zero
@@ -240,9 +267,12 @@ proc checkHeaders(h: MessageHeaders; clock: Clock): MessageHeaders =
   if hasHeaderInjection(h.subject):
     mimeError("Subject must not contain CR or LF")
   if h.messageId.len > 0:
-    if hasHeaderInjection(h.messageId) or '@' notin h.messageId:
-      mimeError("Message-ID '" & h.messageId &
-        "' must be <id@domain> without CR or LF (R-MIME-12)")
+    if hasHeaderInjection(h.messageId) or '@' notin h.messageId or
+        h.messageId.len > maxMessageIdLen or ' ' in h.messageId or
+        '\t' in h.messageId:
+      mimeError("Message-ID '" & h.messageId.escape("", "") &
+        "' must be <id@domain> without whitespace, at most " &
+        $maxMessageIdLen & " characters (R-MIME-12)")
     if h.messageId.startsWith("<") and h.messageId.endsWith(">"):
       result.messageId = h.messageId
     else:
@@ -258,6 +288,77 @@ proc checkHeaders(h: MessageHeaders; clock: Clock): MessageHeaders =
         "LF or ':'")
   if h.date == fromUnix(0):
     result.date = fromUnix(nowUnixMillis(clock) div 1000)
+
+const maxSeedLen* = 40
+  ## Longest deterministic seed: the seed is the Message-ID's first
+  ## dot-atom and the seeded boundary's readable part.
+
+proc isValidSeed*(seed: string): bool =
+  ## A seed is a dot-atom of letters, digits, `-` and `_` (1–40 chars,
+  ## no leading, trailing or doubled dot), so the derived Message-ID
+  ## `<seed.hex@domain>` is a valid RFC 5322 msg-id and the derived
+  ## boundary a valid RFC 2046 boundary.
+  if seed.len == 0 or seed.len > maxSeedLen:
+    return false
+  if seed[0] == '.' or seed[^1] == '.' or ".." in seed:
+    return false
+  for c in seed:
+    if not (c.isAlphaNumeric() or c in {'-', '_', '.'}):
+      return false
+  true
+
+proc checkSeed(seed: string) =
+  ## `E-MIME-HEADER` for a seed that cannot derive valid headers.
+  if seed.len > 0 and not isValidSeed(seed):
+    mimeError("deterministic seed '" & seed & "' must be 1-" &
+      $maxSeedLen & " letters, digits, '-', '_' or single inner dots " &
+      "(it becomes the Message-ID's local part and the boundary's tag)")
+
+proc checkFilename(filename, what: string) =
+  ## `E-MIME-HEADER` for a filename that is empty or carries a control
+  ## character (CR and LF included: a header break must never be
+  ## smuggled into `Content-Type`/`Content-Disposition`).
+  if filename.len == 0:
+    mimeError(what & " filename must not be empty")
+  for c in filename:
+    if c.byte < 32 or c.byte == 127:
+      mimeError(what & " filename '" & filename.escape() &
+        "' must not contain CR, LF or other control characters")
+
+proc checkMediaType(mime, what: string) =
+  ## `E-MIME-HEADER` unless `mime` is a bare `type/subtype` of RFC 2045
+  ## token characters.
+  let slash = mime.find('/')
+  var ok = slash > 0 and slash < mime.len - 1 and
+    mime.count('/') == 1
+  if ok:
+    for c in mime:
+      if c != '/' and not (c.isAlphaNumeric() or
+          c in {'!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^',
+            '_', '`', '{', '|', '}', '~'}):
+        ok = false
+  if not ok:
+    mimeError(what & " media type '" & mime.escape() &
+      "' must be a bare type/subtype")
+
+proc checkAttachments(attachments: seq[Attachment]) =
+  for att in attachments:
+    checkFilename(att.filename, "attachment")
+    checkMediaType(att.mime, "attachment '" & att.filename & "'")
+
+proc checkPublished(r: RenderedEmail; images: ImageStrategy) =
+  ## R-IMG-07: a hosted message may only reference published assets.
+  ## `rendered.assets` lists what the HTML references; an empty `url`
+  ## means the upload never completed, so the message would send a
+  ## reference to an image that is not (yet) there.
+  if images != isHosted:
+    return
+  for a in r.assets:
+    if a.url.len == 0:
+      raise newException(EmailRenderError, codeAssetUnpublished &
+        ": asset '" & a.name & "' is referenced but was never " &
+        "published; render with an AssetStore so the upload completes " &
+        "before the message is built (R-IMG-07)")
 
 proc messageIdFor(headers: MessageHeaders; seed: string): string =
   ## The stored id, or a generated `<id@sender-domain>` (R-MIME-12):
@@ -376,6 +477,8 @@ proc wireRoot(m: EmailMessage; seed: string): MimePart =
     if seed.len > 0: seededBoundarySource(seed)
     else: defaultBoundarySource
   let body = bodyParts(m)
+  for a in body.inline:
+    checkFilename(assetBaseName(a.name), "embedded image")
   let htmlPart = textPart("text/html", body.html)
   let htmlOrRelated =
     if body.inline.len > 0:
@@ -409,7 +512,16 @@ proc toMessage*(r: RenderedEmail; headers: MessageHeaders;
   ## `I-TEXT-OMITTED` when `r.text` is empty (the message then carries
   ## the HTML alone). With `images = isEmbedded` the stored
   ## `rendered.html` already references its images as `cid:`.
+  ##
+  ## Attachments are validated too (`E-MIME-HEADER` for an empty
+  ## filename, one with CR, LF or another control character, or a
+  ## media type that is not a bare `type/subtype`), and a hosted
+  ## message whose `rendered.assets` holds an unpublished asset raises
+  ## `E-ASSET-UNPUBLISHED` (R-IMG-07: the upload completes before the
+  ## message exists).
   let checked = checkHeaders(headers, systemClock())
+  checkAttachments(attachments)
+  checkPublished(r, images)
   var diags: seq[EmailDiagnostic] = @[]
   if checked.unsubscribe.isSome:
     for d in validateUnsubscribe(checked.unsubscribe.get()):
@@ -429,11 +541,20 @@ proc toMessage*(r: RenderedEmail; headers: MessageHeaders;
 proc toRfc5322*(m: EmailMessage; deterministicSeed = ""): string =
   ## The complete bytes, ready for SMTP or ESP "raw" APIs. A
   ## non-empty seed derives the boundaries and a missing Message-ID
-  ## (tests); without one both are random. Seeds are test tags — keep
-  ## them to letters, digits and dots so the derived Message-ID stays
-  ## a valid msg-id.
-  serializeMessage(newMessage(wireHeaders(m, deterministicSeed),
-    wireRoot(m, deterministicSeed)))
+  ## (tests); without one both are random. A seed outside
+  ## `isValidSeed` (it would derive an invalid Message-ID) raises
+  ## `E-MIME-HEADER`, as do the attachment and header checks
+  ## `toMessage` runs, re-run here for hand-built messages, and a
+  ## hosted reference to an unpublished asset raises
+  ## `E-ASSET-UNPUBLISHED` (R-IMG-07).
+  checkSeed(deterministicSeed)
+  checkAttachments(m.attachments)
+  checkPublished(m.rendered, m.images)
+  try:
+    serializeMessage(newMessage(wireHeaders(m, deterministicSeed),
+      wireRoot(m, deterministicSeed)))
+  except BoundaryError as e:
+    mimeError(e.msg)
 
 proc toParts*(m: EmailMessage): tuple[html, text: string;
     headers: seq[(string, string)]; inline: seq[AssetRef]] =
@@ -444,6 +565,7 @@ proc toParts*(m: EmailMessage): tuple[html, text: string;
   ## pairs (a missing Message-ID is omitted — only `toRfc5322`
   ## generates one), and the embedded images (the referenced assets
   ## under `isEmbedded`, else none).
+  checkPublished(m.rendered, m.images)
   var heads: seq[(string, string)] = @[]
   for h in wireHeaders(m, ""):
     if h.name == "Message-ID" and m.headers.messageId.len == 0:

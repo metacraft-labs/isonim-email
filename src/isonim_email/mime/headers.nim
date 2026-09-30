@@ -4,8 +4,9 @@
 ## R-SND-02), `Auto-Submitted` (R-SND-05), `Feedback-ID` and
 ## `X-Entity-Ref-ID`. Each is behind an explicit option on
 ## `ownedHeaders`; without it the header is absent. Values are checked
-## for CRLF injection and the unsubscribe URI for the https scheme
-## (`E-MIME-HEADER`) and an opaque token (`W-MIME-UNSUB-TOKEN`).
+## for CRLF injection and the unsubscribe URIs for RFC 3986 syntax, the
+## https scheme with a host, and a bounded length (`E-MIME-HEADER`), and
+## for an opaque token (`W-MIME-UNSUB-TOKEN`).
 ## Headers are `model.MimeHeader`, so `toMessage` applies them to
 ## the assembled message untouched.
 
@@ -53,15 +54,110 @@ proc hasOpaqueToken*(uri: string): bool =
       run = 0
   false
 
+const maxUnsubUriLen* = 900
+  ## Longest accepted unsubscribe URI (each of https and mailto): the
+  ## `List-Unsubscribe` line must stay under RFC 5322's 998 characters
+  ## without whitespace inside the angle brackets, which RFC 2369 §2
+  ## forbids inserting.
+
+proc isUriChar(c: char): bool =
+  ## RFC 3986 §2: unreserved, gen-delims and sub-delims (`%` is checked
+  ## separately, as the start of a `%XX` escape).
+  c.isAlphaNumeric() or c in {'-', '.', '_', '~', ':', '/', '?', '#',
+    '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';',
+    '='}
+
+proc uriSyntaxProblem(uri: string): string =
+  ## "" when every character is legal in an RFC 3986 URI and every `%`
+  ## starts a `%XX` escape; otherwise what is wrong. Whitespace, `<`,
+  ## `>`, `"`, controls and raw UTF-8 all land here: inside a
+  ## `List-Unsubscribe` bracket they would end the URI early or be
+  ## dropped by the reader (RFC 2369 §2).
+  if uri.len > maxUnsubUriLen:
+    return "is " & $uri.len & " characters (at most " & $maxUnsubUriLen &
+      ")"
+  var i = 0
+  while i < uri.len:
+    let c = uri[i]
+    if c == '%':
+      if i + 2 >= uri.len or uri[i + 1] notin HexDigits or
+          uri[i + 2] notin HexDigits:
+        return "has a '%' that does not start a %XX escape"
+      i += 3
+      continue
+    if not isUriChar(c):
+      return "contains " & (if c.byte < 32 or c.byte > 126:
+        "the byte 0x" & c.byte.toHex(2) else: "'" & $c & "'") &
+        ", which must be percent-encoded"
+    inc i
+  ""
+
+proc httpsUriProblem*(uri: string): string =
+  ## "" when `uri` is one absolute https URI with a host, no userinfo
+  ## and legal URI syntax (R-SND-01); otherwise what is wrong.
+  if uri.len == 0:
+    return "is empty"
+  if not uri.toLowerAscii().startsWith("https://"):
+    return "is not an https URI"
+  let syntax = uriSyntaxProblem(uri)
+  if syntax.len > 0:
+    return syntax
+  let rest = uri["https://".len .. ^1]
+  var authEnd = rest.len
+  for k, c in rest:
+    if c in {'/', '?', '#'}:
+      authEnd = k
+      break
+  let authority = rest[0 ..< authEnd]
+  if '@' in authority:
+    return "carries userinfo (credentials never belong in the URI)"
+  var host = authority
+  if host.startsWith("["):
+    let close = host.find(']')
+    if close < 0:
+      return "has an unterminated IPv6 host"
+    let after = host[close + 1 .. ^1]
+    if after.len > 0 and not (after.startsWith(":") and
+        after.len > 1 and after[1 .. ^1].allCharsInSet(Digits)):
+      return "has an invalid port"
+  else:
+    let colon = host.find(':')
+    if colon >= 0:
+      let port = host[colon + 1 .. ^1]
+      if port.len == 0 or not port.allCharsInSet(Digits):
+        return "has an invalid port"
+      host = host[0 ..< colon]
+    if host.len == 0:
+      return "has no host"
+  ""
+
+proc mailtoProblem*(uri: string): string =
+  ## "" when `uri` is a `mailto:` URI with an addr-spec (`@`) and legal
+  ## URI syntax; otherwise what is wrong.
+  if not uri.toLowerAscii().startsWith("mailto:"):
+    return "is not a mailto: URI"
+  let syntax = uriSyntaxProblem(uri)
+  if syntax.len > 0:
+    return syntax
+  let address = uri["mailto:".len .. ^1].split('?')[0]
+  let at = address.find('@')
+  if at <= 0 or at == address.len - 1:
+    return "has no addr-spec (local@domain)"
+  ""
+
 proc validateUnsubscribe*(u: Unsubscribe): seq[EmailDiagnostic] =
-  ## `E-MIME-HEADER` when the URI is not https or a value carries a
-  ## header break (R-SND-01); `W-MIME-UNSUB-TOKEN` when the URI has no
-  ## opaque token (R-SND-02). A broken URI skips the token check.
-  if u.httpsUri.len == 0 or hasHeaderInjection(u.httpsUri) or
-      not u.httpsUri.startsWith("https://"):
+  ## `E-MIME-HEADER` when the URI is not one absolute https URI with a
+  ## host and RFC 3986 syntax (R-SND-01: no whitespace, brackets,
+  ## quotes, controls or raw UTF-8, no userinfo, at most
+  ## `maxUnsubUriLen` characters) or the mailto is not a `mailto:`
+  ## address with the same syntax; `W-MIME-UNSUB-TOKEN` when the https
+  ## URI has no opaque token (R-SND-02). A broken URI skips the token
+  ## check.
+  let problem = httpsUriProblem(u.httpsUri)
+  if problem.len > 0:
     result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
       message: "List-Unsubscribe URI must be a single https URI, got '" &
-        u.httpsUri & "' (R-SND-01)",
+        u.httpsUri.escape("", "") & "': it " & problem & " (R-SND-01)",
       rules: @["R-SND-01"]))
   elif not hasOpaqueToken(u.httpsUri):
     result.add(EmailDiagnostic(severity: sevWarning,
@@ -69,13 +165,14 @@ proc validateUnsubscribe*(u: Unsubscribe): seq[EmailDiagnostic] =
       message: "List-Unsubscribe URI has no query or path token of at " &
         "least 16 characters (R-SND-02)",
       rules: @["R-SND-02"]))
-  if u.mailto.len > 0 and (hasHeaderInjection(u.mailto) or
-      not u.mailto.toLowerAscii().startsWith("mailto:") or
-      '@' notin u.mailto):
-    result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
-      message: "List-Unsubscribe mailto must be a mailto: address, got '" &
-        u.mailto & "' (R-SND-01)",
-      rules: @["R-SND-01"]))
+  if u.mailto.len > 0:
+    let mproblem = mailtoProblem(u.mailto)
+    if mproblem.len > 0:
+      result.add(EmailDiagnostic(severity: sevError, code: codeMimeHeader,
+        message: "List-Unsubscribe mailto must be a mailto: address, " &
+          "got '" & u.mailto.escape("", "") & "': it " & mproblem &
+          " (R-SND-01)",
+        rules: @["R-SND-01"]))
 
 proc unsubscribeHeaders*(u: Unsubscribe): seq[MimeHeader] =
   ## Both RFC 8058 headers: one `List-Unsubscribe` with the https URI

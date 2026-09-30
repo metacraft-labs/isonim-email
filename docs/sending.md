@@ -18,12 +18,22 @@ _sender's_ job. That endpoint MUST:
   `application/x-www-form-urlencoded` **or** `multipart/form-data`;
 - answer 2xx once the recipient is unsubscribed.
 
-The round-trip suite keeps a reference fixture of this contract: an
-in-test server that records the POST and answers a fixed 200 without
-a `Location` header (`tests/t6_roundtrip.nim`, "unsubscribe post
-fixture pins the server contract"). Point a new endpoint at the same
-assertions — POST both body shapes, check the response has no
-`Location` — before trusting it with real unsubscribes.
+The library ships the reusable half of that endpoint
+(`isonim_email/mime/one_click`): `checkOneClickRequest` takes the
+request's method, headers and body and says whether it is a one-click
+POST (POST, no `Cookie`, no `Authorization`, the single field
+`List-Unsubscribe=One-Click` in either body shape), and
+`oneClickResponse` turns the verdict into the answer — 200, or 400
+naming the failed requirement, never a 3xx and never a `Location`.
+Unsubscribe the recipient the URI identifies before sending the 200.
+
+The round-trip suite runs exactly that in a real HTTP server
+(`tests/t6_roundtrip.nim`, "unsubscribe post fixture pins the server
+contract"): it POSTs to the URI taken from a library-built message's
+`List-Unsubscribe` header, in both body shapes, and checks that a
+POST with a cookie and a GET are refused without a redirect. Point a
+new endpoint at the same assertions before trusting it with real
+unsubscribes.
 
 ## DKIM must cover both headers (R-SND-04)
 
@@ -51,8 +61,25 @@ stricter enforcement from Nov 2025 unless noted):
 
 The library's half: the one-click headers above (with an opaque
 per-recipient token in the URI, `R-SND-02`), so the messages it
-builds carry what the receivers require. Authentication (SPF, DKIM,
-DMARC records) and complaint-rate monitoring stay with the sender's
-infrastructure — see the capture host's sending subdomain
-(`infra/terraform/cloudflare`, `infra/terraform/mailgun`) for how
-this project provisions them.
+builds carry what the receivers require. Authentication and
+complaint-rate monitoring stay with the sender. For the domain in the
+`From` address (or a dedicated sending subdomain of it), the sender
+must configure in DNS:
+
+- **SPF**: a `TXT` record at the envelope (Return-Path) domain whose
+  `v=spf1` policy authorises the ESP's or relay's sending hosts,
+  usually via the `include:` the ESP documents, ending in `~all` or
+  `-all`;
+- **DKIM**: the ESP's public key as a `TXT` (or delegated `CNAME`)
+  record at `<selector>._domainkey.<domain>`, so the ESP signs with
+  a `d=` domain aligned with the `From` domain and an `h=` tag
+  covering both unsubscribe headers;
+- **DMARC**: a `TXT` record at `_dmarc.<domain>` (`v=DMARC1; p=none`
+  at first, tightened to `quarantine` or `reject` once reports show
+  aligned SPF or DKIM passes), with an `rua=` address for the
+  aggregate authentication reports;
+- the ESP's own records where it asks for them (a tracking `CNAME`,
+  an `MX` for bounce handling on the envelope domain).
+
+Complaint rates are read from the receivers' own sender dashboards
+(for Gmail, Postmaster Tools) and the ESP's feedback-loop reports.

@@ -190,8 +190,11 @@ suite "message API":
     check base64.encode("hi\n") in bytes
 
   test "hosted is the default and ignores stored assets":
+    # A rendered record lists assets with the URL they were published
+    # at; hosted leaves that reference alone and embeds nothing.
     let logo = AssetRef(name: "logo.png", mime: "image/png",
-      bytes: "PNGDATA", sha256: sha256Hex("PNGDATA"))
+      bytes: "PNGDATA", sha256: sha256Hex("PNGDATA"),
+      url: "https://assets.example.com/p/logo.png")
     let msg = toMessage(
       RenderedEmail(html: "<p>x</p>", text: "x", assets: @[logo]),
       MessageHeaders(
@@ -343,3 +346,145 @@ suite "message API":
       err = e.msg
     check err.startsWith(codeMimeHeader & ":")
     check "not-an-address" in err
+
+proc headBlock(bytes: string): string =
+  bytes[0 ..< bytes.find(crlf & crlf)]
+
+proc bodyBlock(bytes: string): string =
+  bytes[bytes.find(crlf & crlf) + 4 .. ^1]
+
+# Error probes as plain procs, not closures: a closure capturing a
+# test-local crashes the JS backend.
+proc toMessageErr(r: RenderedEmail; h: MessageHeaders;
+                  atts: seq[Attachment] = @[]): string =
+  try:
+    discard toMessage(r, h, attachments = atts)
+  except EmailRenderError as e:
+    return e.msg
+  ""
+
+proc toRfcErr(m: EmailMessage; seed: string): string =
+  try:
+    discard toRfc5322(m, seed)
+  except EmailRenderError as e:
+    return e.msg
+  ""
+
+proc toPartsErr(m: EmailMessage): string =
+  try:
+    discard toParts(m)
+  except EmailRenderError as e:
+    return e.msg
+  ""
+
+proc minimalHeaders(): MessageHeaders =
+  MessageHeaders(fromAddr: mailbox("", "a@example.com"),
+    to: @[mailbox("", "b@example.com")], date: fromUnix(1767268800))
+
+suite "message API: packaging edge cases":
+  test "a single-part root puts its headers above the blank line":
+    # rule: R-MIME-13
+    # HTML alone, no attachments: the root is the text/html part, and
+    # its Content-Type and Content-Transfer-Encoding are message
+    # headers — the blank line separates headers from the QP body.
+    let bytes = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>"),
+      minimalHeaders()), "t")
+    let head = headBlock(bytes)
+    check "\r\nContent-Type: text/html; charset=utf-8" in head
+    check "\r\nContent-Transfer-Encoding: quoted-printable" in head
+    check "MIME-Version: 1.0" in head
+    check bodyBlock(bytes) == "<p>x</p>" & crlf
+    check "Content-Type" notin bodyBlock(bytes)
+    # Exactly one blank line: the body does not open with another.
+    check not bodyBlock(bytes).startsWith(crlf)
+    # A multipart root keeps its Content-Type in the headers too.
+    let multi = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>",
+      text: "x"), minimalHeaders()), "t")
+    check "Content-Type: multipart/alternative;" in headBlock(multi)
+    check bodyBlock(multi).startsWith("--=_e_t_")
+
+  test "an invalid seed is a diagnostic, not a crash":
+    let msg = toMessage(RenderedEmail(html: "<p>x</p>", text: "x"),
+      minimalHeaders())
+    for bad in ["a b", "x@y", "<t>", ".t", "t.", "a..b", "t\r\nX: y",
+        "é", "s".repeat(maxSeedLen + 1)]:
+      check not isValidSeed(bad)
+      let err = toRfcErr(msg, bad)
+      check err.startsWith(codeMimeHeader & ":")
+      check "seed" in err
+    for good in ["t", "u1", "fz2399", "a.b-c_d", "s".repeat(maxSeedLen)]:
+      check isValidSeed(good)
+      check toRfc5322(msg, good).len > 0
+    # A boundary source that yields an invalid boundary raises a
+    # catchable error naming it, never an assertion.
+    let badSource: BoundarySource = proc (salt: string): string =
+      "has space"
+    var raised = ""
+    try:
+      discard newMultipart("mixed", @[textPart("text/plain", "x")],
+        badSource, "mix")
+    except BoundaryError as e:
+      raised = e.msg
+    check "has space" in raised
+
+  test "attachment filenames and media types are validated":
+    let rendered = RenderedEmail(html: "<p>x</p>", text: "x")
+    for (name, mime) in [("a\r\nBcc: x@evil.test", "text/plain"),
+        ("a\nb.txt", "text/plain"), ("a\rb.txt", "text/plain"),
+        ("nul\0.txt", "text/plain"), ("", "text/plain"),
+        ("ok.txt", "text/plain\r\nX-Evil: 1"), ("ok.txt", "text"),
+        ("ok.txt", "text/plain; name=x"), ("ok.txt", "")]:
+      let atts = @[Attachment(filename: name, mime: mime, bytes: "x")]
+      let err = toMessageErr(rendered, minimalHeaders(), atts)
+      check err.startsWith(codeMimeHeader & ":")
+      # A hand-built message is refused at serialisation too.
+      let hand = EmailMessage(headers: minimalHeaders(), rendered: rendered,
+        attachments: atts)
+      check toRfcErr(hand, "t").startsWith(codeMimeHeader & ":")
+    # Escaped on the wire: quoted-pairs for `"`/`\`, RFC 2231 for UTF-8.
+    let bytes = toRfc5322(toMessage(rendered, minimalHeaders(),
+      attachments = @[
+        Attachment(filename: "q\"uo\\te.txt", mime: "text/plain",
+          bytes: "x"),
+        Attachment(filename: "résumé.pdf", mime: "application/pdf",
+          bytes: "y")]), "t")
+    check "attachment; filename=\"q\\\"uo\\\\te.txt\"" in bytes
+    check "attachment; filename*0*=UTF-8''r%C3%A9sum%C3%A9.pdf" in bytes
+    check "résumé" notin bytes
+
+  test "flowed text trims trailing spaces before hard breaks":
+    # rule: R-MIME-06
+    # Every line ends in a hard break; a trailing space would make it a
+    # flowed (soft) line and the receiver would join it to the next.
+    check spaceStuffFlowed("hello  \nworld \n") == "hello\nworld\n"
+    check spaceStuffFlowed("   \nx") == "\nx"
+    # The signature separator is sent as-is.
+    check spaceStuffFlowed("body\n-- \nAda") == "body\n-- \nAda"
+    # Trimming happens before stuffing: a stuffed line keeps its lead.
+    check spaceStuffFlowed(" indented  \n>q ") == "  indented\n >q"
+    # End to end: the decoded text part has no trailing space except
+    # on the separator.
+    let bytes = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>",
+      text: "Hi there  \nline \n-- \nsig"), minimalHeaders()), "t")
+    check "Hi there\r\nline\r\n--=20\r\nsig" in bytes
+
+  test "a hosted message never references an unpublished asset":
+    # rule: R-IMG-07
+    let unpublished = AssetRef(name: "logo.png", mime: "image/png",
+      bytes: "PNG", sha256: sha256Hex("PNG"))
+    let rendered = RenderedEmail(html: "<img src=\"logo.png\" alt=\"l\">",
+      text: "x", assets: @[unpublished])
+    let err = toMessageErr(rendered, minimalHeaders())
+    check err.startsWith(codeAssetUnpublished & ":")
+    check "logo.png" in err
+    check "R-IMG-07" in err
+    # Hand-built messages are refused at every exit.
+    let hand = EmailMessage(headers: minimalHeaders(), rendered: rendered)
+    check toRfcErr(hand, "t").startsWith(codeAssetUnpublished & ":")
+    check toPartsErr(hand).startsWith(codeAssetUnpublished & ":")
+    # Negative control: once published, the same message builds.
+    var published = unpublished
+    published.url = "https://assets.example.com/p/logo.png"
+    let ok = toMessage(RenderedEmail(html: "<img src=\"" & published.url &
+      "\" alt=\"l\">", text: "x", assets: @[published]), minimalHeaders())
+    check published.url in toRfc5322(ok, "t")

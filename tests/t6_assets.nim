@@ -46,6 +46,25 @@ proc cdnHook(a: AssetRef): string =
   cdnCalls.add(a.name)
   "https://cdn.example.net/u" & hostedPath(a)
 
+var badUrl = ""
+
+proc badUrlHook(a: AssetRef): string =
+  ## An uploader that "succeeds" without returning where the image
+  ## lives: an empty or non-https URL.
+  badUrl
+
+proc failingHook(a: AssetRef): string =
+  ## An uploader whose upload fails.
+  raise newException(IOError, "upload of " & a.name & " failed")
+
+proc renderErr(store: AssetStore; strict: bool): string =
+  try:
+    discard renderEmail(imgTpl, "brand/logo.png", strict = strict,
+      assets = store)
+  except CatchableError as e:
+    return e.msg
+  ""
+
 proc testHeaders(): MessageHeaders =
   MessageHeaders(fromAddr: mailbox("", "a@example.com"),
     to: @[mailbox("", "b@example.com")], date: fromUnix(1767268800))
@@ -262,3 +281,42 @@ suite "assets":
     let bytes = toRfc5322(msg, "t")
     check "Content-ID: <" & id & ">" in bytes.replace("\r\n ", " ")
     check "multipart/related" in bytes
+
+  test "the html only ever references what the upload returned":
+    # rule: R-IMG-07
+    # An upload that fails fails the render: no HTML exists that could
+    # reference the image before it is published.
+    let failing = memoryAssetStore("https://assets.example.com",
+      upload = failingHook)
+    failing.put("brand/logo.png", rgbBytes)
+    check "upload of brand/logo.png failed" in renderErr(failing, false)
+    # An upload that returns no absolute https URL did not publish:
+    # E-URL-SCHEME naming R-IMG-07, the src is not rewritten to it and
+    # the asset is not listed as published.
+    for bad in ["", "http://cdn.example.net/x.png", "/relative/x.png",
+        "https://", "https:///x.png", "https://cdn.example.net/a b.png"]:
+      badUrl = bad
+      let store = memoryAssetStore("https://assets.example.com",
+        upload = badUrlHook)
+      store.put("brand/logo.png", rgbBytes)
+      let res = renderEmail(imgTpl, "brand/logo.png", assets = store)
+      check res.assets.len == 0
+      var found = false
+      for d in res.diagnostics:
+        if d.code == codeUrlScheme and "R-IMG-07" in d.rules:
+          found = true
+          check d.severity == sevError
+      check found
+      if bad.len > 0:
+        check ("src=\"" & escapeEmailAttr(bad) & "\"") notin res.html
+      # Strict raises it.
+      check renderErr(store, true).startsWith("E-URL-SCHEME")
+    # Negative control: a good URL publishes and is referenced.
+    badUrl = "https://cdn.example.net/ok/logo.png"
+    let good = memoryAssetStore("https://assets.example.com",
+      upload = badUrlHook)
+    good.put("brand/logo.png", rgbBytes)
+    let res = renderEmail(imgTpl, "brand/logo.png", assets = good)
+    check res.diagnostics.len == 0
+    check res.assets.len == 1
+    check "src=\"https://cdn.example.net/ok/logo.png\"" in res.html
