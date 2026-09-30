@@ -31,6 +31,15 @@ proc multiTpl(r: EmailRenderer; x: int): EmailNode =
       mailSection:
         h1: text "Two"
 
+proc formsTpl(r: EmailRenderer; x: int): EmailNode =
+  # Tag columns (0-based): mailDocument 4, mailSection 6, the rest 8.
+  ui(r):
+    mailDocument(lang = "en", title = "Forms"):
+      mailSection:
+        p(class = "lead"): text "args and body"
+        mailImage(src = "https://cdn.example/logo.png", alt = "logo")
+        h1: text "body only"
+
 proc allElements(node: EmailNode): seq[EmailNode] =
   if node.kind == enElement:
     result.add(node)
@@ -43,14 +52,13 @@ suite "template source spans":
     check tree.tag == "mailDocument"
     check tree.origin.file.endsWith("t1_source_spans.nim")
     check tree.origin.line == 14
-    check tree.origin.col > 0
     let sec = tree.children[0]
     check sec.tag == "mailSection"
     check sec.origin.line == 15
-    # `tag:` elements are anchored at the tag's first character (Nim's
-    # 0-based column: six spaces of indentation). `tag(args)` elements
-    # are anchored at the `(`, which the renderer cannot correct (see
-    # `noteElement`).
+    # Every element is anchored at its tag's first character (Nim's
+    # 0-based column: the indentation), in the `tag(args):` form as in
+    # the `tag:` form.
+    check tree.origin.col == 4
     check sec.origin.col == 6
     let h1 = sec.children[0]
     check h1.tag == "h1"
@@ -58,6 +66,27 @@ suite "template source spans":
     let p = sec.children[1]
     check p.tag == "p"
     check p.origin.line == 17
+
+  test "the column is the tag's for tag(args), tag(args): and tag: forms":
+    let tree = renderAuthoringTree(formsTpl, 0)
+    check tree.tag == "mailDocument"
+    check tree.origin.line == 37
+    check tree.origin.col == 4            # tag(args):
+    let sec = tree.children[0]
+    check sec.origin.line == 38
+    check sec.origin.col == 6             # tag:
+    let els = sec.children
+    check els.len == 3
+    if els.len == 3:
+      check els[0].tag == "p"
+      check els[0].origin.line == 39
+      check els[0].origin.col == 8        # tag(args): body
+      check els[1].tag == "mailImage"
+      check els[1].origin.line == 40
+      check els[1].origin.col == 8        # tag(args)
+      check els[2].tag == "h1"
+      check els[2].origin.line == 41
+      check els[2].origin.col == 8        # tag: body
 
   test "collected diagnostics cite the node span, not unknown location":
     let res = renderEmail(noLangTpl, 0)

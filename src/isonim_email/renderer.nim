@@ -274,16 +274,8 @@ proc noteElement*(el: EmailNode; id, tag, loc, parentId: string) =
   ## and parent id are accepted and ignored. Text nodes have no hook call
   ## and keep empty origins.
   ##
-  ## The column is the macro's, unchanged: Nim's 0-based line-info
-  ## column of the element's call node. For the `tag:` form that is the
-  ## tag's first character; for `tag(args)` Nim anchors the call node at
-  ## the `(`, so the column points there rather than at the tag. It is
-  ## not corrected here because it cannot be: `loc` carries one position
-  ## and nothing that tells the two forms apart (both `p(…)` at column
-  ## 9 and `p:` at column 9 arrive as `…:9`), and subtracting the tag
-  ## length would move the `tag:` form's correct column. Anchoring every
-  ## element at its tag needs the `ui` macro to report the callee's line
-  ## info instead of the call's. The line is exact in both forms.
+  ## The column is the element's tag (Nim's 0-based line-info column):
+  ## the element start in the `tag(args)` form as in the `tag:` form.
   el.origin = parseSourceSpan(loc)
 
 # ----------------------------------------------------------------------------
@@ -412,13 +404,23 @@ proc assertNoPendingAsync*(r: EmailRenderer) =
 # never re-runs. The probe is unlinked from every source before the
 # root is disposed (`releaseAsyncProbe`), so it outlives no render.
 #
-# Limits, stated plainly: a resource whose state is never read (only
-# its `data`) is invisible here, because the core keeps no record of
-# resources and a data signal cannot be told from any other signal; so
-# are reads made under `untrack`, inside a nested `createRoot` (which
-# clears the listener and is not owned by its parent), or of a memo
-# created outside the render whose own sources are pending. `trackAsync`
-# remains the explicit way to register such a load.
+# Resources need no read at all: every isonim resource registers its
+# state with the owner current at its creation, so after the template
+# returns the guard also enumerates the resources created under the
+# render's root (`ownedResourceStates`: the root and every computation
+# it owns) and fails on any still pending, whether or not the template
+# read it — a resource whose `data` alone was read would otherwise put
+# its initial value ("Loading…") into the email. The read-tracking above
+# is still what catches the rest: an `AsyncState` signal (plain signals
+# register nowhere), and a pending resource created OUTSIDE the render
+# that the template reads.
+#
+# Limits, stated plainly: reads made under `untrack`, reads of a memo
+# created outside the render whose own sources are pending, and anything
+# inside a nested `createRoot` (which clears the listener and is not
+# owned by its parent, so neither its reads nor its resources are
+# reached) are invisible here. `trackAsync` remains the explicit way to
+# register such a load.
 
 proc newAsyncProbe*(): ComputationBase =
   ## A body-less computation used as the listener while a template runs,
@@ -477,6 +479,25 @@ proc findPendingRead(o: OwnerBase): string =
     if found.len > 0:
       return found
   ""
+
+proc assertNoPendingResources*(root: OwnerBase; tree: EmailNode) =
+  ## Fails the render when a resource created under `root` — in the
+  ## template body or inside any computation the root owns — is still
+  ## pending (`rsPending`/`rsRefreshing`), read or not. Run before the
+  ## root is disposed (disposal clears the record). Raises
+  ## `EmailRenderError` (E-STRUCT-REACTIVE-RESIDUE) naming the state and
+  ## the template's root element.
+  for s in ownedResourceStates(root):
+    let v = s.value
+    if v in {rsPending, rsRefreshing}:
+      let where =
+        if tree == nil: "unknown location"
+        else: $tree.origin
+      raise newException(EmailRenderError,
+        "E-STRUCT-REACTIVE-RESIDUE: a resource the template created is " &
+        "still pending (resource state " & $v & ") at render time, in " &
+        "the template rooted at " & where & " (resolve async resources " &
+        "before rendering email; an email cannot show a spinner)")
 
 proc assertNoPendingReads*(root: OwnerBase; probe: ComputationBase;
                            tree: EmailNode) =

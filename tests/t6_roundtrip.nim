@@ -902,6 +902,21 @@ suite "message assembly, transports and round trip":
         inc tagParts
     check tagParts == 2
 
+    # No plain-text part: the `text` field is omitted, never sent empty.
+    var htmlOnly = roundtripRendered(pngBytes)
+    htmlOnly.text = ""
+    let htmlOnlyMsg = toMessage(htmlOnly, roundtripHeaders(), isEmbedded)
+    let htmlOnlyPayload = mailgunPayload(htmlOnlyMsg, "example.com")
+    check htmlOnlyPayload.text == ""
+    check htmlOnlyPayload.html.len > 0
+    let htmlOnlyFields = payloadFields(htmlOnlyPayload)
+    for (name, _) in htmlOnlyFields:
+      check name != "text"
+    check htmlOnlyFields.len == 4   # from, to, subject, html
+    let (_, htmlOnlyBody) = encodeMultipart(htmlOnlyFields)
+    check "name=\"text\"" notin htmlOnlyBody
+    check "name=\"html\"" in htmlOnlyBody
+
     check mailgunApiBase("eu") == "https://api.eu.mailgun.net"
     try:
       discard mailgunApiBase("xx")

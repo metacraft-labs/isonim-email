@@ -7,7 +7,10 @@
 ## pinned directly below. Pending state held by isonim's own primitives
 ## (an `AsyncState` signal left `asLoading`, an async `createResource`
 ## whose future never completes) fails the render when the template reads
-## it, with no opt-in call; resolved resources are the negative control.
+## it, with no opt-in call; a resource created under the render's root
+## fails it even when only its `data` is read (or nothing at all), found
+## through the resources the root registers. Resolved resources are the
+## negative control.
 ##
 ## No mocks: the templates use the real reactive core and real
 ## cross-target futures.
@@ -32,6 +35,10 @@ proc sigTpl(r: EmailRenderer; name: string): EmailNode =
           h1: text shouted.val
           p: text "static"
 
+template lineHere(): int = instantiationInfo().line
+
+# The line of `pendTpl`'s `trackAsync` call, which its diagnostic cites.
+const pendTrackLine = lineHere() + 2
 proc pendTpl(r: EmailRenderer; x: int): EmailNode =
   let user = r.trackAsync()
   ui(r):
@@ -80,6 +87,39 @@ proc pendingResourceTpl(r: EmailRenderer; x: int): EmailNode =
           p: text "Spinner"
         else:
           p: text user.val
+
+proc dataOnlyResourceTpl(r: EmailRenderer; x: int): EmailNode =
+  # Only `data` is read: its initial value would reach the email as-is.
+  let user = createResource(proc(info: ResourceFetcherInfo[string]):
+      PlatformFuture[string] = neverFuture(), initialValue = "Loading…")
+  ui(r):
+    mailDocument(lang = "en", title = "Data only"):
+      mailSection:
+        h1: text "Account"
+        p: text user.data.val
+
+proc unreadNestedResourceTpl(r: EmailRenderer; x: int): EmailNode =
+  # Created inside a template-owned memo, and never read at all.
+  let label = createMemo(proc(): string =
+    discard createResource(proc(info: ResourceFetcherInfo[string]):
+        PlatformFuture[string] = neverFuture())
+    "Account")
+  ui(r):
+    mailDocument(lang = "en", title = "Nested"):
+      mailSection:
+        h1: text label.val
+
+proc settledResourcesTpl(r: EmailRenderer; x: int): EmailNode =
+  # Created under the render's root and settled before it returns.
+  let sync = createResource(proc(): string = "Ada")
+  let deferred = createDeferredResource[string]("…")
+  deferred.resolve("Lovelace")
+  let failed = createDeferredResource[string]()
+  failed.reject("offline")
+  ui(r):
+    mailDocument(lang = "en", title = "Settled"):
+      mailSection:
+        h1: text sync.data.val & " " & deferred.resource.data.val
 
 proc memoOverLoadingTpl(r: EmailRenderer; x: int): EmailNode =
   # The read happens inside a memo the template owns, not in the body.
@@ -186,7 +226,8 @@ suite "no hydration residue":
     check "E-STRUCT-REACTIVE-RESIDUE" in msg
     check "asLoading" in msg
     # A full path, like element spans: the basename alone is ambiguous.
-    check "/tests/t1_no_hydration_residue.nim:36:" in msg
+    check ("/tests/t1_no_hydration_residue.nim:" & $pendTrackLine & ":") in
+      msg
     check "unknown location" notin msg
 
   test "a template that resolves its async renders; registries do not leak":
@@ -221,6 +262,24 @@ suite "no hydration residue":
     let msg = renderError(proc() = discard renderEmail(pendingResourceTpl, 0))
     check "E-STRUCT-REACTIVE-RESIDUE" in msg
     check "rsPending" in msg
+
+  test "a pending resource whose state is never read fails the render":
+    let msg = renderError(proc() = discard renderEmail(dataOnlyResourceTpl, 0))
+    check "E-STRUCT-REACTIVE-RESIDUE" in msg
+    check "a resource the template created is still pending" in msg
+    check "rsPending" in msg
+    check "t1_no_hydration_residue.nim" in msg
+
+  test "a pending resource created in a template-owned memo fails the render":
+    let msg = renderError(proc() =
+      discard renderEmail(unreadNestedResourceTpl, 0))
+    check "E-STRUCT-REACTIVE-RESIDUE" in msg
+    check "a resource the template created is still pending" in msg
+    check "rsPending" in msg
+
+  test "resources the template settles before returning pass":
+    let res = renderEmail(settledResourcesTpl, 0)
+    check "Ada Lovelace" in res.html
 
   test "pending state read through a template-owned memo fails the render":
     let msg = renderError(proc() = discard renderEmail(memoOverLoadingTpl, 0))

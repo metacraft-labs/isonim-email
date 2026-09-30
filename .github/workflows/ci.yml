@@ -36,7 +36,7 @@ jobs:
       - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/isonim
-          ref: d4a3a896fd11286f13608974eed3cc300e930b84
+          ref: acf1bd345d6c4a25d82e1de3dccd924fff6fd21e
           path: isonim
           gh-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -141,7 +141,7 @@ jobs:
       - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/isonim
-          ref: d4a3a896fd11286f13608974eed3cc300e930b84
+          ref: acf1bd345d6c4a25d82e1de3dccd924fff6fd21e
           path: isonim
           gh-token: ${{ secrets.GITHUB_TOKEN }}
 

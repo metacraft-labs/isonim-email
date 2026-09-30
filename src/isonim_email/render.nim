@@ -59,7 +59,9 @@ proc renderAuthoringTree*[T](tpl: EmailTemplate[T]; data: T): EmailNode =
   ## `data-hk`, no `data-isonim-*`, no `<script>`, no async resource
   ## the template tracked but never resolved, and no pending async
   ## state (an `AsyncState` signal still `asLoading`, a resource still
-  ## pending) that the template read while it ran. A script, a
+  ## pending) that the template read while it ran, and no resource
+  ## created under the render's root still pending, whether the template
+  ## read it or not. A script, a
   ## hydration attribute or a pending load can never reach email
   ## output, so this raises even when the full render would otherwise
   ## only collect.
@@ -80,6 +82,7 @@ proc renderAuthoringTree*[T](tpl: EmailTemplate[T]; data: T): EmailNode =
     assertNoReactiveResidue(tree)
     assertNoPendingAsync(r)
     assertNoPendingReads(root, probe, tree)
+    assertNoPendingResources(root, tree)
   finally:
     # The probe is unlinked and the root disposed on every path: a
     # template that raises mid-render and a guard that raises after it
