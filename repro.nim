@@ -59,8 +59,10 @@
 ##   build edge).
 ##
 ## **Compile profile.** Each edge reproduces ``just test``: a plain
-## ``nim c`` with this repo's default flags (no ``mm:`` / ``defines:``
-## pin — the corpus is backend-independent unit tests).
+## ``nim c`` with this repo's default flags (no ``mm:`` pin — the corpus
+## is backend-independent unit tests) plus the two Tailwind defines
+## ``just test`` passes (the variant-preserving switch and the class-map
+## override), fed by one ``node`` edge that builds that map.
 ## ``paths = @["src", "tests", "../nim-faststreams", "../nim-stew"]``
 ## supplies this repo's own two roots plus the two THIRD-PARTY status-im
 ## trees; the TWO sibling ``src`` roots (isonim / nim-everywhere) are
@@ -105,6 +107,7 @@ const emailTestSpecs = @[
   "t1_ir_restriction",
   "t2_vocabulary",
   "t2_vocabulary_compile_fail",
+  "t2_tailwind_map",
   "t3_snapshot_reproducible",
   "t3_lint_flex",
   "t3_lint_degradation",
@@ -165,6 +168,10 @@ package isonim_email:
     # the path-mode resolver under ``nix develop``.
     "nim >=2.0"
     "gcc >=12"
+    # ``node`` runs the Tailwind class-map extraction (the
+    # ``isonim-email.tailwind_extract`` edge below); the Tailwind CLI it
+    # drives is the dev shell's standalone ``tailwindcss`` on PATH.
+    "node >=20"
 
     # The two landed sibling Nim-library producers this repo consumes from
     # source (SC-11 develop-mode). Naming each workspace project here makes
@@ -196,7 +203,28 @@ package isonim_email:
     # channel, NOT listed here.
     const basePaths = @["src", "tests", "../nim-faststreams", "../nim-stew"]
 
-    var testBuildActions: seq[BuildActionDef] = @[]
+    # The Tailwind class map (``build/tailwind-styles.json``) that isonim's
+    # ``dsl/tailwind.nim`` reads at compile time: the SAME map ``just test``
+    # uses, produced by the same command (``just build-tailwind`` runs
+    # ``node tools/tailwind/build-tailwind.mjs``) from this repo's content
+    # only. Every test compile depends on it via ``after`` and names it as
+    # an input, and gets the same two defines the Justfile / config.nims
+    # give ``nim c``: the variant-preserving expansion switch and the map
+    # override. The override must be absolute (``staticRead`` resolves a
+    # relative path against isonim's own module directory), hence
+    # ``currentSourcePath``.
+    let tailwindMap = currentSourcePath().parentDir() / "build" /
+      "tailwind-styles.json"
+    let tailwindDefines = @["isonimTailwindVariants",
+      "tailwindStylesPathOverride=" & tailwindMap]
+    let tailwindEdge = node(
+      args = @["tools/tailwind/build-tailwind.mjs"],
+      actionId = "isonim-email.tailwind_extract",
+      extraInputs = @["tools/tailwind/build-tailwind.mjs", "src", "tests",
+        "../isonim/tools/tailwind-extract.mjs"],
+      extraOutputs = @["build/tailwind-styles.json", "build/tailwind.css"])
+
+    var testBuildActions: seq[BuildActionDef] = @[tailwindEdge]
     var testExecuteActions: seq[BuildActionDef] = @[]
 
     for stem in emailTestSpecs:
@@ -207,10 +235,14 @@ package isonim_email:
         source = source,
         binary = binary,
         paths = basePaths,
+        defines = tailwindDefines,
         actionId = "isonim-email.test_build." & stem,
+        after = @[tailwindEdge],
         # ``src`` + the nimble file are declared inputs so the monitor tracks
-        # the transitively imported ``src/isonim_email`` module tree.
-        extraInputs = @["src", "isonim_email.nimble"])
+        # the transitively imported ``src/isonim_email`` module tree; the
+        # class map is read at compile time.
+        extraInputs = @["src", "isonim_email.nimble",
+          "build/tailwind-styles.json"])
       testBuildActions.add(edge.action)
 
       # ``registerImplicitName = false``: the BUILD edge already owns the

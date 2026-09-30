@@ -117,10 +117,11 @@
               # and fonttools arrive with the work that uses them;
               # the pinned fonts are pinned below.)
               nodejs_22
-              # `just build-tailwind` provisions isonim's Tailwind CLI
-              # via `yarn install --frozen-lockfile` when node_modules is
-              # absent (mirrors isonim's own recipe).
-              yarn
+              # The Tailwind v4 CLI for `just build-tailwind`: the
+              # standalone build, which bundles the `tailwindcss`
+              # stylesheet itself, so the extraction needs no
+              # node_modules here or in the isonim checkout.
+              tailwindcss_4
               playwright-driver
               mailpit
               # fc-list for inspecting the pinned font set below

@@ -59,6 +59,10 @@ const
   codeStructInvalidUtf8* = "E-STRUCT-INVALID-UTF8"
     ## P1 found a text node that is not valid UTF-8.
     ## Collected from `passes/validate.nim`.
+  codeStructRawOutside* = "E-STRUCT-RAW-OUTSIDE"
+    ## P1 found a raw node that is not inside `mailRaw`, the only
+    ## element whose content may be verbatim HTML.
+    ## Collected from `passes/validate.nim`.
   codeStructReactiveResidue* = "E-STRUCT-REACTIVE-RESIDUE"
     ## P1 collected `assertNoReactiveResidue` instead of raising it.
     ## Collected from `passes/validate.nim`.
@@ -74,6 +78,12 @@ const
   codeA11yAltMissing* = "E-A11Y-ALT-MISSING"
     ## Image without `alt` and not decorative (R-A11Y-04, R-IMG-04).
     ## Collected from `passes/validate.nim`.
+  codeA11ySectioning* = "E-A11Y-SECTIONING"
+    ## A sectioning element (`nav`, `main`, `article`, `section`,
+    ## `header`, `footer`, `aside`, `details`, `summary`) in a template
+    ## (R-A11Y-10: clients rewrite or strip them). Reported at compile
+    ## time by the static vocabulary (`vocabulary.nim`) and, for trees
+    ## built by hand, collected from `passes/validate.nim`.
   codeA11yTableCaption* = "E-A11Y-TABLE-CAPTION"
     ## `mailTable` without a `caption` child (R-A11Y-02). Collected
     ## from `passes/a11y.nim`.

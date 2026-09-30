@@ -61,6 +61,31 @@ suite "renderer conformance":
     for c in col.children:
       check c.parent == col
 
+  test "raw appends one verbatim node at the enclosing element's origin":
+    # `raw expr` in a ui(r) block goes through appendRawHtml: one enRaw
+    # node, payload unparsed, carrying the parent's source span.
+    let r = EmailRenderer()
+    let root = cardTpl(r, "Hi", 0)
+    let col = root.children[0].children[0]
+    let rawNode = col.children[2]
+    check rawNode.kind == enRaw
+    check rawNode.children.len == 0
+    check rawNode.parent == col
+    check col.origin.line > 0
+    check rawNode.origin == col.origin
+    # Building accepts it; the placement rule is the validation pass's:
+    # this raw sits in a mailColumn, not in mailRaw.
+    let diags = validate(root)
+    check diags.mapIt(it.code) == @[codeStructRawOutside]
+    check diags[0].origin == col.origin
+    # The backend proc directly: a payload of several sibling tags is
+    # still exactly one node.
+    let host = r.createElement("mailRaw")
+    r.appendRawHtml(host, "<b>a</b><i>b</i>")
+    check host.children.len == 1
+    check host.children[0].kind == enRaw
+    check host.children[0].text == "<b>a</b><i>b</i>"
+
   test "tree navigation and mutation follow browser semantics":
     let r = EmailRenderer()
     let parent = r.createElement("div")

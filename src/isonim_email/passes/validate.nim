@@ -3,12 +3,17 @@
 ## The authoring-tree gate: exactly one `mailDocument` with `lang` and
 ## `title`, at least one `h1` (R-A11Y-03), `alt` on every image
 ## (R-A11Y-04: `alt=""` only when `decorative` is true), valid UTF-8 in
-## every text node, and no reactive residue. Pure collection:
+## every text node, raw nodes only inside `mailRaw`, no sectioning
+## elements (R-A11Y-10), and no reactive residue. Pure collection:
 ## the tree is never mutated, and every finding carries the offending
 ## node's origin.
 ##
-## No other checks: nesting, vocabulary and raw-placement rules belong to
-## the static vocabulary check, contrast and sizes to P10.
+## Raw placement is checked here rather than statically: `raw` is not an
+## element, so the static vocabulary never sees it, and a raw node built
+## by one proc may be appended inside `mailRaw` by another. Sectioning
+## elements are rejected at compile time in `ui(r)` templates; the check
+## here catches trees built by hand. Other nesting and vocabulary rules
+## belong to the static vocabulary check, contrast and sizes to P10.
 
 import std/[strutils, tables, unicode]
 import ../diagnostics
@@ -26,8 +31,30 @@ proc isDecorative(node: EmailNode): bool =
   ## The `decorative` bool attr, stored as its Nim spelling (`"true"`).
   node.attrs.getOrDefault("decorative", "").toLowerAscii() == "true"
 
+const sectioningTags = ["nav", "main", "article", "section", "header",
+  "footer", "aside", "details", "summary"]
+  ## R-A11Y-10: never emitted; clients rewrite or strip them.
+
 proc isH1(node: EmailNode): bool =
   node.kind == enElement and node.tag.toLowerAscii() == "h1"
+
+proc insideMailRaw(node: EmailNode): bool =
+  ## True when any ancestor of `node` is a `mailRaw` element.
+  var p = node.parent
+  while p != nil:
+    if p.kind == enElement and p.tag == "mailRaw":
+      return true
+    p = p.parent
+  false
+
+proc nearestOrigin(node: EmailNode): SourceSpan =
+  ## `node`'s origin, else the closest ancestor's that has one.
+  var n = node
+  while n != nil:
+    if n.origin.file.len > 0:
+      return n.origin
+    n = n.parent
+  SourceSpan()
 
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
@@ -64,6 +91,25 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
             "decorative = true (R-IMG-04: alt=\"\" only when decorative)",
           origin: node.origin, rules: @["R-A11Y-04"],
         ))
+    if node.kind == enElement and node.tag.toLowerAscii() in sectioningTags:
+      result.add(EmailDiagnostic(
+        severity: sevError, code: codeA11ySectioning,
+        message: "<" & node.tag & "> is never emitted (email clients " &
+          "rewrite or strip sectioning elements): use layout primitives " &
+          "and content patterns, which add landmark roles themselves",
+        origin: node.origin, rules: @["R-A11Y-10"],
+      ))
+    if node.kind == enRaw and not insideMailRaw(node):
+      let within =
+        if node.parent != nil and node.parent.kind == enElement:
+          " (inside <" & node.parent.tag & ">)"
+        else: ""
+      result.add(EmailDiagnostic(
+        severity: sevError, code: codeStructRawOutside,
+        message: "raw HTML outside mailRaw" & within &
+          ": wrap it in mailRaw, the audited escape hatch",
+        origin: nearestOrigin(node), rules: @[],
+      ))
     if node.kind == enText and validateUtf8(node.text) != -1:
       result.add(EmailDiagnostic(
         severity: sevError, code: codeStructInvalidUtf8,

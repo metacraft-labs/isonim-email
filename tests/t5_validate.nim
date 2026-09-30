@@ -1,12 +1,13 @@
 ## P1 validates the authoring tree — exactly one
 ## `mailDocument` with `lang` and `title`, at least one `h1`
 ## (R-A11Y-03), `alt` on every image (R-A11Y-04), valid UTF-8 text,
+## raw nodes only inside `mailRaw`, no sectioning elements (R-A11Y-10)
 ## and no reactive residue. Pure collection: the tree is
 ## never mutated.
 ##
 ## Backend-independent (tree walk + pure checks), so `just test`
 ## also runs it on JS.
-import std/[sequtils, unittest]
+import std/[sequtils, strutils, unittest]
 import isonim_email
 
 proc validDoc(r: EmailRenderer): EmailNode =
@@ -147,3 +148,51 @@ suite "P1 validate":
     # The residue walk aborts at the first offender, so one finding.
     check codesOf(diags) == @[codeStructReactiveResidue]
     check diags[0].severity == sevError
+
+  test "test_validate_raw_outside_mailraw":
+    # A raw node is legal only below `mailRaw`; anywhere else it is an
+    # error located at the closest ancestor that carries an origin
+    # (raw nodes built by hand have none of their own).
+    let r = EmailRenderer()
+    let doc = validDoc(r)
+    let p = r.createElement("p")
+    p.origin = SourceSpan(file: "raw.nim", line: 7, col: 5)
+    r.appendChild(p, raw("<b>loose</b>"))
+    r.appendChild(doc, p)
+    let diags = validate(doc)
+    check codesOf(diags) == @[codeStructRawOutside]
+    check diags[0].severity == sevError
+    check diags[0].origin.file == "raw.nim"
+    check diags[0].origin.line == 7
+    check "inside <p>" in diags[0].message
+    check "mailRaw" in diags[0].message
+
+  test "test_validate_raw_inside_mailraw_passes":
+    # Directly under `mailRaw`, and below a transparent wrapper inside it.
+    let r = EmailRenderer()
+    let doc = validDoc(r)
+    let rawBlock = r.createElement("mailRaw")
+    r.appendChild(rawBlock, raw("<!-- audited -->"))
+    let cond = r.createElement("mailIf")
+    r.appendChild(cond, raw("<!-- nested -->"))
+    r.appendChild(rawBlock, cond)
+    r.appendChild(doc, rawBlock)
+    check validate(doc).len == 0
+    # A raw node as the whole tree has no mailRaw ancestor either.
+    check codeStructRawOutside in codesOf(validate(raw("<p>x</p>")))
+
+  test "test_validate_sectioning_element":
+    # rule: R-A11Y-10
+    # Templates cannot contain sectioning elements (the static vocabulary
+    # rejects them); a tree built by hand is caught here.
+    let r = EmailRenderer()
+    let doc = validDoc(r)
+    let nav = r.createElement("nav")
+    nav.origin = SourceSpan(file: "nav.nim", line: 3, col: 2)
+    r.appendChild(doc, nav)
+    let diags = validate(doc)
+    check codesOf(diags) == @[codeA11ySectioning]
+    check diags[0].severity == sevError
+    check diags[0].origin.file == "nav.nim"
+    check diags[0].rules == @["R-A11Y-10"]
+    check "layout primitives" in diags[0].message

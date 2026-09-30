@@ -36,13 +36,14 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t3_snapshot_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_review_missing_element.nim tests/e2e_dom_assertions.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_review_missing_element.nim tests/e2e_dom_assertions.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
 # process/file APIs); `nim js -r` executes it under the dev shell's node.
-# (t1_rule_traceability, t1_compile_fail, t1_ir_restriction and
-# t2_vocabulary_compile_fail read files or shell out, so they are C-only,
+# (t1_rule_traceability, t1_compile_fail, t1_ir_restriction,
+# t2_vocabulary_compile_fail and t2_tailwind_map read files or shell
+# out, so they are C-only,
 # as is t3_snapshot_reproducible: the generator reads JSON object insertion
 # order, which the JS backend does not preserve. t6_roundtrip is C-only
 # too: it spawns a real Mailpit plus a fixture HTTP server and reads
@@ -66,15 +67,16 @@ build:
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/test-bin/$(basename $t .nim) --nimcache:build/nimcache-$(basename $t .nim) $t 2>&1 | tee -a test-logs/build.log; \
     done
 
-# Generate build/tailwind.css + build/tailwind-styles.json from this
-# repo's sources, with sm/dark/hover variant records and units.
-# `md` is listed only so the variant-preserving expansion tags (rather
-# than flattens) md: classes and P5
-# can reject them per the one-breakpoint rule (only sm: ships).
-# Runs isonim's extractor (its node_modules provision the Tailwind CLI).
+# Generate build/tailwind.css + build/tailwind-styles.json from THIS
+# repo's content only (src/, examples/, tests/; Tailwind's automatic
+# source detection is off), with sm/dark/hover variant records and
+# units. `md` is listed only so the variant-preserving expansion tags
+# (rather than flattens) md: classes and the style pass can reject
+# them per the one-breakpoint rule (only sm: ships). The Tailwind CLI
+# comes from the dev shell; isonim's extractor is run read-only, and
+# every output stays under build/ (see tools/tailwind/build-tailwind.mjs).
 build-tailwind:
-    [ -d ../isonim/node_modules ] || (cd ../isonim && yarn install --frozen-lockfile)
-    node ../isonim/tools/tailwind-extract.mjs --content 'src/**/*.nim' --content 'examples/**/*.nim' --variants sm,dark,hover,md --out-dir build/
+    node tools/tailwind/build-tailwind.mjs
 
 # Regenerate src/isonim_email/support/caniemail_data.nim from the pinned
 # caniemail snapshot. Verifies the vendored

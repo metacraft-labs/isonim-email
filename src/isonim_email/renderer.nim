@@ -111,9 +111,9 @@ proc createTextNode*(r: EmailRenderer; text: string): EmailNode =
   result.text = text
 
 proc raw*(s: string): EmailNode =
-  ## Verbatim node. The renderer-mode `ui(r)` macro emits `raw(x)` as a plain
-  ## Nim call, so this proc must be in scope where templates are written
-  ## (re-exported through the `isonim_email` umbrella).
+  ## Verbatim node, for hand-built trees and the lowering passes. Inside a
+  ## `ui(r)` block, `raw expr` does not call this: the macro routes it to
+  ## `appendRawHtml` below.
   result = initEmailNode(enRaw)
   result.text = s
 
@@ -162,6 +162,20 @@ proc removeChild*(r: EmailRenderer; parent, child: EmailNode) =
       break
   if idx >= 0:
     parent.children.delete(idx)
+
+proc appendRawHtml*(r: EmailRenderer; parent: EmailNode; html: string) =
+  ## `raw expr` inside a `ui(r)` block: the payload becomes ONE verbatim
+  ## `enRaw` node appended to `parent`, never parsed into elements here.
+  ## The node takes `parent`'s origin (raw payloads get no element hook of
+  ## their own), so a diagnostic about it points at the enclosing element.
+  ##
+  ## Building never rejects a raw node: `raw` is legal only inside
+  ## `mailRaw`, and the validation pass reports any other placement as
+  ## E-STRUCT-RAW-OUTSIDE on the assembled tree, where composition across
+  ## procs is visible.
+  let node = raw(html)
+  node.origin = parent.origin
+  r.appendChild(parent, node)
 
 proc setAttribute*(r: EmailRenderer; node: EmailNode; name, value: string) =
   node.attrs[name] = value

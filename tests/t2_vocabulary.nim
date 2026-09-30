@@ -96,6 +96,9 @@ suite "static vocabulary":
     check tree.children[2].children[0].tag == "mailSocialItem"
     check tree.children[3].children[0].tag == "mailNavLink"
     check tree.children[6].children[0].kind == enRaw
+    check tree.children[6].children[0].text == "<!-- audited -->"
+    # Inside mailRaw the raw node is legal: P1 reports no placement error.
+    check codeStructRawOutside notin validate(tree).mapIt(it.code)
 
   test "unknown tag suggests the nearest vocabulary entry":
     let v = buildEmailVocabulary()
@@ -128,6 +131,27 @@ suite "static vocabulary":
     check nested.startsWith("E-STRUCT-NESTING")
     check "must not be a child of 'mailColumn'" in nested
     check "'ul'" in nested
+
+  test "sectioning tags report the accessibility code":
+    let v = buildEmailVocabulary()
+    for tag in ["nav", "main", "article", "section", "header", "footer",
+                "aside", "details", "summary"]:
+      let msg = checkElement(v, tag, [], [], "mailColumn")
+      check msg.startsWith("E-A11Y-SECTIONING: '" & tag & "' is forbidden")
+      check "R-A11Y-10" in msg
+      check "Use 'layout primitives and content patterns" in msg
+    # Other forbidden tags keep the generic code.
+    check checkElement(v, "hr", [], [], "mailColumn").startsWith(
+      "E-VOCAB-FORBIDDEN-TAG")
+
+  test "a bare table outside mailTable names the alternative":
+    let v = buildEmailVocabulary()
+    let msg = checkElement(v, "table", [], [], "mailColumn")
+    check msg.startsWith("E-STRUCT-NESTING: 'table' must not be a child " &
+      "of 'mailColumn'")
+    check msg.endsWith(
+      "Use 'mailTable (data) or layout primitives' instead.")
+    check checkElement(v, "table", [], [], "mailTable") == ""
 
   test "mailDocument is top-level-only":
     let v = buildEmailVocabulary()
