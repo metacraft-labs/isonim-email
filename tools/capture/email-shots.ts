@@ -56,6 +56,15 @@ import { ADAPTER_VERSION, cacheKey, readCache, writeCache } from "./cache.ts";
 import { composeStorySheets } from "./contact_sheet.ts";
 import { domAssertionsScript } from "./dom_assertions.ts";
 import { changedFilesSince, darkNeeded, selectFamilies } from "./affected.ts";
+import { launchOptions } from "./launch.ts";
+import {
+  appendHistory,
+  latencyVerdict,
+  MIN_SAMPLES,
+  readHistory,
+  selectionKey,
+  type HistoryEntry,
+} from "./latency.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -105,7 +114,9 @@ const USAGE = `usage: email-shots [STORY…] [options]
 
 options:
   --backends a[,…]       serves backend A only (b/c/d land later)
-  --families F,…         default: apple,thunderbird,chromium-baseline
+  --families F,…         default: every backend-A family (apple,thunderbird,
+                        chromium-baseline,gmailWeb,ganga,outlookWeb,
+                        imagesOff,wordApprox)
   --clients C,…          filter by engine: chromium,webkit,firefox
   --viewports V,…        mobile,desktop (defaults) or W / W@DPR, e.g. 600,600@2x
   --schemes S,…          light (default),dark,forced-dark
@@ -660,7 +671,12 @@ async function captureOne(
       timing.total_ms = Date.now() - t0;
       const meta = baseMeta();
       (meta.client as Record<string, string>).build = browser.version();
-      meta.timing_ms = { ...timing, capture_ms: 0 };
+      meta.timing_ms = {
+        total: timing.total_ms,
+        capture: 0,
+        setcontent: timing.setcontent_ms,
+        settle: timing.settle_ms,
+      };
       meta.status = "failed";
       meta.fail_reason = `an image never finished loading within ${IMAGE_TIMEOUT_MS} ms`;
       return finish("failed", null, meta, meta.fail_reason as string);
@@ -805,6 +821,7 @@ function discoverPreviousRun(
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  const tMain = Date.now();
   const opt = parseArgs(process.argv.slice(2));
 
   if (!existsSync(opt.driver))
@@ -825,13 +842,18 @@ async function main(): Promise<void> {
     : join(repoRoot, "build", "email-shots", run);
   mkdirSync(runDir, { recursive: true });
 
+  // Per-step wall times for run.json (recorded, never asserted).
+  const steps: Record<string, number> = {};
+
   // Step 1: build the stories with the working-tree library.
+  const tBuild = Date.now();
   const built = spawnSync(opt.driver, [runDir, ...opt.stories], {
     cwd: repoRoot,
     stdio: ["ignore", "inherit", "inherit"],
   });
   if (built.status !== 0)
     fail(`story driver exited with status ${built.status}`);
+  steps.build_stories = Date.now() - tBuild;
   const manifest = JSON.parse(
     readFileSync(join(runDir, "manifest.json"), "utf8"),
   ) as StoryManifest;
@@ -893,6 +915,7 @@ async function main(): Promise<void> {
   // matrix — brief-<family>-<viewport>-<scheme>.md per story dir,
   // written before any capture so reviewers start with the briefs.
   const viewportNames = opt.viewports.map((v) => v.name).join(",");
+  const tBriefs = Date.now();
   for (const m of manifest.stories) {
     if (storySet !== null && !storySet.has(m.story)) continue;
     const briefed = spawnSync(
@@ -911,6 +934,8 @@ async function main(): Promise<void> {
         `brief driver exited with status ${briefed.status} (story ${m.story})`,
       );
   }
+
+  steps.briefs = Date.now() - tBriefs;
 
   const pw = await loadPlaywright();
   const lib = libraryInfo();
@@ -971,17 +996,28 @@ async function main(): Promise<void> {
     if (r.scheme === "forced-dark" && r.engine !== "chromium") continue;
     keys.add(`${r.engine}|${r.scheme === "forced-dark" ? "forced" : "plain"}`);
   }
+  // Launch options per engine and host: tools/capture/launch.ts
+  // (Linux keeps Playwright's defaults; macOS daemon sessions need a
+  // keychain-free, GPU-free Firefox profile).
+  const tLaunch = Date.now();
   for (const key of keys) {
     const [engine, mode] = key.split("|");
-    browsers.set(
-      key,
-      await pw[engine].launch(
-        mode === "forced"
-          ? { args: ["--enable-features=WebContentsForceDark"] }
-          : {},
-      ),
+    const launchOpts = launchOptions(
+      engine,
+      mode === "forced",
+      process.platform,
+      process.env,
     );
+    try {
+      browsers.set(key, await pw[engine].launch(launchOpts));
+    } catch (err) {
+      for (const b of browsers.values()) await b.close().catch(() => {});
+      fail(
+        `launching ${engine} (${mode}) on ${process.platform} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
+  steps.launch = Date.now() - tLaunch;
   // Client builds for the result-cache key, read once per browser.
   const browserBuilds = new Map<string, string>();
   for (const [key, b] of browsers) browserBuilds.set(key, b.version());
@@ -1027,6 +1063,7 @@ async function main(): Promise<void> {
       record(entry, line);
     }
   };
+  const tCaptures = Date.now();
   try {
     await Promise.all(
       Array.from({ length: Math.min(limit, requests.length) }, () => worker()),
@@ -1035,6 +1072,7 @@ async function main(): Promise<void> {
   } finally {
     for (const b of browsers.values()) await b.close();
   }
+  steps.captures = Date.now() - tCaptures;
 
   // Per-story assertions.json (Tier-3) — one file
   // per story aggregating its captures' recorded assertions, so the
@@ -1043,6 +1081,7 @@ async function main(): Promise<void> {
   // evidence is the failures); captures sorted by name — index.json
   // follows worker completion order, which legitimately differs
   // between runs.
+  const tAssertions = Date.now();
   for (const story of new Set(index.map((e) => e.story))) {
     const captures = index
       .filter((e) => e.story === story)
@@ -1083,11 +1122,37 @@ async function main(): Promise<void> {
     process.stderr.write(`email-shots: assertions ${story}/assertions.json\n`);
   }
 
+  steps.assertions = Date.now() - tAssertions;
+
   // Contact sheets after each story's captures complete — sheets are required run artifacts, so a compose failure fails the run.
+  const tSheets = Date.now();
   for (const story of new Set(requests.map((r) => r.story))) {
     for (const rel of composeStorySheets(runDir, story))
       process.stderr.write(`email-shots: contact sheet ${rel}\n`);
   }
+  steps.sheets = Date.now() - tSheets;
+
+  const counts: Record<string, number> = {};
+  for (const e of index) counts[e.status] = (counts[e.status] ?? 0) + 1;
+
+  // Latency: recorded, never asserted. The provider slice covers
+  // backend A's captures; per-capture timings stay in each provenance.
+  const totalMs = Date.now() - tMain;
+  const historyPath = join(
+    repoRoot,
+    "build",
+    "email-shots",
+    "latency-history.jsonl",
+  );
+  const key = selectionKey({
+    stories: [...new Set(requests.map((r) => r.story))],
+    families,
+    viewports: opt.viewports.map((v) => v.name),
+    schemes,
+    images: opt.images,
+    cache: !opt.noCache,
+  });
+  const verdict = latencyVerdict(readHistory(historyPath), key, totalMs);
 
   // run.json anchors the next --affected run's change set;
   // always written, from the library state read before capturing.
@@ -1095,25 +1160,67 @@ async function main(): Promise<void> {
     join(runDir, "run.json"),
     JSON.stringify(
       {
+        run,
         tree_hash: lib.tree_hash,
         commit: lib.commit,
         dirty: lib.dirty,
         date: new Date().toISOString(),
+        timing_ms: { total: totalMs, steps },
+        providers: {
+          a: {
+            via: "local",
+            requests: requests.length,
+            statuses: counts,
+            wall_ms: steps.launch + steps.captures,
+          },
+        },
+        latency: {
+          key,
+          history: relative(repoRoot, historyPath),
+          ...verdict,
+          recorded: failed === 0,
+        },
       },
       null,
       2,
     ) + "\n",
   );
 
-  const counts: Record<string, number> = {};
-  for (const e of index) counts[e.status] = (counts[e.status] ?? 0) + 1;
+  // Only clean runs feed the median (a failing run's time is not a
+  // latency sample).
+  if (failed === 0) {
+    const entry: HistoryEntry = {
+      run,
+      date: new Date().toISOString(),
+      commit: lib.commit,
+      dirty: lib.dirty,
+      key,
+      requests: requests.length,
+      total_ms: totalMs,
+      captures_ms: steps.captures,
+    };
+    try {
+      appendHistory(historyPath, entry);
+    } catch (err) {
+      process.stderr.write(
+        `email-shots: could not record latency history at ${historyPath} (${err instanceof Error ? err.message : String(err)})\n`,
+      );
+    }
+  }
+
   process.stderr.write(
     `email-shots: run ${runDir} — ${index.length} captures ` +
       Object.entries(counts)
         .map(([k, v]) => `${v} ${k}`)
         .join(", ") +
+      ` in ${totalMs} ms` +
+      (verdict.median_ms !== null
+        ? ` (rolling median ${verdict.median_ms} ms over ${verdict.samples} run(s))`
+        : ` (${verdict.samples} earlier run(s) of this selection; the median needs ${MIN_SAMPLES})`) +
       "\n",
   );
+  if (verdict.warning !== null)
+    process.stderr.write(`email-shots: ${verdict.warning}\n`);
   if (failed > 0) fail(`${failed} capture(s) failed (see ${indexPath})`);
 }
 

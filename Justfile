@@ -217,8 +217,8 @@ lint-nim:
 # Syntax gate for the capture CLI: --help parses the whole file
 # (`node --check` cannot parse .ts type syntax on this Node), and
 # importing each emulation module plus the contact-sheet,
-# dom-assertions, perceptual, capture-ci and findings modules parses
-# those too (cache/affected ride along transitively).
+# dom-assertions, perceptual, capture-ci, latency, launch and findings
+# modules parses those too (cache/affected ride along transitively).
 lint-ts:
     node tools/capture/email-shots.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
@@ -226,6 +226,8 @@ lint-ts:
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"
     node --input-type=module -e "await import('./tools/capture/perceptual.ts')"
     node --input-type=module -e "await import('./tools/capture/email-capture-ci.ts')"
+    node --input-type=module -e "await import('./tools/capture/latency.ts')"
+    node --input-type=module -e "await import('./tools/capture/launch.ts')"
     node --input-type=module -e "await import('./tools/review/findings.ts')"
 
 lint-nix:
@@ -233,7 +235,7 @@ lint-nix:
 
 lint-markdown:
     @if command -v markdownlint-cli2 >/dev/null 2>&1; then \
-      markdownlint-cli2 "**/*.md" "#node_modules" "#test-logs" || true; \
+      markdownlint-cli2 "**/*.md" "#node_modules" "#test-logs" "#build" || true; \
     else \
       echo "markdownlint-cli2 not available; skipping (run in nix develop)"; \
     fi

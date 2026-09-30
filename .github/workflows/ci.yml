@@ -85,7 +85,14 @@ jobs:
 
       - name: Run linters
         working-directory: isonim-email
-        run: nix develop --command just lint
+        # --profile registers the dev shell's closure as a GC root for
+        # the length of the job. Without it the closure is unrooted, and
+        # a garbage collection on a shared runner host can delete any
+        # tool that is not running at that moment (the likely cause of
+        # a macOS run in which `tailwindcss` ran at the start of
+        # `just test` and was no longer on PATH a minute later).
+        # RUNNER_TEMP is wiped after the job, which drops the root again.
+        run: nix develop --profile "$RUNNER_TEMP/isonim-email-dev-shell" --command just lint
 
       - name: Upload logs
         if: always()
@@ -190,7 +197,14 @@ jobs:
 
       - name: Run tests
         working-directory: isonim-email
-        run: nix develop --command just test
+        # --profile registers the dev shell's closure as a GC root for
+        # the length of the job. Without it the closure is unrooted, and
+        # a garbage collection on a shared runner host can delete any
+        # tool that is not running at that moment (the likely cause of
+        # a macOS run in which `tailwindcss` ran at the start of
+        # `just test` and was no longer on PATH a minute later).
+        # RUNNER_TEMP is wiped after the job, which drops the root again.
+        run: nix develop --profile "$RUNNER_TEMP/isonim-email-dev-shell" --command just test
 
       - name: Upload logs
         if: always()
