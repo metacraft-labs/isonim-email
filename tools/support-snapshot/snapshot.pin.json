@@ -1,0 +1,11 @@
+{
+  "source": "https://www.caniemail.com/api/data.json",
+  "repo": "https://github.com/hteumeuleu/caniemail",
+  "commit": "cb8109c3f8658e003aa064b47a71b232ddc28d39",
+  "commitDate": "2026-09-16",
+  "fetchDate": "2026-09-27",
+  "dataDate": "2026-09-16 13:05:00 +0000",
+  "apiVersion": "1.0.4",
+  "sha256": "7328f873fae3bb24455d10bf3005464b2af12cbbcc5b54da51683d4911235628",
+  "license": "MIT, copyright (c) 2019 Rémi Parmentier (see LICENSE-caniemail)"
+}

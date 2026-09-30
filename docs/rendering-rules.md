@@ -1,0 +1,521 @@
+# IsoNim Email — Rendering Rules Catalogue
+
+<!-- markdownlint-disable-file MD013 MD038 MD056 MD060 -->
+<!-- Line length, code-span spacing, table shape and column style are
+     intrinsic to this file: rule rows are machine-read one-per-line by
+     tests/t1_rule_traceability.nim, and several code spans carry exact
+     bytes (literal selector spacing, attribute padding). -->
+
+> **Status:** Normative. This catalogue is the **exact behaviour** the
+> implementation must produce. The rule-traceability test
+> (`tests/t1_rule_traceability.nim`) reads it directly.
+> **Last Updated:** 2026-09-30
+
+This catalogue turns published HTML-email practice (RFCs, vendor
+documentation, caniemail data, framework sources and community write-ups)
+and client captures into rules an implementation agent can follow without
+re-deriving them. When this file and any other source disagree, this file
+wins. A disagreement found in code or in a capture is recorded here, with
+its evidence.
+
+## How to use this file
+
+- **Rule IDs are stable.** Each rule has an ID such as `R-OL-07`. An ID is
+  never reused; a rule that is withdrawn stays in the table marked ❌
+  **withdrawn**, with its reason.
+- **Traceability is enforced.** Every rule is implemented in the named
+  module, and at least one test carries the rule's ID in a
+  `# rule: R-OL-07` comment. The traceability test
+  (`tests/t1_rule_traceability.nim`) parses this file and fails on any
+  ID that no test names. Rules not yet covered by a test are listed in
+  `tests/rules_pending.txt`; the list only shrinks.
+- **Status** says how far a rule can be trusted:
+
+  | Mark | Meaning | What the implementer does |
+  |---|---|---|
+  | ✓ | Verified: a primary source was read (RFC text, vendor docs, caniemail data, MJML/Cerberus source), or a capture proved it | Implement as written |
+  | ◐ | Sourced: widely documented community practice, or a secondary source not read in full | Implement as written. The first real-client capture that exercises it (backend B/C/D) must confirm it or reopen it |
+  | ☐ | Unverified: from recollection, or the sources disagree | Implement behind the named flag or as written. The rule's owner **must** settle it with backend C/D evidence before it is marked ✓ |
+
+- **Families** use the client-family IDs. `all` means every family.
+- **Where** names the pass (`P1`–`P12`) or the lowering module
+  (`lower/…`, `mso/…`) that owns the rule.
+- **Sources** name the evidence directly: an RFC, a vendor document, a
+  caniemail feature file, framework source (MJML, Cerberus, Maizzle), or
+  a named community article or bug report. `(read)` means the source was
+  read in full; `(via search)` means only a search summary was seen;
+  `inference` and `design rule` mark rules derived here rather than
+  taken from a source.
+
+A rule's **fix** is part of the rule. Anything that emits the fixed
+construct differently violates it, even if the output looks right in one
+client.
+
+---
+
+## 1. DOC — Document skeleton
+
+The exact skeleton that `lower/document.nim` emits. `{…}` are values.
+Lines marked `⟪mso⟫` are emitted only when `EmailTarget.outlookWord`.
+
+```html
+<!doctype html>
+<html lang="{lang}" dir="{dir}" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
+<!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]-->
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no, url=no">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{title}</title>
+⟪mso⟫<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->
+<style>{block 1: reset}</style>
+<style>{block 2: responsive}</style>
+<style>{block 3: dark}</style>
+<!--[if !mso]><!--><style>{block 4: fonts}</style><!--<![endif]-->
+<style>{block 5: decorative}</style>
+⟪mso⟫<!--[if mso]><style>{mso block}</style><![endif]-->
+⟪mso⟫<!--[if lte mso 11]><style>.e-mso-group-fix{width:100% !important;}</style><![endif]-->
+</head>
+<body class="body" xml:lang="{lang}" style="margin:0;padding:0;word-spacing:normal;background-color:{bg};">
+{preheader — §9}
+<div role="article" aria-roledescription="email" aria-label="{title}" lang="{lang}" dir="{dir}" style="background-color:{bg};font-size:medium;font-size:max(16px, 1rem);">
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color:{bg};">
+<tr><td align="center">{sections}</td></tr>
+</table>
+</div>
+</body>
+</html>
+```
+
+| ID | Rule | Where | Families | Source | Status |
+|---|---|---|---|---|---|
+| R-DOC-01 | The doctype is exactly `<!doctype html>`. | lower/document | all | MJML skeleton.js; Good Email Code template (read) | ✓ |
+| R-DOC-02 | `lang` and `dir` MUST appear on `<html>` **and** on the article wrapper `div`, because clients strip them from `<html>`. `xml:lang` is also on `<body>`. | lower/document, P7 | all | Email Markup Consortium Accessibility Report 2026 (read) | ✓ |
+| R-DOC-03 | `<meta charset="utf-8">` is present, and the MIME part also declares `charset=utf-8` (R-MIME-06). | lower/document | all | Good Email Code template (read) | ✓ |
+| R-DOC-04 | The viewport meta keeps `user-scalable=yes`. Zoom must never be disabled. | lower/document | apple, gmailApp, samsung | Good Email Code template (read) | ✓ |
+| R-DOC-05 | `format-detection` disables telephone, date, address, email and url detection. It is paired with R-TXT-06. | lower/document | apple | Cerberus (read) | ✓ |
+| R-DOC-06 | `x-apple-disable-message-reformatting` is always present. The email must therefore be responsive on its own (§4). | lower/document | apple | Good Email Code template (read) | ✓ |
+| R-DOC-07 | The `color-scheme` / `supported-color-schemes` metas are emitted only when `darkMode != none`. | lower/document | apple, outlookApp | Good Email Code template; Cerberus (read) | ✓ |
+| R-DOC-08 | ⟪mso⟫ `OfficeDocumentSettings` with `AllowPNG` and `PixelsPerInch 96` sits inside `<noscript>` inside `<!--[if mso]>`. The `noscript` wrapper keeps the XML from leaking into non-Outlook clients. | mso/document | outlookWord | MJML skeleton.js (read); noscript rationale ◐ | ✓ |
+| R-DOC-09 | The background colour appears in three places: `<body>` style, the article wrapper `div`, and the 100%-width wrapper table. Gmail and Yahoo drop `<body>` styles. | lower/document | gmail*, yahoo | Cerberus (read) | ✓ |
+| R-DOC-10 | The wrapper has `role="article"`, `aria-roledescription="email"`, and `aria-label` = document title. | lower/document, P7 | all | Good Email Code template; Email Markup Consortium Accessibility Report 2026 (read) | ✓ |
+| R-DOC-11 | The wrapper's font size is `font-size:medium; font-size:max(16px, 1rem)`: two declarations, the second overriding where supported. It respects the reader's text size. | lower/document | all | Good Email Code template (read) | ✓ |
+| R-DOC-12 | `<style>` elements appear in `<head>` only, in the block order above, and before any element that uses their classes (Outlook requires declaration before use). | P6 | gmail*, outlookWord | caniemail html-style notes 1, 4 (read) | ✓ |
+| R-DOC-13 | `<body>` carries `word-spacing:normal`, because MJML found inline-block whitespace artefacts without it. | lower/document | all | MJML skeleton.js ◐ (no second source) | ☐ (to be settled by a real-client capture) |
+
+## 2. RST — Reset block (head block 1)
+
+This is the exact content of block 1, taken from the Cerberus and MJML
+resets. Each line is its own rule, so that a capture can
+withdraw one without touching the others. Serialisation is minified by the
+CSS serialiser. It is shown expanded here for review.
+
+```css
+html,body{margin:0 auto !important;padding:0 !important;height:100% !important;width:100% !important;}
+*{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%;}
+div[style*="margin: 16px 0"]{margin:0 !important;}
+#MessageViewBody,#MessageWebViewDiv{width:100% !important;}
+table,td{mso-table-lspace:0pt !important;mso-table-rspace:0pt !important;}
+table{border-spacing:0 !important;border-collapse:collapse !important;table-layout:fixed !important;margin:0 auto !important;}
+img{-ms-interpolation-mode:bicubic;border:0;height:auto;line-height:100%;outline:none;text-decoration:none;}
+a{text-decoration:none;}
+#outlook a{padding:0;}
+a[x-apple-data-detectors],.unstyle-auto-detected-links a,.aBn{border-bottom:0 !important;cursor:default !important;color:inherit !important;text-decoration:none !important;font-size:inherit !important;font-family:inherit !important;font-weight:inherit !important;line-height:inherit !important;}
+.im{color:inherit !important;}
+.a6S{display:none !important;opacity:0.01 !important;}
+img.g-img+div{display:none !important;}
+```
+
+| ID | Rule | Families | Source | Status |
+|---|---|---|---|---|
+| R-RST-01 | `html,body` margin/padding/height/width reset | all | Cerberus (read) | ✓ |
+| R-RST-02 | `-ms-text-size-adjust` / `-webkit-text-size-adjust:100%` on `*` stops small-text resizing | apple, outlookWord | Cerberus, MJML (read) | ✓ |
+| R-RST-03 | `div[style*="margin: 16px 0"]` fix (Android 4.4 centring) | legacy Android | Cerberus (read) | ✓. It stays while the size budget allows; it is the first candidate to drop. |
+| R-RST-04 | `#MessageViewBody,#MessageWebViewDiv{width:100%}` | samsung | Cerberus (read) | ✓ |
+| R-RST-05 | `mso-table-lspace/rspace:0pt` on `table,td` removes Outlook table gaps | outlookWord | MJML, Cerberus (read) | ✓ |
+| R-RST-06 | `table{border-spacing:0;border-collapse:collapse;table-layout:fixed;margin:0 auto}` | all | Cerberus (read) | ✓ |
+| R-RST-07 | `img` reset (bicubic, border 0, height auto, line-height 100%) | all | MJML skeleton (read) | ✓ |
+| R-RST-08 | `#outlook a{padding:0}` | outlookWeb (legacy) | MJML skeleton (read) | ✓ |
+| R-RST-09 | Auto-detected link neutralisation: `a[x-apple-data-detectors]`, `.aBn`, `.unstyle-auto-detected-links a` | apple, gmail* | Cerberus (read) | ✓ |
+| R-RST-10 | `.im{color:inherit}` stops Gmail recolouring text in threads | gmail* | Cerberus (read) | ✓ |
+| R-RST-11 | `.a6S` and `img.g-img+div` hide Gmail's image download button | gmailWeb | Cerberus (read) | ✓ |
+| R-RST-12 | Attribute selectors in block 1 (R-RST-03, -09, -11) are ignored by Gmail but harmless. They MUST NOT be placed in any block whose loss would matter, because Gmail may treat unsupported selectors as a reason to drop the block. | gmail* | Google, Gmail CSS support: "might ignore unsupported CSS properties and selectors" (read) | ◐ to be confirmed on backend B: block 1 survives in Gmail with these selectors present |
+| R-RST-13 | `a{text-decoration:none;}`: reset line 8. Link decoration is then set inline per R-TXT-04; the reset removes client defaults in clients that honour head CSS (Cerberus notes that Windows 10 Mail needs it) | all | Cerberus (read) | ✓ |
+
+## 3. CSS — Emitting CSS
+
+| ID | Rule | Where | Families | Source | Status |
+|---|---|---|---|---|---|
+| R-CSS-01 | **Inline first.** Every declaration that can be expressed on an element is emitted inline in `style=""`. Head CSS is progressive enhancement: the message MUST be correct and readable with every `<style>` removed. | P5 | ganga (no `<style>` at all) | caniemail html-style note 2 (read) | ✓ |
+| R-CSS-02 | Only these go to the head: `@media` rules (responsive, dark), pseudo-classes (`:hover`), client-targeting selectors (§2, R-DRK-03), `@font-face`. Nothing else. | P6 | all | caniemail html-style notes (read); MJML and Maizzle inlining practice | ✓ |
+| R-CSS-03 | Head rules that must beat inline styles carry `!important`, always written in **lower case**. An uppercase `!IMPORTANT` makes Gmail drop the whole block. | P6, style/css | gmail* | hteumeuleu/email-bugs #13 | ◐ |
+| R-CSS-04 | **No nested at-rules.** `@font-face` and `@import` never appear inside `@media`, and `@media` is never nested. Violating this makes Gmail remove the whole block. | style/css | gmail* | hteumeuleu/email-bugs #21 | ◐ |
+| R-CSS-05 | The CSS serialiser only emits syntactically valid CSS: balanced braces, no empty declarations, every property name in the known-property table. A syntax error makes Gmail drop the whole block. | style/css | gmail* | Email on Acid, "12 things you must know when developing for Gmail" (read) | ✓ |
+| R-CSS-06 | Colour values have no whitespace-separated syntax (`rgb(0 0 0)` is forbidden; use hex, or `rgba(0,0,0,.5)`). | style/colors | gmail* | hteumeuleu/email-bugs #160 | ◐ |
+| R-CSS-07 | Total head CSS stays ≤ `headStyleBudget` (15,000 bytes; Gmail's limit is 16 KB of combined `<style>` content). Blocks are separate `<style>` elements in priority order, so that Gmail's cut loses only the lowest-priority block. When over budget, whole blocks are dropped from the lowest priority up (decorative, fonts, dark), each with a diagnostic. Reset and responsive are never dropped. If they alone still exceed the budget, P6 emits `W-CSS-OVER-BUDGET` (an error under `strict`), because Gmail will truncate them. | P6 | gmail* | hteumeuleu/email-bugs #90 (read); older sources (Email on Acid) say 8,192 chars | ✓ for 16 KB; the 8,192-char figure is treated as historical |
+| R-CSS-08 | Class names match `[a-z][a-z0-9-]*`: no escapes, no `:` `/` `.` `\`. Tailwind-style names are never emitted. Names are generated (`e-` + base36 hash of the declaration set, shortest unique prefix ≥ 3 characters) and deterministic. | style/classes | gmail* | Maizzle safeClassNames transformer docs | ◐ |
+| R-CSS-09 | Selectors in head blocks use only class, element and ID selectors, apart from the fixed client-targeting set (R-RST-03/08/09/11, R-DRK-03, R-LAY-12, R-LAY-13). The fixed set is a closed list of literal selectors (`div[style*="margin: 16px 0"]`, `#outlook a`, `a[x-apple-data-detectors]`, `.aBn`, `.unstyle-auto-detected-links a`, `.a6S`, `img.g-img+div`, `[data-ogsc] …`, `[data-ogsb] …`, `.moz-text-html …`, `[owa] …`); the serialiser admits exactly these. Gmail supports "class, element, and ID selectors". | style/css | gmail* | Google, Gmail CSS support (read) | ✓ |
+| R-CSS-10 | `@media` queries use only the `screen` type (or `only screen`) and the features `min-width`/`max-width`, plus `prefers-color-scheme` in the dark block. Height, orientation and resolution features are not used. This is the intersection that Gmail (width features only) and Yahoo/AOL (screen + width/height) support. | P6 | gmail*, yahoo | Google, Gmail CSS support; caniemail css-at-media notes 2, 7 (read) | ✓ |
+| R-CSS-11 | CSS custom properties (`var()`, `--x`) are never emitted. | P5 | gmail*, outlook*, yahoo | caniemail css-variables (read) | ✓ |
+| R-CSS-12 | Colours are 6-digit lower-case hex in both CSS and HTML attributes (`bgcolor`). 3-digit hex and named colours are converted. Some clients reject 3-digit hex in attributes. | style/colors | outlookWord | Maizzle sixHex transformer docs | ◐ |
+| R-CSS-13 | Lengths are px for box properties, `font-size` and `line-height`; `%` for widths only. `rem`/`em` are converted with a 16px root. Unitless numbers from the Tailwind extractor get `px` restored from the extractor's unit record. | style/units | outlookWord | Cerberus; caniemail Outlook notes (read) | ✓ |
+| R-CSS-14 | Semi-transparent colours: when the family set includes `outlookWord`, the opaque blend against the resolved background colour is emitted first, followed by `rgba()` for the others (`color:#7f7f7f;color:rgba(0,0,0,.5)`). | style/colors | outlookWord | inference (Word ignores rgba) | ☐ (to be settled by a Word-engine Outlook capture) |
+| R-CSS-15 | Any rule in the head that exists only to override an inline value (responsive or dark) is paired with a **class** on the element. Selectors never depend on the element's position or on inline style content. | P6 | all | inference, from R-CSS-09 | ✓ (design rule) |
+| R-CSS-16 | Declarations inside a rule are sorted by property name, and rules by selector, both deterministically. | style/css | — | design rule: byte-identical output for the same input | ✓ (design rule) |
+| R-CSS-17 | `!important` is stripped by Gmail when images are off (email-bugs #70). No rule may depend on `!important` for **legibility**; it may only depend on it for layout improvement. | P6 | gmail* | hteumeuleu/email-bugs #70 | ◐ (to be confirmed by a real-client capture) |
+| R-CSS-18 | In the "View entire message" window of a clipped email, Gmail removes all `<style>` (email-bugs #56). A clipped message is therefore also style-less, which is one more reason for R-SIZE-01. | — | gmailWeb | hteumeuleu/email-bugs #56 (read) | ✓ |
+
+## 4. LAY — Layout (sections, columns, groups)
+
+This is MJML's algorithm (from `mjml-section`, `mjml-column` and
+`mediaQueries.js`, read) with Cerberus's hybrid fallback.
+
+### 4.1 Width computation (P3)
+
+```text
+containerWidth W        = EmailTarget.containerWidth (default 600) or mailDocument(width)
+section box B           = W − paddingLeft − paddingRight − borderLeft − borderRight
+column width, % given   = colPct
+column width, px given  = colPx
+column width, omitted   = 100 / (number of non-raw siblings) %
+column px (Outlook)     = colPx, or round(colPct/100 · B)
+column box              = column px − column paddingL/R − borders   (child context)
+group                   = like a section inside a column: its B is the group's px width
+```
+
+- Rounding: px values are rounded to integers. The **last** column absorbs
+  the rounding remainder, so the px widths sum to exactly `B`.
+- Percentages are normalised to at most 6 decimals, trailing zeros
+  stripped.
+
+### 4.2 Rules
+
+| ID | Rule | Where | Families | Source | Status |
+|---|---|---|---|---|---|
+| R-LAY-01 | **Mobile-first hybrid column** (`strategy = hybrid`). The column is `<div class="e-col-…" style="display:inline-block;width:100%;max-width:{colPx}px;vertical-align:{va};font-size:16px;text-align:left;direction:{dir};"><div style="padding:{colPad};">content</div></div>`. There is no table inside the column (div-first). The desktop width comes only from the head media query (R-LAY-02). Clients with no `<style>` get stacked full-width columns, which is safe. | lower/column | all | mjml-column source (read); div-first per goodemailcode.com columns and Blocks Edit, "No more tables for email" (read) | ✓ structure; ◐ div-first inner padding (to be confirmed by a real-client capture) |
+| R-LAY-02 | The responsive block has, per distinct column class, `@media only screen and (min-width:{breakpoint}px){.{cls}{width:{pct}% !important;max-width:{pct}%;}}`. The breakpoint defaults to 480. | P6 | all except ganga, outlookWord | MJML mediaQueries.js (read); 480 ◐ | ✓ |
+| R-LAY-03 | Column class names are `e-col-{pct}` with `.` replaced by `-` (e.g. `e-col-33-333333`), or `e-colpx-{n}` for px columns. They are deduplicated across the document. | style/classes | — | mjml-column class naming (read) | ✓ |
+| R-LAY-04 | The element that contains inline-block columns (the section's inner div, a Grid or a Cluster parent) has `font-size:0`. Each column or item resets `font-size` (16px default) on its own div. | lower/section, lower/column | all | Cerberus hybrid template; MJML (read) | ✓ |
+| R-LAY-05 | **Nothing between inline-block siblings**: no whitespace or text nodes between column `div`s, including across the ⟪mso⟫ conditional comments that separate them. | serialize | all | MJML and Cerberus inline-block practice (read) | ✓ |
+| R-LAY-06 | ⟪mso⟫ Section ghost table (div-first): `<!--[if mso]><table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" width="{W}" style="width:{W}px;"><tr><td bgcolor="{bg}" style="padding:{pad};background-color:{bg};"><![endif]-->` before the section `div`, and `<!--[if mso]></td></tr></table><![endif]-->` after it. The cell carries the section's padding and background (R-TBL-02). | mso/ghost | outlookWord | goodemailcode.com container (read) | ✓ |
+| R-LAY-07 | ⟪mso⟫ Multi-column ghost row, inside the section's inner div: `<!--[if mso]><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="{B}" style="width:{B}px;"><tr><td valign="{va}" width="{colPx}" style="width:{colPx}px;padding:{colPad};"><![endif]-->` before the first column; `<!--[if mso]></td><td …><![endif]-->` between columns; `<!--[if mso]></td></tr></table><![endif]-->` after the last. Each ghost cell carries its column's padding (R-TBL-02). Grids chunk it into rows of N. | mso/ghost | outlookWord | mjml-section source; Foundation block-grid (read) | ✓ |
+| R-LAY-08 | Section (non-MSO): `<div class="e-sec" style="margin:0 auto;max-width:{W}px;background-color:{bg};"><div style="padding:{pad};font-size:0;text-align:{align};direction:{dir};">…</div></div>`. A single-column section has no column scaffolding: column padding merges into the inner div and the MSO cell. Centring in Word comes from `align="center"` on the ghost table (R-LAY-06), never from `margin:auto` alone. | lower/section | all | goodemailcode.com container; caniemail css-margin note 4 (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-LAY-09 | `full_width` section: an outer `<div style="background-color:{bg};">` plus ⟪mso⟫ `<table role="presentation" width="100%"><tr><td bgcolor="{bg}">` around the section. The inner container is unchanged. | lower/section | all | mjml-section full-width; Cerberus full-bleed section (read) | ✓ |
+| R-LAY-10 | **Group** (`mailGroup`): columns inside keep their desktop percentage on mobile. Their inline width is the percentage, not 100%, and they get no media-query class. The group itself is one inline-block with the `e-mso-group-fix` class (R-DOC, `lte mso 11`). | lower/group | all | mjml-column getMobileWidth (read) | ✓ |
+| R-LAY-11 | **Mobile reversal** (`reverse_on_mobile`): the section cell gets `dir="rtl"` and every column gets `dir="ltr"` (its content direction). Authoring order stays reading order for screen readers and the text part. | lower/section | all | community practice | ◐ (to be confirmed by a real-client capture) |
+| R-LAY-12 | Thunderbird copy: when `thunderbirdMq`, every rule of R-LAY-02 is duplicated with the selector prefixed by `.moz-text-html `, in the same block. | P6 | thunderbird | MJML mediaQueries.js (read) | ✓ |
+| R-LAY-13 | OWA copy: when `owaDesktop`, every R-LAY-02 rule is duplicated with the selector prefixed by `[owa] ` and **outside** the media query. OWA ignores the query, so this forces desktop widths. | P6 | outlookWeb | MJML mediaQueries.js, forceOWADesktop (read) | ✓ |
+| R-LAY-14 | Gutters follow the MJML 5 model: half-gutter padding on inner sides, none on outer edges, mirrored into the ghost cells. When stacked, a media query (`max-width:{bp-1}px`) replaces them with `padding-top:{gutter}` on every column but the first. Without CSS the half-gutters remain (a declared degradation). | lower/column, P6 | all | mjml-column source (read) | ✓ |
+| R-LAY-15 | Every layout `<table>` has `role="presentation"`, `border="0"`, `cellpadding="0"`, `cellspacing="0"`, and an HTML `width` attribute alongside CSS width (R-OL-09). | P7, lower/* | all | Email Markup Consortium Accessibility Report 2026; Cerberus (read) | ✓ |
+| R-LAY-16 | Max nesting: `mailSection` cannot nest in `mailSection` (use `mailWrapper`); `mailColumn` only in `mailSection`/`mailGroup`/`mailColumns`; `mailGroup` only in `mailSection`. These are compile-time errors. | vocabulary | — | MJML structure (read) | ✓ |
+| R-LAY-17 | `mailWrapper` gives several sections one shared background and padding. It lowers like a `full_width` section whose children are sections. Its inner sections use `W − wrapper padding` as their container width. | lower/wrapper | all | MJML mj-wrapper docs | ✓ |
+
+## 4b. TBL — Table and scaffolding construction
+
+These rules apply to every construct. **Div-first: tables only for MSO
+scaffolding, table-layout semantics, and data.**
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-TBL-01 | Outside MSO comments, a layout table is emitted only by these constructs: `mailBox`; `mailColumns(cells\|cellsStacking)`; `mailSidebar(switch_below = 0)`; `mailKeyValue`; steppers, timelines and labelled dividers; `mailTable`; the button; the document wrapper. P10 flags any other non-MSO layout table (`W-TBL-UNEXPECTED`). | P10 | goodemailcode.com; Blocks Edit, "No more tables for email"; Litmus, "Email design with HTML tables" (read) | ✓ (decision) |
+| R-TBL-02 | **Mirroring.** Any padding, background colour, border or width that Word must honour on a div is repeated on the enclosing MSO ghost cell (`padding`, `bgcolor` + `background-color`, `border`, `width` attr + CSS). The div keeps its own copy for everyone else. | mso/ghost | Blocks Edit, "No more tables for email": Outlook ignores div padding and mis-paints div backgrounds (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-TBL-03 | **One padded cell per row.** Word equalises vertical padding across all cells of a row to the largest value. A row whose cells need different vertical padding gets a nested single-cell table per cell instead. | lower/*, mso/* | caniemail css-padding note (read) | ✓ |
+| R-TBL-04 | Gaps are padding on cells or divs, or ⟪mso⟫ spacer rows. Never `gap`, never negative margins, never `margin:auto` alone. | P5 | caniemail css-gap, css-margin (read) | ✓ |
+| R-TBL-05 | **Spacer cells are never empty.** They carry explicit `height`/`width` attributes and CSS, `font-size:0;line-height:0;mso-line-height-rule:exactly;`, a `&nbsp;`, and `aria-hidden="true"`. Unsized empty cells are dropped by about 25–90% of clients. | mso/ghost, lower/* | Email on Acid empty-cells study (read); Cerberus spacer (read) | ✓ |
+| R-TBL-06 | No `rowspan` anywhere. No `colspan` in layout tables; data tables may use `colspan` in header rows. | vocabulary, P10 | inference: Email on Acid lists them only as alternatives to empty cells (read); no current source recommends them for layout | ✓ (decision) |
+| R-TBL-07 | A cell containing only an image, beside a cell containing text, gets `&zwnj;` after the image, so that Word applies `valign` correctly. | lower/sidebar, lower/* | kontent.ai, Outlook vertical alignment in tables (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-TBL-08 | Dashed or dotted borders: the bordered cell **and** its parent carry the same background colour (Outlook 2007/2010 paints the parent's colour between dashes). | lower/box | hteumeuleu/email-bugs #34 (via search) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-TBL-09 | `box-shadow` is decoration only and is always paired with a 1px border one step darker than the background, because the shadow is missing in Gmail web, Word and Yahoo, and invisible in dark mode. | lower/box | caniemail box-shadow (read) | ✓ |
+| R-TBL-10 | Equal heights are promised only by table-cell constructs (`cells`, `cellsStacking`, `mailSidebar`, steppers, timelines). Hybrid and Grid constructs declare "ragged bottoms" as an expected degradation, and bordered or background-carrying items in them are flagged with `I-TBL-RAGGED` so the design is chosen knowingly. | P10 | goodemailcode.com columns (read) | ✓ |
+| R-TBL-11 | **320px check** for non-stacking and media-query-stacking cell rows: the narrowest cell at a 320px container must be ≥ its `min_width` (text 160, image 120, stat/short 72). Otherwise `W-LAYOUT-MIN-COLUMN` (an error under `strict`). This applies to `cellsStacking` because it shows the desktop row whenever CSS is lost. | P3 | Cerberus minimums (read) | ✓ |
+| R-TBL-12 | Interactive items in a row (links, buttons, rating targets) keep ≥ 8px between hit areas and ≥ 44px hit height. | P10 | Mailchimp, mobile-friendliness guide (read) | ✓ |
+| R-TBL-13 | Tables or cells containing only images get `font-size:0;line-height:0;` on the cell. This prevents the Outlook 2013–2019 1px line under images. | lower/image | hteumeuleu/email-bugs #99 (via search) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-TBL-14 | Alignment is emitted as attribute **and** CSS (`align` + `text-align`, `valign` + `vertical-align`). Horizontal centring of a block in Word is `align="center"` on its (ghost) table. | P5 | caniemail css-margin note 4; goodemailcode.com container (read) | ✓ |
+| R-TBL-15 | Non-MSO layout-table nesting stays ≤ 3 levels per construct (P10 `W-TBL-DEEP`). Deeper structure lives inside MSO comments, where only Word pays for it. | P10 | inference: Blocks Edit byte measurements; Outlook per-level margin quirks | ✓ (design rule) |
+| R-TBL-16 | Rounded boxes: `border-radius` on the cell with `border-collapse:separate` on its table (radius does not render on collapsed tables). Square in Word, unless the opt-in 3×3 VML-corner Box is used (☐). General `v:roundrect` containers are never used; they distort and cannot nest. | lower/box | mjml-column renderGutter; kontent.ai (read) | ✓ / ☐ 3×3 variant (to be settled by a Word-engine Outlook capture) |
+
+## 5. OL — Word-engine Outlook
+
+All ⟪mso⟫ output is created only in `src/isonim_email/mso/`,
+and is removed by P9 when `outlookWord = false`.
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-OL-01 | Conditional syntax: Outlook-only `<!--[if mso]>…<![endif]-->`; everyone but Outlook `<!--[if !mso]><!-->…<!--<![endif]-->`. The two are never mixed within one comment. | ir, serialize | Cerberus hybrid template, both forms in use (read); Email on Acid, Word rendering engine article (secondary, not read verbatim ◐) | ✓ |
+| R-OL-02 | Version conditions: `mso 12` = 2007, `14` = 2010, `15` = 2013 and every later version; `gte mso 9` = all Word-engine versions; `lte mso 11` = 2000–2003. The library emits only `mso`, `!mso`, `gte mso 9` (VML) and `lte mso 11` (group fix). Any other condition is a diagnostic. | mso/* | Email on Acid, Word rendering engine article (◐ version table) | ◐ |
+| R-OL-03 | `max-width` is ignored, so every `max-width` container has a ghost table with fixed px width (R-LAY-06/07). | mso/ghost | mjml-section source (read) | ✓ |
+| R-OL-04 | `margin`: no negative values, none on `span`/`body`, background bleeds into the margin, `auto` unsupported. Only `p`, `h1`–`h6` and `ul`/`ol` may carry vertical margins. All other spacing is padding on a `td`. P5 converts other margins into cell padding, with a warning. | P5 | caniemail css-margin notes 1–4 (read) | ✓ |
+| R-OL-05 | Padding is reliable only on `td`. Padding on `a`, `div` and `p` is emitted for other clients, and the ⟪mso⟫ equivalent is carried by the enclosing `td` (`mso-padding-alt` for buttons, R-BTN). | lower/* | Email on Acid, Word rendering engine article (◐); mjml-button source (read) | ✓ |
+| R-OL-06 | Every px `line-height` is accompanied by `mso-line-height-rule:exactly`. Without it, Word treats `line-height` as a minimum. | P5 | mjml-section source emits it (read) | ✓ |
+| R-OL-07 | Web fonts: when any `@font-face` or `<link>` font is used, the mso block contains `*{font-family:{fallback stack} !important;}`. Otherwise Word falls back to Times New Roman. Additionally, `mso-font-alt:{fallback}` is emitted on elements whose first family is a web font. | mso/fonts | Cerberus (read); caniemail at-font-face notes 4–5 (read) | ✓ |
+| R-OL-08 | DPI: besides R-DOC-08, every `img` and fixed-width `table`/`td` carries an HTML `width` attribute (unitless px) as well as CSS. VML sizes are in px. | P5, lower/* | Cerberus comment (read) | ✓ |
+| R-OL-09 | Attribute mirroring: `width`, `height` (images), `bgcolor` (cells with a background), `align` and `valign` are emitted as HTML attributes as well as CSS on `table`/`td`/`img`. | P5 | Maizzle attributeToStyle docs (◐); Cerberus (read) | ✓ |
+| R-OL-10 | No `display:flex`/`grid` anywhere. On a layout container it is **harmful** (error); elsewhere it is removed with a warning. | P5, P10 | caniemail css-display-flex (read) | ✓ |
+| R-OL-11 | CSS `background-image` is ignored by Word, so any background image gets the VML of R-VML-01. | mso/vml | mjml-section source; Cerberus (read) | ✓ |
+| R-OL-12 | `border-radius` is ignored by Word, so corners are square. Accepted as a declared degradation unless the component emits VML (R-BTN-04). | lower/button, P10 | caniemail css-border-radius (◐) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-OL-13 | Images: PNG, JPEG and GIF only. No WebP, SVG, `<picture>` or `data:` (R-IMG-08). Animated GIFs show only the first frame in Outlook 2007–2016, so the first frame must carry the message. | P10, lower/image | caniemail image-webp, html-svg, html-picture, image-base64 (read); GIF first-frame behaviour ◐ | ✓ / ◐ GIF |
+| R-OL-14 | `mso-hide:all` is emitted on every element that must not render in Word and is not already inside a `NotMso` comment (preheader, dark-swap images, hidden captions). | P5 | Cerberus (read) | ✓ |
+| R-OL-15 | **The closed list of `mso-*` properties** the library may emit is: `mso-line-height-rule`, `mso-table-lspace`, `mso-table-rspace`, `mso-padding-alt`, `mso-hide`, `mso-font-alt`. Adding one requires a backend-C capture that shows its effect, recorded here. Candidates awaiting evidence: `mso-text-raise`, `mso-font-width` (R-BTN-05), `mso-generic-font-family`, `mso-special-format` (R-TXT-09), `mso-border-alt`, `mso-color-alt`, `mso-ansi-font-size`. | P5, P10 | community lists of `mso-*` properties; caniemail notes (list flagged "verify") | ☐ per candidate, each settled by a Word-engine Outlook capture |
+| R-OL-16 | 120-DPI rendering is part of backend C: classic Outlook is captured at 96 and at 120 DPI for every story that contains images or fixed-width elements. | capture | Cerberus (read) | ✓ (process rule) |
+
+## 6. VML — Background images and shapes
+
+```html
+<!--[if gte mso 9]><v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:{W}px;height:{H}px;">
+<v:fill type="{frame|tile}" src="{absolute https src}" color="{fallback bg}" />
+<v:textbox inset="0,0,0,0"{fit}><![endif]-->
+<div>{content}</div>
+<!--[if gte mso 9]></v:textbox></v:rect><![endif]-->
+```
+
+`{fit}` is ` style="mso-fit-shape-to-text:true"` when R-VML-03 applies.
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-VML-01 | Background images for Word use `v:rect` + `v:fill` + `v:textbox` as above, guarded by `gte mso 9`. The capable-client path is CSS `background-image` + `background-size` + `background-position` on the same element, **plus** `background-color`. | mso/vml, lower/section, lower/hero | mjml-section source; Cerberus (read) | ✓ |
+| R-VML-02 | VML requires explicit px **width and height**. `mailHero` requires `height` or `min_height` when `outlookWord`; missing both is an error. | P1, mso/vml | mjml-section source; Cerberus (read) | ✓ |
+| R-VML-03 | `mso-fit-shape-to-text:true` on `v:textbox` lets the rectangle grow with its content. It is used only for `min_height` heroes. | mso/vml | community practice ("widely used; not fetched") | ☐ (to be settled by a Word-engine Outlook capture) |
+| R-VML-04 | VML `src` is always an absolute https URL. VML ignores `cid:` and relative URLs in some versions, so embedded (cid) images are never used for VML backgrounds. | mso/vml, P8 | inference | ☐ (to be settled by a Word-engine Outlook capture) |
+| R-VML-05 | Decorative VML is `aria-hidden` where the markup allows it. Text inside `v:textbox` is ordinary HTML and remains the accessible content. | P7 | Email Markup Consortium Accessibility Report 2026 | ◐ |
+
+## 7. BTN — Buttons
+
+Default (table) button, from MJML `mjml-button` (read; "No, VML is not
+used"):
+
+```html
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="{align}" style="border-collapse:separate;line-height:100%;">
+<tr><td align="center" bgcolor="{bg}" role="presentation" valign="middle" style="border:{border};border-radius:{r}px;cursor:auto;mso-padding-alt:{pv}px {ph}px;background-color:{bg};">
+<a href="{href}" target="_blank" style="display:inline-block;background-color:{bg};color:{fg};font-family:{ff};font-size:{fs}px;font-weight:{fw};line-height:{lh}px;mso-line-height-rule:exactly;margin:0;text-decoration:none;text-transform:none;padding:{pv}px {ph}px;mso-padding-alt:0px;border-radius:{r}px;">{label}</a>
+</td></tr></table>
+```
+
+VML variant (Campaign Monitor pattern):
+
+```html
+<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:{h}px;v-text-anchor:middle;width:{w}px;" arcsize="{round(r/h*100)}%" strokecolor="{border or bg}" fillcolor="{bg}">
+<w:anchorlock/><center style="color:{fg};font-family:{ff};font-size:{fs}px;font-weight:{fw};">{label}</center></v:roundrect><![endif]-->
+<!--[if !mso]><!-->{table button}<!--<![endif]-->
+```
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-BTN-01 | The default button is the table button above: colour on both `td` (`bgcolor` + CSS) and `a`; padding on the `a`, with `mso-padding-alt` on the `td` and `mso-padding-alt:0px` on the `a`. | lower/button | mjml-button source (read) | ✓ |
+| R-BTN-02 | Declared degradation: in Word only the label text is clickable, and corners are square. The brief generator tells reviewers so. | lower/button, P10 | mjml-button source (read) | ✓ |
+| R-BTN-03 | The label may wrap. Button width is content-driven unless `width` is set; a set `width` goes on the `td`. | lower/button | MJML | ✓ |
+| R-BTN-04 | The VML variant is used when `vml = always`, or when `vml = auto` and `border_radius > 0` and `width` is set. It requires `width` and `height` in px. The label must fit (text metrics); if not, it is an error. The label cannot wrap. | lower/button, mso/vml | Campaign Monitor buttons.cm pattern (◐; not fetched) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-BTN-05 | Candidate: Good Email Code's link button, which fakes vertical padding in Word with `<i>` spacers using `mso-font-width` / `mso-text-raise` and `&#8202;`, making the full area clickable without VML. It is **not implemented** until a comparison with R-BTN-01/04 on backends C and D. If adopted, it replaces R-BTN-01 as the default, and its exact markup is recorded here from the source. | lower/button | goodemailcode.com link button ("not fetched; verify") | ☐ (to be settled by backend C and D captures) |
+| R-BTN-06 | The button's minimum tap target is 44 px tall: `lh + 2·pv ≥ 44`. P10 checks it, and the capture DOM assertion re-checks it. | P10 | WCAG-derived target size (◐) | ✓ (design rule) |
+| R-BTN-07 | `href` is absolute https (or `mailto:`/`tel:`), and never `#` or empty; a button with no destination is an error. | P1, P8 | design rule | ✓ |
+
+## 8. IMG — Images
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-IMG-01 | Every **fixed-size** image (rendered narrower than its container, e.g. a logo): `width` attribute (px), `style="display:block;border:0;outline:none;text-decoration:none;height:auto;width:100%;max-width:{w}px;-ms-interpolation-mode:bicubic;"` plus alt-text styling (R-IMG-03). `height` attribute only when the aspect is fixed and known. **Fluid** images (rendered at the container width, or `fluid_on_mobile`) follow R-IMG-11 instead. | lower/image | all | MJML skeleton.js (read) | ✓ |
+| R-IMG-02 | `display:block` is what removes the gap under images. A row of stacked images additionally gets `font-size:0;line-height:0` on its `td`. | lower/image | widely documented canonical fix for the gap under images | ✓ |
+| R-IMG-03 | Alt text is styled on the `img` itself (`font-family`, `font-size`, `line-height`, `color`), so it is readable when images are blocked. The containing cell has a background colour with sufficient contrast against that alt text colour. | lower/image, P10 | Cerberus (read) | ✓ |
+| R-IMG-04 | `alt` is required. `alt=""` only with `decorative = true`. Alt longer than 60 characters warns (text-in-image heuristic). | P1, P10 | Email Markup Consortium Accessibility Report 2026 (read) | ✓ |
+| R-IMG-05 | Retina: `@2x` assets render at intrinsic/2 by default. The `width` attribute is the rendered size, never the intrinsic size. | lower/image, assets | Cerberus hero 1360→680 (read) | ✓ |
+| R-IMG-06 | `dark_src`: two `img`s. The dark one is inline `display:none;mso-hide:all;` with class `e-dk-show`, and the light one has class `e-dk-hide`. The dark block and `[data-ogsc]` rules swap them. Gmail cannot swap, so the light image must be dark-safe (R-DRK-06). | lower/image, P6 | Litmus, "The ultimate guide to dark mode for email marketers" ◐ | ◐ (to be confirmed by dark-mode captures) |
+| R-IMG-07 | Hosted asset URLs are content-hashed (`/{sha256[0:16]}/{name}`). The upload hook completes **before** the message is rendered for send or capture, so proxies such as Gmail's never cache a 404 or a stale image. | assets | Litmus, "Gmail adds image caching"; mailtester.com, Gmail image-proxy caching (read) | ✓ |
+| R-IMG-08 | `data:` URIs are forbidden (Gmail, Outlook). WebP and SVG are errors under any profile that contains `outlookWord` or `gmail*`. | P10 | caniemail image-base64, html-svg, image-webp (read) | ✓ |
+| R-IMG-09 | `fluid_on_mobile`: below the breakpoint, `width:100% !important;max-width:100% !important` through a class. The desktop width stays inline. | lower/image, P6 | MJML ◐ | ◐ (to be confirmed by a real-client capture) |
+| R-IMG-10 | A linked image wraps the `img` in `<a href target="_blank" style="display:block;">`, with no whitespace inside the `a`. | lower/image | community practice | ◐ |
+| R-IMG-11 | **Samsung Auto-fit split for fluid images.** Samsung Email lays out the whole email at an image's `width` *attribute*, so a fluid image never carries a px `width` attribute outside MSO. It is emitted twice: ⟪mso⟫ `<!--[if mso]><img src width="{px}" alt style="display:block;…"><![endif]-->` and `<!--[if !mso]><!--><img src width="100%" alt style="display:block;width:100%;max-width:{px}px;height:auto;…"><!--<![endif]-->`. Outlook ≤ 2016 reads a percentage `width` attribute relative to the image, hence the split. | lower/image, mso/image | samsung, outlookWord | hteumeuleu.com, "Samsung Auto-fit" (read) | ✓ |
+
+## 9. PRE — Preheader
+
+```html
+<div style="display:none;font-size:1px;color:{bg};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{preheader text}</div>
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;" aria-hidden="true">{padding}</div>
+```
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-PRE-01 | The preheader is the first content in `<body>`, before the article wrapper, as the two `div`s above. | lower/document | Cerberus (read) | ✓ |
+| R-PRE-02 | The padding stops clients pulling body text into the inbox preview. Its unit sequence is a **flag** (`preheaderPad`), with default `&#847;&zwnj;&nbsp;` repeated N times. N = clamp(100 − len(preheader), 0, 150), where len counts characters. | lower/document | Cerberus (read); sequence alternatives are unverified community practice | ☐ the sequence and N are to be settled from inbox-list captures on backend B |
+| R-PRE-03 | The padding carries `aria-hidden="true"`. | P7 | Good Email Code template; Email Markup Consortium Accessibility Report 2026 | ✓ |
+| R-PRE-04 | The preheader text is omitted from the plain-text part. | P12 | design rule | ✓ |
+| R-PRE-05 | Preheader bytes count toward R-SIZE-01. At about 12 bytes per unit, 150 units ≈ 1.8 KB. | P10 | arithmetic | ✓ |
+
+## 10. TXT — Text, fonts and links
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-TXT-01 | Text uses real `h1`–`h6`, `p`, `ul`/`ol`/`li`, `strong`/`em` and `a`, never styled `td` text. At least one `h1` per message. | P1, P7 | Email Markup Consortium Accessibility Report 2026 (read) | ✓ |
+| R-TXT-02 | Every text element gets inline `margin` (`0 0 {n}px`), `font-family` (full stack), `font-size` (px), `line-height` (px) with `mso-line-height-rule:exactly`, and `color`. Nothing relies on inheritance, because clients reset differently. | lower/text, P5 | Cerberus; MJML (read) | ✓ |
+| R-TXT-03 | Body text is at least 14 px (P10 warns below 14, and errors below 12). Default body 16 px. | P10 | Good Email Code template; iOS text-size behaviour (◐) | ✓ (design rule) |
+| R-TXT-04 | Every `a` gets inline `color` and `text-decoration` (underline in body copy for accessibility; none on buttons and navigation). This avoids client default blue and purple. | lower/text | Cerberus: "Styles for underlined links should be inline" (read) | ✓ |
+| R-TXT-05 | Font stacks always end in a generic family. Default stacks: sans `Helvetica, Arial, sans-serif`; serif `Georgia, 'Times New Roman', serif`; mono `Menlo, Consolas, 'Courier New', monospace`. | style/tokens | community practice | ✓ |
+| R-TXT-06 | Auto-detected content (dates, phone numbers, addresses) that must not become a link is protected by R-DOC-05 and R-RST-09. Where the author marks a span `nolink = true`, zero-width joiners are inserted between digit groups. | lower/text | community practice ◐ | ◐ (to be confirmed by a real-client capture) |
+| R-TXT-07 | Web fonts: `@font-face` or `<link>` only inside the `NotMso` fonts block (block 4), never inside `@media`, and always with R-OL-07. Supported families only: apple, samsung (not Microsoft accounts), thunderbird, outlookApp (older). Others use the fallback stack. | P6 | caniemail at-font-face (read) | ✓ |
+| R-TXT-08 | `-webkit-text-size-adjust:100%` comes from R-RST-02. Nothing else suppresses user text scaling. | — | MJML; Cerberus (read) | ✓ |
+| R-TXT-09 | Lists: `ul`/`ol` get `margin:0;padding:0;` and `li` gets `margin:0 0 {m}px {indent}px;` (indent on `li`, following Cerberus). Outlook 2021/365 honour `ul` padding and doubled the indent of older fixes (Litmus). `mso-special-format:bullet` is not emitted until R-OL-15 admits it. Custom-marker lists (icon bullets) are a presentation table with `role="list"`/`"listitem"` and an `aria-hidden` marker cell. | lower/text | all | Litmus, "The ultimate guide to bulleted lists in HTML email" (read); Outlook 365 change via search | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-TXT-10 | Headings keep their semantic level. P7 warns on skipped levels (h1 → h3). | P7 | Email Markup Consortium Accessibility Report 2026 | ✓ |
+
+## 11. DRK — Dark mode
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-DRK-01 | Families that honour `prefers-color-scheme`: apple, outlookApp, outlookWeb (limited), samsung, thunderbird, fastmail. Families that do not: gmail*, ganga, yahoo (mangled), outlookWord, proton; hey rewrites it to `(false)`. | target | caniemail css-at-media-prefers-color-scheme (read) | ✓ |
+| R-DRK-02 | For every element whose token colour has a different dark value: a class `e-dk-{hash}` and, in block 3, `@media (prefers-color-scheme: dark){.e-dk-…{color:{dark} !important;}}` (and `background-color` likewise). | P6 | Cerberus (read) | ✓ |
+| R-DRK-03 | Outlook.com and the Outlook apps: the same classes get `[data-ogsc] .e-dk-…{color:{dark} !important;}` and `[data-ogsb] .e-dk-…{background-color:{dark} !important;}` in block 3, **outside** the media query. Outlook adds these attributes itself when it recolours. | P6 | caniemail note (read); Litmus dark-mode guide ◐ | ◐ to be confirmed on backend B (Outlook.com dark toggle) |
+| R-DRK-04 | Inversion simulation. Partial inversion: every background with relative luminance > 0.5 becomes its lightness-inverted colour (OKLCH L → 1 − L, chroma kept). Every text colour with luminance < 0.5 is inverted the same way. Full inversion: every colour is inverted that way. WCAG 2 contrast ≥ 4.5:1 (≥ 3:1 for text ≥ 24 px, or ≥ 18.66 px bold) is required for every text/background pair in light, dark, partial and full. | P10 | Litmus dark-mode guide (behaviours ◐); the algorithm is our model | ☐ to be settled: calibrate both models against Gmail-app (full) and Outlook.com (partial) captures, and record the calibrated formula here |
+| R-DRK-05 | The Gmail iOS blend-mode hack is **not** emitted. | — | hteumeuleu.com, "Fixing Gmail's dark mode issues with CSS blend modes" | ✓ (decision) |
+| R-DRK-06 | Logos and icons in light mode must be legible on both white and near-black: transparent PNG with a ≥ 2 px contrasting outline or padding plate, checked by the alpha heuristic. | P10, assets | Litmus dark-mode guide (◐) | ◐ (to be confirmed by dark-mode captures) |
+| R-DRK-07 | Pure `#000000` on `#ffffff` brand blocks are avoided in `designed` themes. The theme generator nudges them to `#111111` / `#fefefe`, because some inverters treat pure values specially. | style/tokens | inference from the Litmus dark-mode guide | ☐ (to be settled by dark-mode captures) |
+
+## 12. A11Y — Accessibility
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-A11Y-01 | `lang`/`dir`: R-DOC-02. | P7 | EMC 2026 (read) | ✓ |
+| R-A11Y-02 | `role="presentation"` on every layout table; `role="table"` plus a `caption` on data tables (`mailTable`). | P7 | EMC 2026 (read) | ✓ |
+| R-A11Y-03 | At least one `h1`; R-TXT-01, R-TXT-10. | P1, P7 | EMC 2026 (read) | ✓ |
+| R-A11Y-04 | `alt` on every image: R-IMG-04. | P1 | EMC 2026 (read) | ✓ |
+| R-A11Y-05 | `aria-hidden="true"` on spacers, the preheader padding, decorative VML, and dark-swap duplicates (the hidden one). | P7 | Email Markup Consortium Accessibility Report 2026; Good Email Code template (read) | ✓ |
+| R-A11Y-06 | Link text is meaningful out of context: "click here", "here", "read more" and bare URLs as link text warn. | P10 | Email Markup Consortium Accessibility Report 2026 | ✓ (design rule) |
+| R-A11Y-07 | Contrast: R-DRK-04 applies to every scheme. | P10 | Email Markup Consortium Accessibility Report 2026 | ✓ |
+| R-A11Y-08 | Document order is reading order. No pass reorders children, and visual reordering uses R-LAY-11. | all passes | Email Markup Consortium Accessibility Report 2026 | ✓ |
+| R-A11Y-09 | Data tables use `th scope="col"`/`"row"`. The hidden caption is `mso-hide:all` plus visually-hidden CSS inline (`position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);`) — but `position` is unsupported in several families, so P10 must accept this declared degradation (the caption shows). | lower/table | inference | ☐ (to be settled by a real-client capture) |
+| R-A11Y-10 | The HTML5 sectioning and interactive elements `nav`, `main`, `article`, `section`, `header`, `footer`, `aside`, `details` and `summary` are **never emitted**. Gmail replaces some with `<u>`, and others strip them. Landmark intent uses `role` on a presentation **table** (Yahoo keeps `role` only on tables). The article wrapper `div` (R-DOC-10) is the one `role` on a div, kept because it is wrapper-level and survives in the clients that matter for it. | P1, vocabulary | all | caniemail html-semantics, html-role (read) | ✓ |
+
+## 13. SIZE — Size and clipping
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-SIZE-01 | The decoded HTML (the text/html part after transfer decoding) must be ≤ `sizeBudget` (90,000 bytes): warning above, error above 100,000. Gmail clips at about 102 KB of raw HTML. Clipping hides the footer and unsubscribe link, and removes `<style>` (R-CSS-18). | P10 | Litmus, "How to keep Gmail from clipping your emails" ◐; hteumeuleu/email-bugs #41 | ◐ the clip threshold is to be measured on backend B with a near-limit story, and recorded here |
+| R-SIZE-02 | Size diagnostics report the contributors: head CSS, inline styles, URLs (tracking parameters included), preheader padding, MSO/VML. This lets an author see what to cut. | P10 | design rule | ✓ |
+| R-SIZE-03 | The URL-rewrite hook (UTM, tracking) runs **before** the size check. | P8, P10 | inference: URL length counts toward the clip size | ✓ |
+
+## 14. MIME — Message structure and encodings
+
+Every rule in this section was checked against the RFC text on 2026-09-27.
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-MIME-01 | Structure: `multipart/alternative` with `text/plain` **first** and the HTML part **last**. RFC 2046 §5.1.4 orders alternatives by "increasing faithfulness … with the preferred format last". | mime | RFC 2046 §5.1.4 | ✓ |
+| R-MIME-02 | With `cid:` images, the HTML part is wrapped in `multipart/related; type="text/html"`. The `type` parameter is mandatory: RFC 2387 §3.1, "The type parameter must be specified". The HTML is the first (root) part. | mime | RFC 2387 §3.1 | ✓ |
+| R-MIME-03 | Attachments wrap everything in `multipart/mixed`. | mime | RFC 2046 | ✓ |
+| R-MIME-04 | Boundaries are 1–70 characters from the `bcharsnospace` set, never ending in a space, and verified absent from every part body. | mime | RFC 2046 §5.1.1 (`boundary := 0*69<bchars> bcharsnospace`) | ✓ |
+| R-MIME-05 | Both text parts use `Content-Transfer-Encoding: quoted-printable`. Encoded lines are ≤ 76 characters (RFC 2045 §6.7 rule 5, "no more than 76"). A soft break is `=` at end of line. `=` is always `=3D`. A space or tab before a line break is encoded (`=20`/`=09`). Bytes ≥ 0x80 become `=XX`. | mime/qp | RFC 2045 §6.7 | ✓ |
+| R-MIME-06 | Text parts are `charset=utf-8`. The text part is `format=flowed` (RFC 3676). If `DelSp` is not used, trailing spaces mark soft breaks, and lines starting with space, `>` or "From " are space-stuffed. | mime, text | RFC 3676 | ✓ |
+| R-MIME-07 | **No encoded line starts with `.`**. The QP encoder emits a leading `.` as `=2E`. This guards against non-compliant SMTP clients: per RFC 5321 §4.5.2 a compliant client doubles a leading period, and the server deletes the first one, so a buggy client loses it. | mime/qp | RFC 5321 §4.5.2 | ✓ |
+| R-MIME-08 | Lines (any part, including headers) are ≤ 998 characters (MUST) and are kept ≤ 78 (SHOULD), excluding CRLF. QP and base64 guarantee this for bodies. The header folder guarantees it for headers. | mime | RFC 5322 §2.1.1 | ✓ |
+| R-MIME-09 | Binary parts are base64, in 76-character lines. | mime | RFC 2045 §6.8 | ✓ |
+| R-MIME-10 | Non-ASCII in `Subject` and in display names uses RFC 2047 encoded-words (`=?UTF-8?B?…?=`, or `Q` when mostly ASCII). Each encoded-word is ≤ 75 characters ("may not be more than 75 characters long"). Several encoded-words are separated by CRLF SPACE. Encoded-words are never used inside an addr-spec. | mime/headers | RFC 2047 §2, §5 | ✓ |
+| R-MIME-11 | `cid:` references use the `Content-ID` value **without** angle brackets. The `Content-ID` header has them: `Content-ID: <logo.a1b2@example.com>` pairs with `src="cid:logo.a1b2@example.com"`. Inline images also carry `Content-Disposition: inline; filename="…"`. | mime | RFC 2392 | ✓ |
+| R-MIME-12 | `MIME-Version: 1.0`, `Date` (RFC 5322 date-time, from the time facade), and a `Message-ID` of the form `<{id}@{sender-domain}>`, suppliable for deterministic tests. | mime/headers | RFC 5322 §3.6 | ✓ |
+| R-MIME-13 | CRLF line endings throughout the serialised message. | mime | RFC 5322 | ✓ |
+
+## 15. SND — Headers the receiving system acts on
+
+| ID | Rule | Where | Source | Status |
+|---|---|---|---|---|
+| R-SND-01 | One-click unsubscribe: exactly one `List-Unsubscribe` header containing **one HTTPS URI** (optionally also a `mailto:`), and exactly one `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. | mime/headers | RFC 8058 §3.1 | ✓ |
+| R-SND-02 | The unsubscribe URI must identify recipient and list by itself; there are no extra POST arguments. It should contain an opaque, hard-to-forge token. The library's `Unsubscribe` type takes the full URI and refuses one without a query or path token of at least 16 characters (warning). | mime/headers | RFC 8058 §3.1 | ✓ |
+| R-SND-03 | Documented for the sender's server, and checked by the test suite's one-click unsubscribe server fixture: the POST carries no cookies or auth; the server must not answer with a redirect; the body is `List-Unsubscribe=One-Click` as `multipart/form-data` or `application/x-www-form-urlencoded`. | docs, tests | RFC 8058 §3.1–§3.2 | ✓ |
+| R-SND-04 | Both headers must be covered by a DKIM signature (`h=` tag). DKIM is the ESP's job. `toMessage` records in the message metadata that DKIM must include them, and the Mailgun transport sets no option that would exclude them. | docs, transport | RFC 8058 §4 | ✓ |
+| R-SND-05 | Transactional helpers set `Auto-Submitted: auto-generated`. | mime/headers | RFC 3834 | ◐ |
+| R-SND-06 | Bulk-sender context, for docs only: Gmail and Yahoo require SPF+DKIM, aligned DMARC, one-click unsubscribe for marketing mail, and a spam rate < 0.3% (from Feb 2024; stricter enforcement from Nov 2025). Microsoft requires SPF/DKIM/DMARC above 5,000/day (from 2025-05-05). | docs | Google sender guidelines (support.google.com/mail/answer/14229414); Microsoft high-volume sender requirements (via search) | ◐ |
+
+## 16. INT — Interactive content (optional)
+
+| ID | Rule | Source | Status |
+|---|---|---|---|
+| R-INT-01 | Interactive components use the checkbox/radio hack (hidden `input` + `label` + `:checked ~`). Their **unchecked** state is a complete, static presentation of all content. Gmail and Outlook do not support `:checked`. | Email on Acid, Gmail development article (read) | ✓ |
+| R-INT-02 | `:hover` is decoration only (block 5). It works in apple, outlookWeb and gmailWeb only. Hover rules carry `!important`, because they must beat inline values (R-CSS-03) | Email on Acid, Gmail development article (read) | ✓ |
+| R-INT-03 | No forms, no `details`/`summary` (support unverified), no AMP part. | caniemail html-form; caniemail amp | ✓ (decision) |
+
+---
+
+## 17. BUG — Symptom index
+
+This maps the common rendering bugs to the rules that prevent
+them. A reviewer or agent who sees a symptom in a capture starts here.
+
+| Symptom | Clients | Rules |
+|---|---|---|
+| Gap under images | Outlook, Gmail, Yahoo | R-IMG-01, R-IMG-02 |
+| Whole email laid out at 600px in Samsung | Samsung | R-IMG-11 |
+| 1px line under images | Outlook 2013–2019 | R-TBL-13 |
+| Image cell misaligned beside text | Outlook | R-TBL-07 |
+| Squeezed desktop layout on phones | Gmail app (non-Google), Gmail after a dropped block | R-TBL-11 |
+| Ragged card bottoms in a row | all non-Word | R-TBL-10 |
+| Padding or background missing on div blocks | Outlook | R-TBL-02 |
+| Uneven vertical padding in a row | Outlook | R-TBL-03 |
+| Colour showing between dashes | Outlook 2007/2010 | R-TBL-08 |
+| Bullets double-indented | Outlook 2021/365 | R-TXT-09 |
+| Tags turned into underlines (`<u>`) | Gmail | R-A11Y-10 |
+| Gap between inline-block columns | all | R-LAY-04, R-LAY-05 |
+| 1-px lines or gaps between tables | Outlook | R-RST-05, R-RST-06 |
+| Content full-width on desktop | Outlook | R-OL-03, R-LAY-06, R-LAY-07 |
+| Margins ignored or background bleeding | Outlook | R-OL-04 |
+| Padding on links/divs ignored | Outlook | R-OL-05, R-BTN-01 |
+| Uneven line heights | Outlook | R-OL-06 |
+| Missing background images | Outlook | R-OL-11, R-VML-01 |
+| Square corners | Outlook | R-OL-12, R-BTN-02, R-BTN-04 |
+| Times New Roman | Outlook | R-OL-07, R-TXT-07 |
+| Images wrong size at 120 DPI | Outlook | R-DOC-08, R-OL-08, R-OL-16 |
+| Blue auto-links on dates or phones | iOS, Gmail | R-DOC-05, R-RST-09, R-TXT-06 |
+| Gmail iOS right gutter | Gmail iOS | R-RST (candidate `u ~ div .email-container{min-width:…}`; not in the reset until a capture shows the gutter; add as R-RST-14 with evidence) |
+| All head styles gone | Gmail | R-CSS-03…R-CSS-07, R-CSS-09, R-CSS-10 |
+| Message clipped, footer missing | Gmail | R-SIZE-01…03 |
+| Grey text in threads | Gmail | R-RST-10 |
+| Download icon over images | Gmail | R-RST-11 |
+| Narrow in Samsung | Samsung | R-RST-04 |
+| Text auto-resized | iOS | R-RST-02 |
+| Email auto-scaled | iOS | R-DOC-06 |
+| Logo vanishes in dark | Gmail, Outlook.com, Apple | R-IMG-06, R-DRK-06 |
+| Inverted buttons unreadable | Gmail iOS | R-DRK-04 |
+| Media queries ignored | Yahoo, AOL | R-CSS-10 |
+| Thunderbird ignores responsive rules | Thunderbird | R-LAY-12 |
+| CSS or URLs broken at random points | SMTP relays | R-MIME-05, R-MIME-08 |
+| First `.` of a line missing | buggy SMTP | R-MIME-07 |
+| `=` sequences corrupt URLs | QP decoding | R-MIME-05 |
+
+## 18. INV — Invariants every rendered message satisfies
+
+These are the `t3_*` invariant tests. They run over every story,
+with `outlookWord` on and off:
+
+1. Every `table` has `role` (R-LAY-15, R-A11Y-02).
+2. Every `img` has `alt`, a `width` attribute and `display:block` (R-IMG-01, R-IMG-04).
+3. Head CSS parses; it is lower-case (`!important`), has no nested
+at-rules, uses only allowed selectors and media features, and fits the
+budget (R-CSS-03…R-CSS-10).
+4. Decoded HTML ≤ budget (R-SIZE-01).
+5. No encoded line > 76 characters, and none starts with `.` (R-MIME-05, R-MIME-07).
+6. Conditional comments are balanced; there is no MSO or VML output
+when `outlookWord = false` (R-OL-01).
+7. The text part is non-empty and contains no markup.
+8. `lang`/`dir` are on `html` and the wrapper; there is an `h1` (R-DOC-02, R-A11Y-03).
+9. No `var(`, `data:`, `javascript:`, `<script`, `on*=`, `data-hk`
+or `data-isonim-` anywhere (R-CSS-11, R-IMG-08).
+10. No whitespace between inline-block column siblings (R-LAY-05).
+11. No `nav`/`main`/`article`/`section`/`header`/`footer`/`aside`/
+`details`/`summary` elements (R-A11Y-10).
+12. No non-MSO `img` with a px `width` attribute that renders at its
+container width (R-IMG-11).
+13. No non-MSO layout table outside the R-TBL-01 constructs; no empty
+unsized cells (R-TBL-01, R-TBL-05).
+
+## 19. Change log
+
+- 2026-09-27: Initial catalogue, from published HTML-email practice and
+  client-capture tooling. MIME and RFC 8058 rules verified against RFC texts.
+- 2026-09-27: Div-first adopted after a survey of layout patterns: R-LAY-01, -04,
+  -06…-09 and -14 rewritten; §4b TBL added; R-IMG-11 (Samsung split),
+  R-A11Y-10 (no sectioning elements) added; R-TXT-09 revised (Outlook 365
+  list indent).
+- 2026-09-29: Implementation issues resolved: R-RST-13 owns reset
+  line 8; R-CSS-09's fixed set lists R-RST-08 and the literal selectors;
+  R-LAY-16 admits `mailColumns`. From code review:
+  R-CSS-07 gains `W-CSS-OVER-BUDGET`; R-INT-02 hover rules carry `!important`.
+- 2026-09-29: Published in this repository as `docs/rendering-rules.md`.
+- 2026-09-30: Source and status cells restated to name public sources
+  and the capture that settles each open rule.

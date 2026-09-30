@@ -6,7 +6,7 @@ isomorphic reactive UI framework for Nim.
 Email is not the web. A message is read in dozens of clients whose HTML
 engines range from current WebKit (Apple Mail) to Microsoft Word (classic
 Outlook for Windows), through webmail sanitisers that rewrite or delete CSS
-(Gmail, Outlook.com, Yahoo). It is also *packaged* differently: one
+(Gmail, Outlook.com, Yahoo). It is also _packaged_ differently: one
 self-contained document, styles inlined, no scripts, wrapped in a MIME
 `multipart/alternative` with a plain-text part and optionally embedded images.
 

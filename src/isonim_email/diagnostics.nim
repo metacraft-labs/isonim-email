@@ -1,0 +1,183 @@
+## isonim_email/diagnostics.nim — stable codes and the EmailDiagnostic pipe.
+##
+## Codes are stable: a new code is added below, with a
+## negative-control test, before it is emitted. The prefix is the severity
+## (`E` error, `W` warning, `I` info) and the middle segment the area.
+##
+## Reconciliation with the tree builder: `EmailRenderer` raises
+## `EmailRenderError` (renderer.nim) whose message carries a stable
+## diagnostic code up front
+## (e.g. `E-STRUCT-REACTIVE-RESIDUE: …`). That stays — fatal render aborts
+## keep raising, and the existing tests pin that. What this module adds is
+## the conversion both ways: `toDiagnostic` parses a raised message into
+## an `EmailDiagnostic` (severity from the code prefix), and
+## `raiseDiagnostic` raises one through `EmailRenderError`, so later passes
+## can collect diagnostics and still abort through the same type.
+
+import std/strutils
+import ./renderer
+import ./target
+
+export renderer
+export target
+
+type Severity* = enum
+  sevInfo, sevWarning, sevError
+
+const
+  codeCssHarmful* = "E-CSS-HARMFUL"
+    ## Harmful in a weighted family, e.g. layout `display:flex` (R-OL-10)
+  codeSupportUnsupported* = "W-SUPPORT-UNSUPPORTED"
+    ## Unsupported in ≥ 5% of profile weight, with no declared fallback
+  codeSupportDegradation* = "I-SUPPORT-DEGRADATION"
+    ## Unsupported, with a declared fallback
+  codeThemeMissingToken* = "E-THEME-MISSING-TOKEN"
+    ## A required theme key is missing at theme load. Raised from
+    ## `style/tokens.nim` as `ThemeError` (that module stays framework-free
+    ## so the theme generator and the JS target avoid the renderer import);
+    ## the `CODE: message` shape converts via `toDiagnostic`.
+  codeVocabBadValue* = "E-VOCAB-BAD-VALUE"
+    ## A value fails its declared type. Raised from `style/units.nim`,
+    ## `style/colors.nim` and `style/shorthand.nim` as `StyleError`
+    ## (framework-free, same seam as `ThemeError`).
+  codeCssInvalid* = "E-CSS-INVALID"
+    ## The CSS serialiser rejected a rule (R-CSS-05). Raised from
+    ## `style/css.nim` and `style/classes.nim` as `StyleError`.
+  codeLayoutMarginConverted* = "W-LAYOUT-MARGIN-CONVERTED"
+    ## P5 moved a margin to cell padding (R-OL-04). Collected from
+    ## `passes/styles.nim` (framework-touching, so a diagnostic, not a
+    ## `StyleError`).
+  codeDarkRawColor* = "W-DARK-RAW-COLOR"
+    ## A raw (non-token) colour under `darkMode = designed`.
+    ## Collected from `passes/styles.nim`, like the margin conversion.
+  codeCssBlockDropped* = "W-CSS-BLOCK-DROPPED"
+    ## P6 dropped a head block for budget (R-CSS-07). Collected from
+    ## `passes/head.nim` (the registered budget code).
+  codeStructNoDocument* = "E-STRUCT-NO-DOCUMENT"
+    ## P1 found zero or more than one `mailDocument`.
+    ## Collected from `passes/validate.nim`.
+  codeStructInvalidUtf8* = "E-STRUCT-INVALID-UTF8"
+    ## P1 found a text node that is not valid UTF-8.
+    ## Collected from `passes/validate.nim`.
+  codeStructReactiveResidue* = "E-STRUCT-REACTIVE-RESIDUE"
+    ## P1 collected `assertNoReactiveResidue` instead of raising it.
+    ## Collected from `passes/validate.nim`.
+  codeA11yLangMissing* = "E-A11Y-LANG-MISSING"
+    ## `mailDocument` without `lang` (R-DOC-02). Collected from
+    ## `passes/validate.nim`.
+  codeA11yTitleMissing* = "E-A11Y-TITLE-MISSING"
+    ## `mailDocument` without `title` (R-DOC-10). Collected from
+    ## `passes/validate.nim`.
+  codeA11yNoH1* = "E-A11Y-NO-H1"
+    ## No `h1` anywhere in the tree (R-A11Y-03). Collected from
+    ## `passes/validate.nim`.
+  codeA11yAltMissing* = "E-A11Y-ALT-MISSING"
+    ## Image without `alt` and not decorative (R-A11Y-04, R-IMG-04).
+    ## Collected from `passes/validate.nim`.
+  codeA11yTableCaption* = "E-A11Y-TABLE-CAPTION"
+    ## `mailTable` without a `caption` child (R-A11Y-02). Collected
+    ## from `passes/a11y.nim`.
+  codeA11yHeadingSkip* = "W-A11Y-HEADING-SKIP"
+    ## Heading level skipped, e.g. h1 → h3 (R-TXT-10). Collected
+    ## from `passes/a11y.nim`.
+  codeA11yLinkText* = "W-A11Y-LINK-TEXT"
+    ## "Click here" style link text (R-A11Y-06). Collected from
+    ## `passes/lint.nim`.
+  codeA11yContrast* = "W-A11Y-CONTRAST"
+    ## Text/background pair below threshold in the light scheme
+    ## (R-A11Y-07). Collected from `passes/lint.nim`.
+  codeA11yAltLong* = "W-A11Y-ALT-LONG"
+    ## Alt longer than 60 characters (R-IMG-04, text-in-image
+    ## heuristic). Collected from `passes/lint.nim`.
+  codeSizeNearClip* = "W-SIZE-NEAR-CLIP"
+    ## Decoded HTML exceeds `EmailTarget.sizeBudget` (R-SIZE-01).
+    ## Emitted by `passes/lint.checkSize` (P10).
+  codeSizeClip* = "E-SIZE-CLIP"
+    ## Decoded HTML exceeds 100,000 bytes: Gmail will clip it
+    ## (R-SIZE-01). Emitted by `passes/lint.checkSize` (P10).
+  codeMimeHeader* = "E-MIME-HEADER"
+    ## An owned header value is invalid, e.g. an unsubscribe URI that
+    ## is not https (R-SND-01). Emitted by `mime/headers.ownedHeaders`.
+  codeMimeUnsubToken* = "W-MIME-UNSUB-TOKEN"
+    ## An unsubscribe URI without an opaque token of at least 16
+    ## characters (R-SND-02). Emitted by `mime/headers.ownedHeaders`.
+  codeUrlScheme* = "E-URL-SCHEME"
+    ## A forbidden URL scheme, e.g. a `data:` URI (R-IMG-08). Raised
+    ## from `assets.nim` as `AssetError` (framework-free, same seam as
+    ## `StyleError`); the `CODE: message` shape converts via
+    ## `toDiagnostic`.
+  codeAssetUnknown* = "E-ASSET-UNKNOWN"
+    ## An asset the store cannot resolve. Raised from `assets.nim` as
+    ## `AssetError`, like `codeUrlScheme`.
+
+type EmailDiagnostic* = object
+  severity*: Severity
+  code*: string
+  message*: string
+  origin*: SourceSpan
+  families*: set[ClientFamily]
+  weight*: float
+  rules*: seq[string] ## Catalogue rule IDs (empty when none apply)
+
+proc severityOfCode*(code: string): Severity =
+  ## Derives severity from the code prefix. Raises `ValueError` on an
+  ## unknown prefix — codes are a closed registry, never ad-hoc strings.
+  if code.startsWith("E-"):
+    sevError
+  elif code.startsWith("W-"):
+    sevWarning
+  elif code.startsWith("I-"):
+    sevInfo
+  else:
+    raise newException(ValueError,
+      "diagnostic code '" & code &
+      "' has no E-/W-/I- prefix (register it in diagnostics.nim first)")
+
+proc hasErrors*(d: openArray[EmailDiagnostic]): bool =
+  ## True when any diagnostic is an error.
+  for diag in d:
+    if diag.severity == sevError:
+      return true
+  false
+
+proc `$`*(severity: Severity): string =
+  case severity
+  of sevInfo: "info"
+  of sevWarning: "warning"
+  of sevError: "error"
+
+proc `$`*(d: EmailDiagnostic): string =
+  ## `file:line:col: severity CODE: message [R-…]`. The
+  ## rule list is omitted when empty.
+  result = $d.origin & ": " & $d.severity & " " & d.code & ": " & d.message
+  if d.rules.len > 0:
+    result.add(" [" & d.rules.join(", ") & "]")
+
+proc toDiagnostic*(msg: string;
+                   origin = SourceSpan();
+                   families: set[ClientFamily] = {};
+                   weight = 0.0;
+                   rules: seq[string] = @[]): EmailDiagnostic =
+  ## Parses an `EmailRenderError`-style `CODE: message` string into an
+  ## `EmailDiagnostic`, deriving severity from the code prefix. Raises
+  ## `ValueError` when the message carries no `CODE: ` head — every raise
+  ## site must name its stable code.
+  let sep = msg.find(": ")
+  if sep <= 0:
+    raise newException(ValueError,
+      "cannot convert to EmailDiagnostic (no 'CODE: ' head): '" & msg & "'")
+  let code = msg[0 ..< sep]
+  EmailDiagnostic(
+    severity: severityOfCode(code),
+    code: code,
+    message: msg[sep + 2 .. ^1],
+    origin: origin,
+    families: families,
+    weight: weight,
+    rules: rules,
+  )
+
+proc raiseDiagnostic*(d: EmailDiagnostic) {.noreturn.} =
+  ## Raises a diagnostic through `EmailRenderError`, keeping one abort
+  ## type for the whole pipeline.
+  raise newException(EmailRenderError, d.code & ": " & d.message)

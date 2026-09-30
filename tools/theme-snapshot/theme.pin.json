@@ -1,0 +1,14 @@
+{
+  "source": "https://github.com/metacraft-labs/codetracer-design-system/tree/8fb101f29a2269d87b246e87f6c39eff454f0a3a/brand/brand.json (and alias/alias.json, mapped/mapped.json)",
+  "repo": "https://github.com/metacraft-labs/codetracer-design-system",
+  "commit": "8fb101f29a2269d87b246e87f6c39eff454f0a3a",
+  "commitDate": "2026-09-23",
+  "fetchDate": "2026-09-27",
+  "brand": "brand.json",
+  "brandSha256": "d65d49db892c638b8ba221570bd76e3babc91668708bca8520fb5a7608be4b70",
+  "alias": "alias.json",
+  "aliasSha256": "f84e6d9a3296501d188e2f9ebf7ad11d61317749919a83b60f0b740eb84f3ce2",
+  "mapped": "mapped.json",
+  "mappedSha256": "deb29aad71b80a17eda81ae2c0b76f0ba268bb5e381dda7e2c436cf7757fad76",
+  "license": "Metacraft-owned design tokens (no separate licence file; same organisation, public repo)"
+}

@@ -1,0 +1,21 @@
+# Cross-repo siblings cloned by CI at the explicit SHAs pinned below.
+#
+# This list is the set of `--path:../<repo>/...` entries the Justfile's
+# `src-paths` and `config.nims` resolve: the framework (isonim), its
+# platform seam (nim-everywhere), the two status-im trees isonim
+# re-exports (nim-faststreams, nim-stew), and isonim-docs (only
+# `core/tokens`, the DTCG resolver, is imported).
+#
+# WHY EVERY ENTRY CARRIES AN EXPLICIT `=<40-hex sha>` (the isonim-tui
+# pattern): a BARE entry resolves from the workspace lock, and no lock is
+# published for this repo's branch tip — so a bare entry would fail
+# resolution instead of cloning. Each SHA below is the tip of the ref
+# that sibling's own repository actually uses (verified with
+# `git ls-remote`). These pins are the fallback, not the goal: once this
+# repo joins the workspace-lock cross-repo CI, delete the `=<sha>`
+# suffixes and let the lock pin them.
+isonim=900af969346413a9d11795305fba89e27367c5c4  # isonim@dev tip
+nim-everywhere=fee7a232a337ded10932366626962b9b869a228e  # nim-everywhere@dev tip
+nim-faststreams=82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503  # nim-faststreams@dev tip
+nim-stew=cc405401637dc7a32bea708374e26e33f6deca44  # nim-stew@codetracer tip
+isonim-docs=4719b9820004fda250bc272877bd579e419b4783  # isonim-docs@dev tip (DTCG resolver)

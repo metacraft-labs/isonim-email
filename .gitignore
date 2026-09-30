@@ -7,3 +7,6 @@ build/
 node_modules/
 *.swp
 .DS_Store
+test-logs/
+bench-results/
+.pre-commit-config.yaml

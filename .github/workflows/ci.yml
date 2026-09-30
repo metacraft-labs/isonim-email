@@ -1,0 +1,301 @@
+name: CI
+
+# Every job here compiles against sibling repositories that are NOT part of
+# this checkout: the Justfile's `src-paths` and `config.nims` carry
+# `--path:../<repo>/...` for each entry in `.github/sibling-repos`. The
+# siblings are cloned below with the shared clone-repo action at the same
+# SHAs `.github/sibling-repos` pins, into one shared workspace directory,
+# so the `../isonim`-relative layout config.nims expects exists on the
+# runner exactly like it does in local development. The SHAs are
+# deliberately duplicated here (not read from the file) until this repo
+# joins the workspace-lock cross-repo CI, which will pin them per commit.
+
+on:
+  push:
+    branches: [dev, stable]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint (${{ join(matrix.runner, '-') }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          [
+            [self-hosted, linux, x64],
+            [self-hosted, linux, arm64],
+            [self-hosted, macos, arm64],
+          ]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: isonim-email
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/isonim
+          ref: 900af969346413a9d11795305fba89e27367c5c4
+          path: isonim
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-everywhere
+          ref: fee7a232a337ded10932366626962b9b869a228e
+          path: nim-everywhere
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-faststreams
+          ref: 82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503
+          path: nim-faststreams
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-stew
+          ref: cc405401637dc7a32bea708374e26e33f6deca44
+          path: nim-stew
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/isonim-docs
+          ref: 4719b9820004fda250bc272877bd579e419b4783
+          path: isonim-docs
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/devops-modules/.github/setup-nix@dev
+        with:
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Guard inputs are explicit because this workflow checks out into
+      # `path:` subdirectories: the workspace root is not a git repo,
+      # so mainline auto-detection and the default workflow glob would
+      # both fail. Mainline is `dev` (product repo, branching-policy).
+      - uses: metacraft-labs/metacraft-github-actions/assert-workflow-triggers@dev
+        with:
+          mainline: dev
+          workflows: isonim-email/.github/workflows/ci.yml
+
+      - name: Run linters
+        working-directory: isonim-email
+        run: nix develop --command just lint
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-logs-${{ join(matrix.runner, '-') }}
+          path: isonim-email/test-logs/
+          retention-days: 1
+
+      - name: Mirror artifacts to S3 (non-blocking)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: isonim-email
+        env:
+          MCL_S3_ARTIFACTS_ENDPOINT: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          MCL_S3_ARTIFACTS_BUCKET: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          MCL_S3_ARTIFACTS_REGION: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+          S3_OBJECT_PREFIX: lint-logs/${{ github.run_id }}/${{ join(matrix.runner, '-') }}
+        run: |
+          set -u
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${MCL_S3_ARTIFACTS_ENDPOINT:-}" ]]; then
+            echo "S3 artifact store not configured for this repo; skipping mirror."
+            exit 0
+          fi
+          nix shell nixpkgs#awscli2 -c \
+            aws --endpoint-url "$MCL_S3_ARTIFACTS_ENDPOINT" \
+                --region "${MCL_S3_ARTIFACTS_REGION:-garage}" \
+                s3 cp --recursive test-logs/ \
+                "s3://${MCL_S3_ARTIFACTS_BUCKET:-ci-artifacts}/$S3_OBJECT_PREFIX/" \
+            || echo "::warning title=S3 artifact mirror::upload failed (non-blocking)"
+
+  test:
+    name: Test (${{ join(matrix.runner, '-') }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          [
+            [self-hosted, linux, x64],
+            [self-hosted, linux, arm64],
+            [self-hosted, macos, arm64],
+          ]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: isonim-email
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/isonim
+          ref: 900af969346413a9d11795305fba89e27367c5c4
+          path: isonim
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-everywhere
+          ref: fee7a232a337ded10932366626962b9b869a228e
+          path: nim-everywhere
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-faststreams
+          ref: 82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503
+          path: nim-faststreams
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/nim-stew
+          ref: cc405401637dc7a32bea708374e26e33f6deca44
+          path: nim-stew
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+        with:
+          repo: metacraft-labs/isonim-docs
+          ref: 4719b9820004fda250bc272877bd579e419b4783
+          path: isonim-docs
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: metacraft-labs/devops-modules/.github/setup-nix@dev
+        with:
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Guard inputs are explicit because this workflow checks out into
+      # `path:` subdirectories: the workspace root is not a git repo,
+      # so mainline auto-detection and the default workflow glob would
+      # both fail. Mainline is `dev` (product repo, branching-policy).
+      - uses: metacraft-labs/metacraft-github-actions/assert-workflow-triggers@dev
+        with:
+          mainline: dev
+          workflows: isonim-email/.github/workflows/ci.yml
+
+      - name: Run tests
+        working-directory: isonim-email
+        run: nix develop --command just test
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ join(matrix.runner, '-') }}
+          path: isonim-email/test-logs/
+          retention-days: 1
+
+      - name: Mirror artifacts to S3 (non-blocking)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: isonim-email
+        env:
+          MCL_S3_ARTIFACTS_ENDPOINT: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          MCL_S3_ARTIFACTS_BUCKET: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          MCL_S3_ARTIFACTS_REGION: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+          S3_OBJECT_PREFIX: test-logs/${{ github.run_id }}/${{ join(matrix.runner, '-') }}
+        run: |
+          set -u
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${MCL_S3_ARTIFACTS_ENDPOINT:-}" ]]; then
+            echo "S3 artifact store not configured for this repo; skipping mirror."
+            exit 0
+          fi
+          nix shell nixpkgs#awscli2 -c \
+            aws --endpoint-url "$MCL_S3_ARTIFACTS_ENDPOINT" \
+                --region "${MCL_S3_ARTIFACTS_REGION:-garage}" \
+                s3 cp --recursive test-logs/ \
+                "s3://${MCL_S3_ARTIFACTS_BUCKET:-ci-artifacts}/$S3_OBJECT_PREFIX/" \
+            || echo "::warning title=S3 artifact mirror::upload failed (non-blocking)"
+
+  nix-build:
+    name: Nix build (${{ join(matrix.runner, '-') }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          [
+            [self-hosted, linux, x64],
+            [self-hosted, linux, arm64],
+            [self-hosted, macos, arm64],
+          ]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: isonim-email
+
+      - uses: metacraft-labs/devops-modules/.github/setup-nix@dev
+        with:
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Guard inputs are explicit because this workflow checks out into
+      # `path:` subdirectories: the workspace root is not a git repo,
+      # so mainline auto-detection and the default workflow glob would
+      # both fail. Mainline is `dev` (product repo, branching-policy).
+      - uses: metacraft-labs/metacraft-github-actions/assert-workflow-triggers@dev
+        with:
+          mainline: dev
+          workflows: isonim-email/.github/workflows/ci.yml
+
+      - name: Build default package
+        working-directory: isonim-email
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          nix build .#default 2>&1 | tee test-logs/nix-build.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-build-logs-${{ join(matrix.runner, '-') }}
+          path: isonim-email/test-logs/
+          retention-days: 1
+
+      - name: Mirror artifacts to S3 (non-blocking)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: isonim-email
+        env:
+          MCL_S3_ARTIFACTS_ENDPOINT: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          MCL_S3_ARTIFACTS_BUCKET: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          MCL_S3_ARTIFACTS_REGION: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}
+          AWS_EC2_METADATA_DISABLED: "true"
+          S3_OBJECT_PREFIX: nix-build-logs/${{ github.run_id }}/${{ join(matrix.runner, '-') }}
+        run: |
+          set -u
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${MCL_S3_ARTIFACTS_ENDPOINT:-}" ]]; then
+            echo "S3 artifact store not configured for this repo; skipping mirror."
+            exit 0
+          fi
+          nix shell nixpkgs#awscli2 -c \
+            aws --endpoint-url "$MCL_S3_ARTIFACTS_ENDPOINT" \
+                --region "${MCL_S3_ARTIFACTS_REGION:-garage}" \
+                s3 cp --recursive test-logs/ \
+                "s3://${MCL_S3_ARTIFACTS_BUCKET:-ci-artifacts}/$S3_OBJECT_PREFIX/" \
+            || echo "::warning title=S3 artifact mirror::upload failed (non-blocking)"
