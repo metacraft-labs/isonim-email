@@ -8,8 +8,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Bump by hand when crop/mask/wait changes.
-export const ADAPTER_VERSION = 1;
+// Bump by hand when crop/mask/wait changes, or anything else that
+// changes the pixels for the same MIME. 2: story images are served
+// from the local fixture host (fixture_host.ts) instead of failing to
+// load, so every earlier capture of an image-bearing story is stale.
+export const ADAPTER_VERSION = 2;
 
 export interface CacheKeyParts {
   mimeSha: string;

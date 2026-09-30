@@ -139,6 +139,16 @@ const
     ## message was built (R-IMG-07). Raised by `mime/message.toMessage`
     ## and `toRfc5322`.
 
+  codeLowerMissing* = "E-LOWER-MISSING"
+    ## A vocabulary element, or a prop of a lowered element, with no
+    ## lowering yet. Never passed through as a raw custom tag, never
+    ## dropped silently. Collected from `lower/elements.nim` and
+    ## `lower/image.nim`.
+  codeLayoutImageWidth* = "E-LAYOUT-IMAGE-WIDTH"
+    ## A `mailImage` with no px width and no known intrinsic size, so
+    ## the required `width` attribute cannot be emitted (R-IMG-01).
+    ## Collected from `lower/image.nim`.
+
 type EmailDiagnostic* = object
   severity*: Severity
   code*: string

@@ -24,7 +24,13 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
-import { darkNeeded, changedFilesSince, selectFamilies } from "./affected.ts";
+import {
+  BACKEND_A_FAMILIES,
+  darkNeeded,
+  changedFilesSince,
+  familiesForChange,
+  selectFamilies,
+} from "./affected.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -175,13 +181,16 @@ describe("selection + cache wiring", () => {
     const prevDir = discoverPrev(out);
     assert.ok(prevDir !== null, "no previous run discovered");
     const prevTree = readJson(join(prevDir as string, "run.json")).tree_hash;
+    const curTree = readJson(join(out, "run.json")).tree_hash;
     const run = (cmd: string[]): string =>
       execFileSync(cmd[0], cmd.slice(1), {
         cwd: repoRoot,
         encoding: "utf8",
       }) as string;
-    const changed = changedFilesSince(run, prevTree);
-    const wantFamilies = new Set(selectFamilies(changed));
+    const changed = changedFilesSince(run, prevTree, curTree);
+    const wantFamilies = new Set(
+      familiesForChange(changed, BACKEND_A_FAMILIES),
+    );
     const wantSchemes = new Set(
       darkNeeded(changed) ? ["light", "dark"] : ["light"],
     );

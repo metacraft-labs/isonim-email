@@ -127,6 +127,7 @@ const emailTestSpecs = @[
   "t5_pass_order",
   "t5_ganga_strip",
   "t5_media_queries",
+  "t5_lower_elements",
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",
@@ -149,7 +150,7 @@ const emailTestSpecs = @[
   # "repro daemon environment breaks node worker threads".
   "e2e_local_shots_latency",
   "e2e_local_capture_deterministic",
-  "e2e_review_missing_element",
+  "e2e_brief_diff_missing_element",
   "e2e_dom_assertions",
 ]
 

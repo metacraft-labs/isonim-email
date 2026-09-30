@@ -26,6 +26,7 @@ import ./assets
 import ./serialize
 import ./style/tokens
 import ./lower/document
+import ./lower/elements
 import ./passes/validate
 import ./passes/styles
 import ./passes/head
@@ -229,8 +230,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
                 target = defaultTarget(); profile = consumer;
                 strict = false; assets: AssetStore = nil): RenderedEmail =
   ## Runs the pipeline over `doc`: validate, styles, head, a11y and
-  ## lint collect diagnostics; the tree is then cloned, lowered to the
-  ## document shell and serialised. The original tree is never gutted:
+  ## lint collect diagnostics; the tree is then cloned, its vocabulary
+  ## elements lowered (P4: an element with no lowering is collected as
+  ## `E-LOWER-MISSING`, never emitted raw), wrapped in the document
+  ## shell and serialised. The original tree is never gutted:
   ## it is returned as `semantic`, carrying the resolved styles and
   ## classes the passes attached.
   ##
@@ -253,9 +256,12 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
 
-  # Lowering reads the same tree the passes just walked; a failure
-  # here aborts the render either way, so strict changes nothing.
+  # Lowering reads the same tree the passes just walked. P4 lowers the
+  # vocabulary elements of the clone (images read their intrinsic
+  # size from the assets just published) and collects an error for
+  # any element with no lowering; the document shell then wraps it.
   let work = cloneTree(doc)
+  diags.add(lowerElements(work, theme, found.assets))
   let r = EmailRenderer()
   let sections = r.createElement("div")
   let kids =

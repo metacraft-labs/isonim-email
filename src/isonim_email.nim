@@ -11,6 +11,8 @@ import isonim_email/[renderer, ir, serialize, vocabulary, target, diagnostics,
   render]
 import isonim_email/mso/cond
 import isonim_email/lower/document
+import isonim_email/lower/elements
+import isonim_email/lower/image
 import isonim_email/support/[caniemail_data, families]
 import isonim_email/passes/lint
 import isonim_email/passes/styles
@@ -48,6 +50,8 @@ export diagnostics
 export render
 export cond
 export document
+export elements
+export image
 export caniemail_data
 export families
 export lint

@@ -14,3 +14,16 @@ which recaptures the matrix fresh (`--no-cache`) and regenerates this
 tree from that run — at end-of-session approval, never by hand.
 The flag adds and overwrites; it never prunes variants that left
 the matrix (delete those deliberately, in the same approval).
+
+## Awaiting re-approval
+
+A story whose baselines are known to be out of date, but whose new
+captures have not been reviewed yet, carries a `PENDING-REVIEW` file in
+its directory stating why. The Tier-2 check does not compare such a
+story; every run prints one "awaiting re-approval" line per pending
+story and counts them in its verdict, and `--require-approved` turns
+any pending story into a failure. `--update-baselines` leaves pending
+stories alone; after a real visual review of the captures,
+`just email-capture-ci --update-baselines --approve <story>` writes
+their baselines and removes the marker. The canary can never be
+pending: Tier-1 hashes it on every run.

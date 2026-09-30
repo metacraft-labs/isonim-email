@@ -14,13 +14,33 @@
 // regenerates both baseline kinds from the run dir (end-of-session
 // approval only).
 //
+// Approval state: a story whose baselines are known to be out of
+// date and not yet re-approved carries a PENDING-REVIEW file in its
+// baseline directory, holding the reason. Tier-2 does not compare
+// such a story (its baselines no longer describe an approved state),
+// and every run says so: one "awaiting re-approval" line per pending
+// story plus the count in the verdict. It is never a silent pass:
+// --require-approved turns any pending story into a failure (for
+// release gates), --update-baselines leaves pending stories alone,
+// and only --approve STORY[,STORY] — after a real review of the
+// captures — writes their baselines and removes the marker. The
+// canary can never be pending: Tier-1 hashes it on every run.
+//
 // Usage:
 //   node tools/capture/email-capture-ci.ts RUN_DIR [--assert]
-//     [--update-baselines] [--baselines DIR]
+//     [--require-approved] [--update-baselines [--approve S,…]]
+//     [--baselines DIR]
 //   node tools/capture/email-capture-ci.ts --help
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { diffPng } from "./perceptual.ts";
@@ -30,6 +50,48 @@ const repoRoot = resolve(scriptDir, "..", "..");
 
 export const CANARY_STORY = "canary";
 export const TIER2_MAX_DIFF_RATIO = 0.001;
+export const PENDING_MARKER = "PENDING-REVIEW";
+
+// Stories whose baselines await re-approval, with the recorded
+// reason: every <baselinesDir>/<story>/PENDING-REVIEW. An empty
+// marker, or a marker on the canary, is refused (throws): a pending
+// state must say why, and Tier-1 cannot be suspended.
+export function readPendingReview(baselinesDir: string): Map<string, string> {
+  const pending = new Map<string, string>();
+  if (!existsSync(baselinesDir)) return pending;
+  for (const e of readdirSync(baselinesDir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const marker = join(baselinesDir, e.name, PENDING_MARKER);
+    if (!existsSync(marker)) continue;
+    const reason = readFileSync(marker, "utf8").trim();
+    if (reason.length === 0)
+      throw new Error(
+        `capture-ci: ${marker} is empty — a pending review must record why the baselines are out of date`,
+      );
+    if (e.name === CANARY_STORY)
+      throw new Error(
+        `capture-ci: ${marker} — the canary is Tier-1 and can never await re-approval`,
+      );
+    pending.set(e.name, reason);
+  }
+  return pending;
+}
+
+// One line per pending story present in the run: how many of its
+// done captures Tier-2 did not compare, and why.
+export function tier2Pending(runDir: string, baselinesDir: string): string[] {
+  const pending = readPendingReview(baselinesDir);
+  const counts = new Map<string, number>();
+  for (const e of doneEntries(readIndex(runDir)))
+    if (pending.has(e.story))
+      counts.set(e.story, (counts.get(e.story) ?? 0) + 1);
+  return [...counts.keys()]
+    .sort()
+    .map(
+      (story) =>
+        `capture-ci: Tier-2 ${story} awaiting re-approval — ${counts.get(story)} capture(s) not compared (${pending.get(story)})`,
+    );
+}
 
 interface IndexEntry {
   story: string;
@@ -109,14 +171,18 @@ export function tier1Check(runDir: string, baselinesDir: string): string[] {
 // diffPng; fails when diffRatio > TIER2_MAX_DIFF_RATIO. Returns one
 // message per failing variant (empty = pass); throws when the run
 // holds no done captures at all.
+// Stories awaiting re-approval (PENDING-REVIEW) are not compared;
+// tier2Pending reports them.
 export function tier2Check(runDir: string, baselinesDir: string): string[] {
   const entries = doneEntries(readIndex(runDir));
   if (entries.length === 0)
     throw new Error(
       `capture-ci: Tier-2 found no done captures in ${runDir} — refusing a vacuous pass`,
     );
+  const pending = readPendingReview(baselinesDir);
   const failures: string[] = [];
   for (const entry of entries) {
+    if (pending.has(entry.story)) continue;
     const variant = variantOf(entry);
     const baseline = join(
       baselinesDir,
@@ -195,18 +261,42 @@ export function tier3Check(runDir: string): string[] {
 // --update-baselines: copy every done capture's PNG into the
 // baselines tree and (re)write the canary .sha256 files from the
 // same bytes. Adds and overwrites; never prunes stale variants.
+// Stories awaiting re-approval are skipped unless named in
+// `approve`: approving writes their baselines and removes the
+// PENDING-REVIEW marker. Naming a story that is not pending is
+// refused, so an approval list cannot go stale silently.
 export function updateBaselines(
   runDir: string,
   baselinesDir: string,
-): { pngs: number; hashes: number } {
+  approve: string[] = [],
+): { pngs: number; hashes: number; skipped: string[]; approved: string[] } {
   const entries = doneEntries(readIndex(runDir));
   if (entries.length === 0)
     throw new Error(
       `capture-ci: no done captures in ${runDir} — refusing to write baselines from an empty run`,
     );
+  const pending = readPendingReview(baselinesDir);
+  const inRun = new Set(entries.map((e) => e.story));
+  for (const story of approve) {
+    if (!pending.has(story))
+      throw new Error(
+        `capture-ci: --approve ${story}: that story is not awaiting re-approval`,
+      );
+    if (!inRun.has(story))
+      throw new Error(
+        `capture-ci: --approve ${story}: the run holds no done captures of it`,
+      );
+  }
+  const approved = new Set<string>();
+  const skipped = new Set<string>();
   let pngs = 0;
   let hashes = 0;
   for (const entry of entries) {
+    if (pending.has(entry.story) && !approve.includes(entry.story)) {
+      skipped.add(entry.story);
+      continue;
+    }
+    if (pending.has(entry.story)) approved.add(entry.story);
     const bytes = readFileSync(join(runDir, entry.png as string));
     const storyDir = join(baselinesDir, entry.story);
     mkdirSync(storyDir, { recursive: true });
@@ -222,16 +312,30 @@ export function updateBaselines(
       hashes++;
     }
   }
-  return { pngs, hashes };
+  for (const story of approved)
+    rmSync(join(baselinesDir, story, PENDING_MARKER));
+  return {
+    pngs,
+    hashes,
+    skipped: [...skipped].sort(),
+    approved: [...approved].sort(),
+  };
 }
 
-const USAGE = `usage: email-capture-ci RUN_DIR [--assert] [--update-baselines] [--baselines DIR]
+const USAGE = `usage: email-capture-ci RUN_DIR [--assert] [--require-approved]
+                      [--update-baselines [--approve S,…]] [--baselines DIR]
 
 options:
   --assert             also run Tier-3 over the run's assertions.json
                         files (any recorded DOM-assertion failure fails)
+  --require-approved   fail when any story awaits re-approval
+                        (a PENDING-REVIEW marker in its baseline dir)
   --update-baselines   regenerate tests/baselines/ from RUN_DIR instead of
-                        checking (end-of-session approval only)
+                        checking (end-of-session approval only); stories
+                        awaiting re-approval are left alone
+  --approve S,…        with --update-baselines: also write these pending
+                        stories' baselines and clear their markers (only
+                        after a real review of the captures)
   --baselines DIR      baseline tree (default: tests/baselines)
   --help               this text
 `;
@@ -246,6 +350,8 @@ function main(): void {
   let runDir: string | null = null;
   let update = false;
   let gate = false;
+  let requireApproved = false;
+  let approve: string[] = [];
   let baselinesDir = join(repoRoot, "tests", "baselines");
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -261,6 +367,17 @@ function main(): void {
       update = true;
       continue;
     }
+    if (arg === "--require-approved") {
+      requireApproved = true;
+      continue;
+    }
+    if (arg === "--approve") {
+      const value = argv[++i];
+      if (value === undefined)
+        fail(`capture-ci: flag '--approve' needs a value\n${USAGE}`);
+      approve = value.split(",").filter((v) => v.length > 0);
+      continue;
+    }
     if (arg === "--baselines") {
       const value = argv[++i];
       if (value === undefined)
@@ -274,38 +391,56 @@ function main(): void {
     runDir = resolve(repoRoot, arg);
   }
   if (runDir === null) fail(`capture-ci: missing RUN_DIR\n${USAGE}`);
+  if (approve.length > 0 && !update)
+    fail(`capture-ci: --approve only works with --update-baselines\n${USAGE}`);
 
   if (update) {
-    let result: { pngs: number; hashes: number };
+    let result: ReturnType<typeof updateBaselines>;
     try {
-      result = updateBaselines(runDir, baselinesDir);
+      result = updateBaselines(runDir, baselinesDir, approve);
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
     }
+    for (const story of result.skipped)
+      process.stdout.write(
+        `capture-ci: left ${story} alone — it awaits re-approval (review its captures, then pass --approve ${story})\n`,
+      );
     process.stdout.write(
-      `capture-ci: wrote ${result.pngs} baseline PNGs + ${result.hashes} canary hashes to ${baselinesDir} (from ${runDir})\n`,
+      `capture-ci: wrote ${result.pngs} baseline PNGs + ${result.hashes} canary hashes to ${baselinesDir} (from ${runDir})${result.approved.length > 0 ? `; approved ${result.approved.join(", ")}` : ""}\n`,
     );
     return;
   }
 
   let tier1: string[];
   let tier2: string[];
+  let pending: string[];
   let tier3: string[] = [];
   try {
     tier1 = tier1Check(runDir, baselinesDir);
     tier2 = tier2Check(runDir, baselinesDir);
+    pending = tier2Pending(runDir, baselinesDir);
     if (gate) tier3 = tier3Check(runDir);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
-  for (const line of [...tier1, ...tier2, ...tier3])
+  for (const line of [...tier1, ...tier2, ...pending, ...tier3])
     process.stdout.write(`${line}\n`);
-  if (tier1.length > 0 || tier2.length > 0 || tier3.length > 0)
+  const pendingNote =
+    pending.length > 0
+      ? `; ${pending.length} story(ies) awaiting re-approval, not compared`
+      : "";
+  const pendingFail = requireApproved ? pending.length : 0;
+  if (
+    tier1.length > 0 ||
+    tier2.length > 0 ||
+    tier3.length > 0 ||
+    pendingFail > 0
+  )
     fail(
-      `capture-ci: FAIL — Tier-1 ${tier1.length} failure(s), Tier-2 ${tier2.length} failure(s), Tier-3 ${tier3.length} failure(s) (run at ${runDir})`,
+      `capture-ci: FAIL — Tier-1 ${tier1.length} failure(s), Tier-2 ${tier2.length} failure(s), Tier-3 ${tier3.length} failure(s)${requireApproved ? `, ${pendingFail} story(ies) awaiting re-approval (--require-approved)` : pendingNote} (run at ${runDir})`,
     );
   process.stdout.write(
-    `capture-ci: PASS — Tier-1 + Tier-2${gate ? " + Tier-3" : ""} clean (run at ${runDir})\n`,
+    `capture-ci: PASS — Tier-1 + Tier-2${gate ? " + Tier-3" : ""} clean${pendingNote} (run at ${runDir})\n`,
   );
 }
 

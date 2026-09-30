@@ -2,7 +2,8 @@
 ## (`test_emc_top_five_impossible`): every
 ## story carries `lang`/`dir` on `html` and the article wrapper,
 ## `role="presentation"` on every layout table, an `h1`, and `alt` on
-## every image. The reference template set will subsume the seeds (see
+## every image — checked on the lowered `img`, never on a raw
+## `mailImage`. The reference template set will subsume the seeds (see
 ## `tests/stories/`); these checks run unchanged over it.
 ##
 ## No rule claim here: this is an end-to-end check, not a
@@ -17,14 +18,16 @@ import stories/seed_receipt
 import stories/seed_alert
 
 proc lowered(story: EmailNode): EmailNode =
-  ## The story through the current pipeline, which lowers only the
-  ## shell, so the story itself passes through as the sections
-  ## subtree; P7 backfills roles on the lowered tree.
+  ## The story through the current pipeline: P4 lowers its elements
+  ## (the seed images become `img`), the shell wraps the result, and
+  ## P7 backfills roles on the lowered tree.
   let target = defaultTarget()
   let diags = validate(story)
   doAssert diags.len == 0, "seed story must be P1-clean"
   let styled = applyStyles(story, defaultTheme(), target)
   let headed = assembleHead(styled.head, target)
+  doAssert not hasErrors(lowerElements(story, defaultTheme())),
+    "seed story must use only elements with a lowering"
   let html = lowerDocument(story, story, headed.blocks, target)
   discard applyA11y(html)
   html
@@ -67,8 +70,8 @@ suite "EMC top five over seed stories":
             check node.attrs["alt"].len > 0
             inc imgsVisited
           if node.tag == "mailImage":
-            check "alt" in node.attrs
-            check node.attrs["alt"].len > 0
+            # A raw vocabulary tag in the lowered tree is the defect
+            # P4 exists to prevent.
             inc mailImagesVisited
         for i in countdown(node.children.high, 0):
           stack.add(node.children[i])
@@ -76,5 +79,6 @@ suite "EMC top five over seed stories":
     check wrapperChecked >= 1
     check tablesVisited >= 1
     check h1Visited >= 1
-    check imgsVisited >= 1
-    check mailImagesVisited >= 1
+    # Both seeds carry one image, and both reach the output as `img`.
+    check imgsVisited == 2
+    check mailImagesVisited == 0

@@ -27,6 +27,7 @@ import ./serialize
 import ./target
 import ./diagnostics
 import ./lower/document
+import ./lower/elements
 import ./passes/validate
 import ./passes/styles
 import ./passes/head
@@ -133,10 +134,12 @@ proc getStory*(name: string): Story =
 
 proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
   ## The current render path (lower/document.nim over the passes):
-  ## validate → P5 styles → P6 head → P7 a11y, then the document
-  ## shell and the serialiser. The `mailDocument` node's
-  ## own children become the wrapper-cell sections. Raises
-  ## `StoryError` when the tree fails validation.
+  ## validate → P5 styles → P6 head → P7 a11y → P4 element lowering,
+  ## then the document shell and the serialiser. The `mailDocument`
+  ## node's own children become the wrapper-cell sections. Raises
+  ## `StoryError` when the tree fails validation or holds an element
+  ## with no lowering (`E-LOWER-MISSING`): stories are fixed, so
+  ## either is a bug in the story.
   let found = validate(doc)
   if hasErrors(found):
     raise newException(StoryError,
@@ -145,6 +148,15 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
   let styled = applyStyles(doc, defaultTheme(), target)
   let headRes = assembleHead(styled.head, target)
   discard applyA11y(doc)
+  let lowered = lowerElements(doc, defaultTheme())
+  if hasErrors(lowered):
+    var first = lowered[0]
+    for d in lowered:
+      if d.severity == sevError:
+        first = d
+        break
+    raise newException(StoryError,
+      "story tree failed lowering: " & first.code & ": " & first.message)
   let r = EmailRenderer()
   let sections = r.createElement("div")
   let kids = doc.children # Copy: appendChild detaches as it moves.

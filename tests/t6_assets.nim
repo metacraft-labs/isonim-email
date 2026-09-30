@@ -33,10 +33,11 @@ proc countingHook(a: AssetRef): string =
 
 proc imgTpl(r: EmailRenderer; src: string): EmailNode =
   ui(r):
+    # Only elements with a lowering; the image's width comes from the
+    # published asset's intrinsic size.
     mailDocument(lang = "en", title = "Img"):
-      mailSection:
-        h1: text "Img"
-        mailImage(src = src, alt = "logo")
+      h1: text "Img"
+      mailImage(src = src, alt = "logo")
 
 var cdnCalls: seq[string]
 

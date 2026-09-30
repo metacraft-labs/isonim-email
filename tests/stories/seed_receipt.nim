@@ -6,11 +6,13 @@
 ##
 ## Backend-independent (tree building only).
 import isonim_email
+import fixture_images
 
 proc seedReceipt*(): EmailNode =
   ## A P1-clean receipt: `lang`/`dir`/`title`/`preheader`, an `h1`,
   ## one layout table (its `role` left for P7 to backfill) and a
-  ## `mailImage` with `alt`.
+  ## `mailImage` with `alt` and a px width. Only elements with a
+  ## lowering: an element without one fails the render.
   let r = EmailRenderer()
   let doc = r.createElement("mailDocument")
   r.setAttribute(doc, "lang", "en")
@@ -29,7 +31,10 @@ proc seedReceipt*(): EmailNode =
   r.appendChild(table, tr)
   r.appendChild(doc, table)
   let img = r.createElement("mailImage")
-  r.setAttribute(img, "src", "https://x.test/logo.png")
+  r.setAttribute(img, "src", fixtureImageUrl("logo.png"))
   r.setAttribute(img, "alt", "Acme logo")
+  # A 240×80 @2x PNG shown at 120 px (tests/stories/assets/logo.png,
+  # served to the capture browsers from the fixture host).
+  r.setStyle(img, "width", "120px")
   r.appendChild(doc, img)
   doc

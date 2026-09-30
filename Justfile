@@ -36,7 +36,7 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_review_missing_element.nim tests/e2e_dom_assertions.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
@@ -53,11 +53,11 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # drives the Mailgun transport against a local capture server. e2e_local_shots_latency likewise: it
 # shells out to node + just and reads the run dir off disk, as does
 # e2e_local_capture_deterministic (two full-matrix CLI runs plus
-# fc-list font checks), and e2e_review_missing_element (shells out
+# fc-list font checks), and e2e_brief_diff_missing_element (shells out
 # to node for the findings.ts rating and writes its baseline to
 # tmp), and e2e_dom_assertions (two gated CLI runs plus run-dir
 # reads).)
-tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim"
+tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim"
 
 # --- Default targets ---
 
@@ -113,8 +113,17 @@ theme-snapshot:
     nim c {{nim-flags}} {{src-paths}} --out:build/theme-snapshot --nimcache:build/nimcache-theme-snapshot -r tools/theme-snapshot/snapshot.nim tools/theme-snapshot/brand.json tools/theme-snapshot/alias.json tools/theme-snapshot/mapped.json tools/theme-snapshot/mapping.json tools/theme-snapshot/theme.pin.json src/isonim_email/style/metacraft_theme.nim 2>&1 | tee test-logs/theme-snapshot.log
 
 # Test: the full suite on the C backend, plus the backend-independent
-# passes on the JS backend, plus the capture emulation-transform tests.
-test: build-tailwind test-c test-js test-ts
+# passes on the JS backend, plus the capture emulation-transform tests,
+# plus the capture regression checks (Tier-1 + Tier-2, ~10-12 s).
+test: build-tailwind test-c test-js test-ts test-capture-ci
+
+# The capture regression checks as part of the full suite. The
+# baselines (Tier-1 exact hashes above all) are pinned to the
+# x86_64-linux capture environment, so other hosts say so loudly and
+# do not run them; run `just email-capture-ci` directly to see the
+# numbers anyway.
+test-capture-ci:
+    @if [ "$(uname -sm)" = "Linux x86_64" ]; then       just email-capture-ci;     else       echo "test-capture-ci: NOT RUN on $(uname -sm): the capture baselines are pinned to x86_64-linux";     fi
 
 # Test on the C backend (the default target).
 test-c:
@@ -153,16 +162,17 @@ test-ts:
 
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
-# when a Nim source is newer than its binary, so plain iterations
+# when a Nim source or a story fixture image (compiled in) is newer
+# than its binary, so plain iterations
 # stay fast; `just email-shots` and the e2e tests depend on this.
 email-shots-build: build-tailwind
     @mkdir -p build/capture build/review test-logs
-    @if [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories -name '*.nim' -newer build/capture/build-stories 2>/dev/null)" ]; then \
+    @if [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/capture/build-stories 2>/dev/null)" ]; then \
       echo "build/capture/build-stories up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/capture/build-stories --nimcache:build/nimcache-build-stories tools/capture/build_stories.nim 2>&1 | tee test-logs/email-shots-build.log; \
     fi
-    @if [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories -name '*.nim' -newer build/review/brief-driver 2>/dev/null)" ]; then \
+    @if [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/review/brief-driver 2>/dev/null)" ]; then \
       echo "build/review/brief-driver up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/review/brief-driver --nimcache:build/nimcache-brief-driver tools/review/brief_driver.nim 2>&1 | tee test-logs/brief-driver-build.log; \
@@ -174,7 +184,8 @@ email-shots-build: build-tailwind
 email-shots *args: email-shots-build
     node tools/capture/email-shots.ts {{args}}
 
-# CI regression checks (Tier-1 + Tier-2, Tier-3 record/gate).
+# Capture regression checks (Tier-1 + Tier-2, Tier-3 record/gate),
+# run locally as part of `just test` (test-capture-ci) or on their own.
 # Captures the full story set on the pinned CI matrix (core families ×
 # mobile,desktop × light, --full so MIME-diff selection cannot empty
 # it, --no-cache so every PNG is a real capture) into
@@ -198,7 +209,11 @@ email-shots *args: email-shots-build
 # the variants.
 # `just email-capture-ci --update-baselines` regenerates the
 # baselines from the fresh run — the ONLY way baselines change, at
-# end-of-session approval (see tests/baselines/README.md).
+# end-of-session approval (see tests/baselines/README.md). Stories
+# whose baselines await re-approval (a PENDING-REVIEW marker) are
+# reported on every run but not compared; `--approve <story>` (with
+# --update-baselines) re-approves one after a real review, and
+# `--require-approved` fails while any story is pending.
 email-capture-ci *args: email-shots-build
     out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; node tools/capture/email-shots.ts --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" && node tools/capture/email-capture-ci.ts "$out" {{args}}
 
@@ -220,7 +235,8 @@ lint-nim:
 # Syntax gate for the capture CLI: --help parses the whole file
 # (`node --check` cannot parse .ts type syntax on this Node), and
 # importing each emulation module plus the contact-sheet,
-# dom-assertions, perceptual, capture-ci, latency, launch and findings
+# dom-assertions, perceptual, capture-ci, latency, launch, fixture-host
+# and findings
 # modules parses those too (cache/affected ride along transitively).
 lint-ts:
     node tools/capture/email-shots.ts --help >/dev/null
@@ -231,6 +247,7 @@ lint-ts:
     node --input-type=module -e "await import('./tools/capture/email-capture-ci.ts')"
     node --input-type=module -e "await import('./tools/capture/latency.ts')"
     node --input-type=module -e "await import('./tools/capture/launch.ts')"
+    node --input-type=module -e "await import('./tools/capture/fixture_host.ts')"
     node --input-type=module -e "await import('./tools/review/findings.ts')"
 
 lint-nix:

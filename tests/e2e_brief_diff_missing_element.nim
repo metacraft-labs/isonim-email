@@ -1,15 +1,22 @@
-## E2e review: the review loop catches a missing element.
+## E2e brief diff: a removed element is reported missing by the
+## expected-elements diff.
 ##
-## The mechanical form of methodology checklist item 7 ("verify the
-## first review surfaces 'missing element' findings when you
-## deliberately break a view"): a fixture story WITH a hero mailImage
-## (alt 'Hero banner') has its expected block approved as a baseline
-## (written to tmp, read back); a broken variant renders without the
-## hero; `diffExpectedBlocks` (the brief-diff check) reports the hero
-## as missing; and `rateFinding` (tools/review/findings.ts, the real
-## module via node) caps the rating at ≤ 4 per the brief's report
-## format. The falsifying direction pins that the current (broken)
-## tree's own brief omits the hero.
+## What this test is: a comparison of two generated text briefs. A
+## fixture story WITH a hero mailImage (alt 'Hero banner') has its
+## expected block approved as a baseline (written to tmp, read back);
+## a broken variant renders without the hero; `diffExpectedBlocks`
+## reports the hero as missing; and `rateFinding`
+## (tools/review/findings.ts, the real module via node) turns one
+## missing element into a rating of at most 4, the brief's report
+## rule. The falsifying direction pins that the broken tree's own
+## brief omits the hero.
+##
+## What this test is not: a review. No reviewer runs and no screenshot
+## is looked at, so it does not show that a reviewer reading a real
+## capture notices the missing hero. That check needs a real reviewer
+## sub-agent on a real capture and stays unverified until one runs; the
+## brief diff here only proves the brief side of it (the expected block
+## names the element, and its absence is mechanically detectable).
 ##
 ## C-only: writes the baseline to tmp and shells out to node (the
 ## e2e_local_shots_latency precedent). A missing node fails loudly
@@ -22,8 +29,9 @@ const repoRoot = parentDir(parentDir(currentSourcePath()))
   ## runner's working directory is.
 
 proc seedHero*(includeHero = true): EmailNode =
-  ## Review fixture: an `h1`, an optional 600 px hero image, and a
-  ## footer section with an Unsubscribe link.
+  ## Brief-diff fixture: an `h1`, an optional 600 px hero image, and
+  ## a footer paragraph with an Unsubscribe link (only elements with a
+  ## lowering, so the story renders).
   let r = EmailRenderer()
   let doc = r.createElement("mailDocument")
   r.setAttribute(doc, "lang", "en")
@@ -39,7 +47,7 @@ proc seedHero*(includeHero = true): EmailNode =
     r.setAttribute(hero, "alt", "Hero banner")
     r.setStyle(hero, "width", "600px")
     r.appendChild(doc, hero)
-  let foot = r.createElement("mailSection")
+  let foot = r.createElement("p")
   let unsub = r.createElement("a")
   r.setAttribute(unsub, "href", "https://x.test/unsub")
   r.setTextContent(unsub, "Unsubscribe")
@@ -52,7 +60,7 @@ const heroText = "Welcome back\n\nA hero above the fold.\n"
   ## generator will produce these).
 
 registerStory(Story(name: "heroStory", group: "review",
-  description: "Review fixture: h1, hero image, footer.",
+  description: "Brief-diff fixture: h1, hero image, footer.",
   render: proc(): StoryHtml =
     (renderPipeline(seedHero(), defaultTarget()), heroText)))
 registerStoryTree("heroStory", proc(): EmailNode = seedHero())
@@ -79,8 +87,8 @@ proc rateViaFindings(missing: int): int =
       "rateFinding via node failed:\n" & output)
   output.strip().parseInt()
 
-suite "e2e review catches a missing element":
-  test "test_e2e_review_catches_missing_element":
+suite "e2e brief diff reports a missing element":
+  test "test_e2e_brief_diff_reports_missing_element":
     # Approve the baseline: the full tree's block, via a tmp file.
     let approved = expectedBlock(getStory("heroStory"), "gmailWeb",
       "mobile", "light")

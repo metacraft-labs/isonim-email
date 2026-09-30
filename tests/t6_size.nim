@@ -19,14 +19,15 @@ proc sizedTpl(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Size",
         preheader = "Your account is ready."):
-      mailSection:
-        mailColumn:
-          h1: text "Size"
-          mailImage(src = "https://cdn.example.com/hero.png?utm_source=" &
-            "news&utm_medium=email", alt = "Hero")
-          mailButton(href = "https://app.example.com/?utm_campaign=x",
-              border_radius = "6px"):
-            text "Open dashboard"
+      # Only elements with a lowering (an unlowered element would add
+      # its own error): a linked call to action stands in for the
+      # button, carrying the same URL and inline styles.
+      h1: text "Size"
+      mailImage(src = "https://cdn.example.com/hero.png?utm_source=" &
+        "news&utm_medium=email", alt = "Hero", width = "600px")
+      a(href = "https://app.example.com/?utm_campaign=x",
+          border_radius = "6px"):
+        text "Open dashboard"
 
 proc msoRegions(html: string): seq[(int, int)] =
   ## `[start, end)` of every `<!--[if mso…]>…<![endif]-->` region (the

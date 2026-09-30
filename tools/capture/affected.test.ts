@@ -1,6 +1,7 @@
 // tools/capture/affected.test.ts — fixtures: family
-// selection from the change, dark-scheme trigger, porcelain parsing, and
-// changed-files collection with a stubbed runner. Run with:
+// selection from the change, dark-scheme trigger, the all-families
+// fallback, and the tree-to-tree changed-files diff with a stubbed
+// runner (the real-git half lives in affected_worktree.test.ts). Run with:
 //   node --test tools/capture/affected.test.ts
 
 import { describe, it } from "node:test";
@@ -10,7 +11,7 @@ import {
   changedFilesSince,
   darkNeeded,
   mapAffectSet,
-  parsePorcelain,
+  familiesForChange,
   selectFamilies,
 } from "./affected.ts";
 
@@ -88,46 +89,32 @@ describe("darkNeeded", () => {
   });
 });
 
-describe("parsePorcelain", () => {
-  it("takes the path field of every non-empty line, incl '??', and unquotes", () => {
-    const out = [
-      " M src/isonim_email/mso/cond.nim",
-      "A  src/isonim_email/new.nim",
-      "?? tests/t7_stories.nim",
-      '?? "docs/my notes.md"',
-      "",
-    ].join("\n");
-    assert.deepEqual(parsePorcelain(out), [
-      "src/isonim_email/mso/cond.nim",
-      "src/isonim_email/new.nim",
-      "tests/t7_stories.nim",
-      "docs/my notes.md",
-    ]);
-  });
-
-  it("empty output → no files", () => {
-    assert.deepEqual(parsePorcelain(""), []);
-  });
-});
-
 describe("changedFilesSince", () => {
-  it("unions diff + status, trims, dedupes; runner stubbed", () => {
+  it("diffs the previous run's tree against this run's; runner stubbed", () => {
     const calls: string[][] = [];
     const run = (cmd: string[]): string => {
       calls.push(cmd);
-      if (cmd[1] === "diff") {
-        return "src/isonim_email/mso/cond.nim\nsrc/isonim_email/style/tokens.nim\n";
-      }
-      return " M src/isonim_email/style/tokens.nim\n?? tests/t7_stories.nim\n";
+      return "src/isonim_email/mso/cond.nim\n  \nsrc/isonim_email/style/tokens.nim\n";
     };
-    assert.deepEqual(changedFilesSince(run, "abc123"), [
+    assert.deepEqual(changedFilesSince(run, "abc123", "def456"), [
       "src/isonim_email/mso/cond.nim",
       "src/isonim_email/style/tokens.nim",
-      "tests/t7_stories.nim",
     ]);
     assert.deepEqual(calls, [
-      ["git", "diff", "--name-only", "abc123", "HEAD"],
-      ["git", "status", "--porcelain"],
+      ["git", "diff", "--name-only", "abc123", "def456"],
     ]);
+  });
+});
+
+describe("familiesForChange", () => {
+  const all = ["apple", "thunderbird", "wordApprox"];
+  it("selects from the changed files when there are any", () => {
+    assert.deepEqual(
+      familiesForChange(["src/isonim_email/mso/cond.nim"], all),
+      ["wordApprox"],
+    );
+  });
+  it("selects every family when the MIME changed but no file did", () => {
+    assert.deepEqual(familiesForChange([], all), all);
   });
 });

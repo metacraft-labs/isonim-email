@@ -38,7 +38,9 @@ proc seedOverflow*(fluid: bool): EmailNode =
   r.appendChild(tr, td)
   r.appendChild(table, tr)
   r.appendChild(doc, table)
-  let foot = r.createElement("mailSection")
+  # A plain `p` footer: the fixture needs only elements that lower
+  # (a `mailSection` has no lowering yet and would fail the render).
+  let foot = r.createElement("p")
   let unsub = r.createElement("a")
   r.setAttribute(unsub, "href", "https://x.test/unsubscribe")
   r.setStyle(unsub, "display", "inline-block")

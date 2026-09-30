@@ -6,6 +6,12 @@
 ## collected errors into a raise, and the asset store resolves the
 ## images the tree references. Same inputs render byte-identically.
 ##
+## The templates use only elements that have a lowering (headings,
+## paragraphs, links, `mailImage`): an element without one is an
+## error of its own (`E-LOWER-MISSING`, pinned in
+## t5_lower_elements.nim), which would drown the diagnostics these
+## tests count.
+##
 ## Backend-independent (tree building + pure passes + the in-memory
 ## asset store), so `just test` also runs it on JS.
 import std/[strutils, tables, unittest]
@@ -14,40 +20,32 @@ import isonim_email
 proc sigTpl(r: EmailRenderer; name: string): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Hello"):
-      mailSection:
-        mailColumn:
-          h1: text "Hello, " & name
-          p: text "static"
+      h1: text "Hello, " & name
+      p: text "static"
 
 proc tokenTpl(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Tok"):
-      mailSection:
-        h1: text "Tok"
-        p(color = tok"color.accent.primary"): text "hi"
+      h1: text "Tok"
+      p(color = tok"color.accent.primary"): text "hi"
 
 proc buttonTpl(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Button"):
-      mailSection:
-        mailColumn:
-          h1: text "Button"
-          mailButton(href = "https://app.example.com/",
-              border_radius = "6px"):
-            text "Open dashboard"
+      h1: text "Button"
+      a(href = "https://app.example.com/", border_radius = "6px"):
+        text "Open dashboard"
 
 proc noLangTpl(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(title = "No lang"):
-      mailSection:
-        h1: text "No lang"
+      h1: text "No lang"
 
 proc imgTpl(r: EmailRenderer; src: string): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Img"):
-      mailSection:
-        h1: text "Img"
-        mailImage(src = src, alt = "logo")
+      h1: text "Img"
+      mailImage(src = src, alt = "logo", width = "120px")
 
 proc codesOf(diags: openArray[EmailDiagnostic]): seq[string] =
   for d in diags:
@@ -60,8 +58,7 @@ proc cleanupTpl(r: EmailRenderer; p: DisposeProbe): EmailNode =
   onCleanup(proc() = p.cleaned = true)
   ui(r):
     mailDocument(lang = "en", title = "Cleanup"):
-      mailSection:
-        h1: text "Cleanup"
+      h1: text "Cleanup"
 
 proc cleanupEvilTpl(r: EmailRenderer; p: DisposeProbe): EmailNode =
   onCleanup(proc() = p.cleaned = true)
@@ -91,7 +88,7 @@ suite "renderEmail returns the rendered record":
     # The semantic tree keeps its children and resolved values.
     check res.semantic.tag == "mailDocument"
     check res.semantic.attrs["title"] == "Hello"
-    let h1 = res.semantic.children[0].children[0].children[0]
+    let h1 = res.semantic.children[0]
     check h1.tag == "h1"
     check h1.children[0].text == "Hello, Ada"
     check "data-hk" notin res.html
@@ -103,8 +100,7 @@ suite "renderEmail returns the rendered record":
       let greeting = createSignal("Hello, " & name)
       ui(r):
         mailDocument(lang = "en", title = greeting.val):
-          mailSection:
-            h1: text greeting.val
+          h1: text greeting.val
     let res = renderEmail(shoutTpl, "Ada")
     check res.semantic.attrs["title"] == "Hello, Ada"
     check "Hello, Ada" in res.html

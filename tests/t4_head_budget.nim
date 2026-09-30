@@ -23,10 +23,10 @@ import isonim_email
 proc cleanTpl(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Budget"):
-      mailSection:
-        mailColumn:
-          h1: text "Budget"
-          p: text "static"
+      # Only elements with a lowering: a mailSection would add its own
+      # E-LOWER-MISSING to the diagnostics counted below.
+      h1: text "Budget"
+      p: text "static"
 
 proc hd(node: EmailNode; variant, prop, value: string): HeadDecl =
   HeadDecl(variant: variant, prop: prop, value: value, node: node,

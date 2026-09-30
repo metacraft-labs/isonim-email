@@ -55,8 +55,14 @@ import {
 import { ADAPTER_VERSION, cacheKey, readCache, writeCache } from "./cache.ts";
 import { composeStorySheets } from "./contact_sheet.ts";
 import { domAssertionsScript } from "./dom_assertions.ts";
-import { changedFilesSince, darkNeeded, selectFamilies } from "./affected.ts";
+import {
+  changedFilesSince,
+  darkNeeded,
+  familiesForChange,
+  workingTreeHash,
+} from "./affected.ts";
 import { launchOptions } from "./launch.ts";
+import { installFixtureHost } from "./fixture_host.ts";
 import {
   appendHistory,
   latencyVerdict,
@@ -68,6 +74,8 @@ import {
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
+// Story fixture images, served on the fixture host (fixture_host.ts).
+const storyAssetsDir = join(repoRoot, "tests", "stories", "assets");
 
 // ---------------------------------------------------------------------------
 // Matrix definition (the backend-A slice)
@@ -379,14 +387,15 @@ interface LibraryInfo {
   tree_hash: string;
 }
 
+// tree_hash is the WORKING tree's hash, uncommitted and untracked
+// changes included (affected.ts workingTreeHash), so the next run's
+// --affected diff sees edits and reverts that never reach a commit.
 function libraryInfo(): LibraryInfo {
   try {
     const commit = execSync("git rev-parse HEAD", { cwd: repoRoot })
       .toString()
       .trim();
-    const tree = execSync("git rev-parse HEAD^{tree}", { cwd: repoRoot })
-      .toString()
-      .trim();
+    const tree = workingTreeHash(repoRoot);
     const status = execSync("git status --porcelain", { cwd: repoRoot })
       .toString()
       .trim();
@@ -644,6 +653,8 @@ async function captureOne(
     colorScheme: req.scheme === "light" ? "light" : "dark",
   });
   try {
+    // Story images come from the local fixture host, never the network.
+    await installFixtureHost(context, storyAssetsDir);
     const page = await context.newPage();
     const html = readFileSync(req.htmlPath, "utf8");
     // Emulated families rewrite the HTML before setContent; the
@@ -862,6 +873,7 @@ async function main(): Promise<void> {
   // previous run captures everything; otherwise stories whose MIME
   // changed (missing previous entry = changed), families/schemes
   // from the git change set.
+  const lib = libraryInfo();
   let fullSelection = opt.full;
   let changed: string[] = [];
   const prev = opt.full
@@ -880,7 +892,7 @@ async function main(): Promise<void> {
           throw new Error(`${cmd.join(" ")} exited with status ${r.status}`);
         return r.stdout as string;
       };
-      changed = changedFilesSince(run, prev.runJson.tree_hash);
+      changed = changedFilesSince(run, prev.runJson.tree_hash, lib.tree_hash);
     } catch (err) {
       process.stderr.write(
         `email-shots: cannot diff against previous run at ${prev.dir} (${err instanceof Error ? err.message : String(err)}); capturing everything\n`,
@@ -900,10 +912,13 @@ async function main(): Promise<void> {
         .map((m) => m.story),
     );
   }
+  // Every selected story's MIME changed, so the matrix is never empty:
+  // no changed file in this repository (the change came from
+  // ../isonim or the Tailwind map) selects every family.
   const families =
     opt.familiesExplicit || fullSelection
       ? opt.families
-      : selectFamilies(changed);
+      : familiesForChange(changed, opt.families);
   const schemes =
     opt.schemesExplicit || fullSelection
       ? opt.schemes
@@ -938,7 +953,6 @@ async function main(): Promise<void> {
   steps.briefs = Date.now() - tBriefs;
 
   const pw = await loadPlaywright();
-  const lib = libraryInfo();
   const session = process.env.EMAIL_SHOTS_SESSION ?? null;
 
   // The request matrix.

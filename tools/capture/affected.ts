@@ -6,6 +6,11 @@
 // set from the change. This module is the families/schemes half of that: the
 // stories half is an exact MIME-hash comparison done by the Nim driver.
 
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 export type AffectSet = "OUTLOOK_WORD" | "HEAD" | "ALL";
 
 // Single-table form of the per-module affects, same semantics.
@@ -72,41 +77,55 @@ export function darkNeeded(changedFiles: string[]): boolean {
   return changedFiles.some((p) => /style\/|tokens|assets|image/.test(p));
 }
 
-// git status --porcelain v1: the path field of every non-empty line,
-// including untracked ('??') entries; surrounding quotes stripped.
-export function parsePorcelain(out: string): string[] {
-  const files: string[] = [];
-  for (const line of out.split("\n")) {
-    if (line === "") continue;
-    let path = line.slice(3);
-    if (path.length >= 2 && path.startsWith('"') && path.endsWith('"')) {
-      path = path.slice(1, -1);
-    }
-    files.push(path);
-  }
-  return files;
+// The families for a run whose selected stories' MIME changed. A MIME
+// change never produces an empty matrix: when no file of this
+// repository changed (the change came from ../isonim or the Tailwind
+// map), every family in `all` is selected.
+export function familiesForChange(
+  changedFiles: string[],
+  all: string[],
+): string[] {
+  const selected = selectFamilies(changedFiles);
+  return selected.length > 0 ? selected : [...all];
 }
 
-// Changed files since the previous iteration's tree: the union of
-// `git diff --name-only <prevTree> HEAD` and the working-tree status.
-// Non-empty trimmed lines, deduped. The command runner is injected so tests
-// can stub it.
+// Hash of the working tree INCLUDING uncommitted and untracked changes
+// (ignored files excluded): `git add -A` into a temporary index seeded
+// from HEAD, then `git write-tree`. The real index is never touched.
+// Two runs over the same bytes record the same hash, so a revert
+// returns to the earlier hash, and the diff between two recorded
+// hashes names exactly the files that changed between the runs.
+export function workingTreeHash(repoDir: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "email-shots-index-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: join(dir, "index") };
+    const git = (args: string[]): string =>
+      execFileSync("git", args, { cwd: repoDir, env, encoding: "utf8" });
+    try {
+      git(["read-tree", "HEAD"]);
+    } catch {
+      // No HEAD yet (an empty repository): start from an empty index.
+    }
+    git(["add", "-A"]);
+    return git(["write-tree"]).trim();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Changed files between two recorded tree hashes (the previous run's
+// and this run's), non-empty trimmed lines. The command runner is
+// injected so tests can stub it.
 export function changedFilesSince(
   run: (cmd: string[]) => string,
   prevTree: string,
+  curTree: string,
 ): string[] {
-  const diffOut = run(["git", "diff", "--name-only", prevTree, "HEAD"]);
-  const statusOut = run(["git", "status", "--porcelain"]);
-  const seen = new Set<string>();
+  const out = run(["git", "diff", "--name-only", prevTree, curTree]);
   const files: string[] = [];
-  const add = (p: string) => {
-    const t = p.trim();
-    if (t !== "" && !seen.has(t)) {
-      seen.add(t);
-      files.push(t);
-    }
-  };
-  for (const line of diffOut.split("\n")) add(line);
-  for (const p of parsePorcelain(statusOut)) add(p);
+  for (const line of out.split("\n")) {
+    const t = line.trim();
+    if (t !== "" && !files.includes(t)) files.push(t);
+  }
   return files;
 }

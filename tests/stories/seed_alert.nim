@@ -6,12 +6,15 @@
 ##
 ## Backend-independent (tree building only).
 import isonim_email
+import fixture_images
 
 proc seedAlert*(): EmailNode =
   ## A P1-clean alert: `lang`/`dir`/`title`/`preheader` (RTL, to pin
   ## `dir` propagation past the `ltr` default), an `h1`, one layout
-  ## table (its `role` left for P7 to backfill) and a plain `img`
-  ## with `alt`.
+  ## table (its `role` left for P7 to backfill) and a `mailImage`
+  ## with `alt` and a px width. Only elements with a lowering: a bare
+  ## `img` is not part of the vocabulary, and an element without a
+  ## lowering fails the render.
   let r = EmailRenderer()
   let doc = r.createElement("mailDocument")
   r.setAttribute(doc, "lang", "ar")
@@ -28,8 +31,11 @@ proc seedAlert*(): EmailNode =
   r.appendChild(tr, td)
   r.appendChild(table, tr)
   r.appendChild(doc, table)
-  let img = r.createElement("img")
-  r.setAttribute(img, "src", "https://x.test/shield.png")
+  # A 96×96 @2x PNG shown at 48 px (tests/stories/assets/shield.png,
+  # served to the capture browsers from the fixture host).
+  let img = r.createElement("mailImage")
+  r.setAttribute(img, "src", fixtureImageUrl("shield.png"))
   r.setAttribute(img, "alt", "Shield icon")
+  r.setStyle(img, "width", "48px")
   r.appendChild(doc, img)
   doc
