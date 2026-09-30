@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { outlookWeb } from "./outlookWeb.ts";
+import { invertLightness, outlookWeb } from "./outlookWeb.ts";
 
 function doc(head: string, body: string): string {
   return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
@@ -59,8 +59,8 @@ describe("outlookWeb: attribute selectors are kept", () => {
   });
 });
 
-describe("outlookWeb dark: data-ogsc/data-ogsb on recoloured elements", () => {
-  it("marks dark text with data-ogsc, light backgrounds with data-ogsb", () => {
+describe("outlookWeb dark: recolours (partial inversion) and marks with data-ogsc/data-ogsb", () => {
+  it("inverts dark text and light backgrounds, marking each with data-ogsc / data-ogsb", () => {
     const input = doc(
       ``,
       `<p style="color:#111111">dark text</p>` +
@@ -72,9 +72,9 @@ describe("outlookWeb dark: data-ogsc/data-ogsb on recoloured elements", () => {
       doc(
         ``,
         `<div class="rps_xxxx">` +
-          `<p data-ogsc style="color:#111111">dark text</p>` +
-          `<p data-ogsb style="background-color:#ffffff">light plate</p>` +
-          `<p data-ogsc data-ogsb style="color:#111111;background-color:#ffffff">both</p>` +
+          `<p data-ogsc style="color:#c5c5c5">dark text</p>` +
+          `<p data-ogsb style="background-color:#000000">light plate</p>` +
+          `<p data-ogsc data-ogsb style="color:#c5c5c5;background-color:#000000">both</p>` +
           `</div>`,
       ),
     );
@@ -82,8 +82,9 @@ describe("outlookWeb dark: data-ogsc/data-ogsb on recoloured elements", () => {
 
   it("treats the same mid grey asymmetrically: text inverts, background does not", () => {
     // #777777 has relative luminance ~0.18: below the 0.5 text
-    // threshold, so as a text colour it inverts (data-ogsc); as a
-    // background it is outside the > 0.5 set, so no data-ogsb.
+    // threshold, so as a text colour it inverts (OKLCH L 0.569 →
+    // 0.431, #505050, data-ogsc); as a background it is outside the
+    // > 0.5 set, so it keeps its colour and gets no data-ogsb.
     const input = doc(
       ``,
       `<p style="color:#777777">grey text</p>` +
@@ -94,7 +95,7 @@ describe("outlookWeb dark: data-ogsc/data-ogsb on recoloured elements", () => {
       doc(
         ``,
         `<div class="rps_xxxx">` +
-          `<p data-ogsc style="color:#777777">grey text</p>` +
+          `<p data-ogsc style="color:#505050">grey text</p>` +
           `<p style="background-color:#777777">grey plate</p>` +
           `</div>`,
       ),
@@ -113,6 +114,54 @@ describe("outlookWeb dark: data-ogsc/data-ogsb on recoloured elements", () => {
     const out = outlookWeb(input, "dark");
     assert.ok(!out.includes("data-ogsc"), `unexpected ogsc:\n${out}`);
     assert.ok(!out.includes("data-ogsb"), `unexpected ogsb:\n${out}`);
+  });
+
+  it("inverts OKLCH lightness only: black and white swap, a blue stays blue", () => {
+    const input = doc(
+      ``,
+      `<p style="color:#000000">black</p>` +
+        `<table bgcolor="#ffffff"><tr><td style="background-color:#1a73e8">blue plate</td></tr></table>`,
+    );
+    const out = outlookWeb(input, "dark");
+    assert.ok(
+      out.includes(`<p data-ogsc style="color:#ffffff">black</p>`),
+      out,
+    );
+    // bgcolor recolours like background-color.
+    assert.ok(out.includes(`<table data-ogsb bgcolor="#000000">`), out);
+    // #1a73e8 (luminance ~0.2) is a dark background: not recoloured.
+    assert.ok(out.includes(`<td style="background-color:#1a73e8">`), out);
+    assert.equal(invertLightness("#1a73e8"), "#0044b6");
+  });
+
+  it("keeps !important and re-escapes the quotes of the rewritten style", () => {
+    const input = doc(
+      ``,
+      `<td style="font-family:&quot;Open Sans&quot;,Arial;color:#111111 !important;padding:4px">x</td>`,
+    );
+    const out = outlookWeb(input, "dark");
+    assert.ok(
+      out.includes(
+        `<td data-ogsc style="font-family:&quot;Open Sans&quot;,Arial;color:#c5c5c5 !important;padding:4px">x</td>`,
+      ),
+      out,
+    );
+  });
+
+  it("keeps the message's own [data-ogsc] rules and marks what it recolours", () => {
+    // R-DRK-03: the library's dark classes are keyed on the markers,
+    // so the recolour must add them where it recolours. (Whether
+    // Outlook also marks ancestors is for real-client captures.)
+    const input = doc(
+      `<style>[data-ogsc] .dk{color:#eeeeee !important}</style>`,
+      `<p class="dk" style="color:#111111">x</p>`,
+    );
+    const out = outlookWeb(input, "dark");
+    assert.ok(out.includes(`[data-ogsc] .x_dk{color:#eeeeee !important}`), out);
+    assert.ok(
+      out.includes(`<p data-ogsc class="x_dk" style="color:#c5c5c5">`),
+      out,
+    );
   });
 
   it("adds no attributes twice: the dark pass does not duplicate", () => {

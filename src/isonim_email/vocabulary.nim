@@ -27,6 +27,11 @@
 import isonim/dsl/vocabulary
 import isonim_email/renderer
 from isonim_email/diagnostics import codeA11ySectioning
+import ./target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 proc attr(name: string; kind: AttrKind; typ = ""): AttrDef =
   ## One schema row. `kind` mirrors the macro's style/attr routing, so a

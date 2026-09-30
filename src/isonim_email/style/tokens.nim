@@ -53,6 +53,11 @@
 
 import std/[json, strutils, tables]
 import core/tokens
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 ## Re-export the DTCG core (`TokenSet`, `loadTokens`, `resolve`, …) so
 ## consumers import one module and the isonim-docs seam stays in this file.

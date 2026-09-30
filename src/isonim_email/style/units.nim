@@ -14,6 +14,11 @@
 ## theme generator and the JS target never import the renderer.
 
 import std/[math, strutils]
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 type StyleError* = object of ValueError
   ## A style-layer failure (units, colours, shorthand, CSS serialiser,

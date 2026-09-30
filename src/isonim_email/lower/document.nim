@@ -43,6 +43,10 @@ import ../mso/cond
 import ../mso/document
 import ../passes/head
 
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
+
 proc preheaderPaddingUnits*(preheader: string): int =
   ## R-PRE-02: N = clamp(100 − len(preheader), 0, 150), where len
   ## counts characters. The rule stays pending (the unit sequence and

@@ -4,25 +4,15 @@
 // Backend A only: renders stories through the library in
 // the working tree (via the build-stories driver), captures each
 // story × family × viewport × scheme × images request in a pinned
-// shell browser (raw except the gmailWeb/ganga/outlookWeb/imagesOff/wordApprox emulations),
-// streams one JSON line per finished capture to stdout, and maintains
-// index.json atomically. Exits non-zero when any non-async capture
-// failed.
+// shell browser (raw, or through the gmailWeb/ganga/outlookWeb/
+// imagesOff/wordApprox emulations, with images=off layered on any of
+// them — transforms.ts), streams one JSON line per finished capture
+// to stdout, and maintains index.json atomically. Exits non-zero when
+// any capture failed. Captures never use the network: only the story
+// fixture host and data: URIs load (fixture_host.ts).
 //
-// Usage:
-//   node tools/capture/email-shots.ts [STORY…] [--backends a]
-//     [--families apple,thunderbird,chromium-baseline]
-//     [--clients chromium,webkit,firefox]
-//     [--viewports mobile,desktop] [--schemes light] [--images on]
-//     [--out DIR] [--driver PATH]
-//   node tools/capture/email-shots.ts --help
-//
-// Serves backend A only. --backends b/c/d fail naming the later backends.
-// --affected/--full selection and the result cache:
-// with no stories and no --full, only stories whose MIME changed
-// since the previous run are captured (changed-only is the default).
-// Records Tier-3 DOM assertions per capture (meta.assertions +
-// per-story assertions.json); --assert gates captures on them.
+// Usage: `node tools/capture/email-shots.ts --help` (the USAGE text
+// below is the one reference; keep it in step with parseArgs).
 
 import { spawnSync, execSync } from "node:child_process";
 import {
@@ -38,21 +28,15 @@ import { createHash } from "node:crypto";
 import { cpus } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { GMAIL_WEB_TRANSFORM_VERSION, gmailWeb } from "./emulation/gmailWeb.ts";
-import { GANGA_TRANSFORM_VERSION, ganga } from "./emulation/ganga.ts";
+import { applyChain, transformChain, transformVersion } from "./transforms.ts";
 import {
-  OUTLOOK_WEB_TRANSFORM_VERSION,
-  outlookWeb,
-} from "./emulation/outlookWeb.ts";
-import {
-  IMAGES_OFF_TRANSFORM_VERSION,
-  imagesOff,
-} from "./emulation/imagesOff.ts";
-import {
-  WORD_APPROX_TRANSFORM_VERSION,
-  wordApprox,
-} from "./emulation/wordApprox.ts";
-import { ADAPTER_VERSION, cacheKey, readCache, writeCache } from "./cache.ts";
+  ADAPTER_VERSION,
+  cacheKey,
+  PROVIDER_ID,
+  PROVIDER_VERSION,
+  readCache,
+  writeCache,
+} from "./cache.ts";
 import { composeStorySheets } from "./contact_sheet.ts";
 import { domAssertionsScript } from "./dom_assertions.ts";
 import {
@@ -62,7 +46,7 @@ import {
   workingTreeHash,
 } from "./affected.ts";
 import { launchOptions } from "./launch.ts";
-import { installFixtureHost } from "./fixture_host.ts";
+import { installCapturePolicy } from "./fixture_host.ts";
 import {
   appendHistory,
   latencyVerdict,
@@ -120,26 +104,41 @@ const NAMED_VIEWPORTS: Record<string, Viewport> = {
 
 const USAGE = `usage: email-shots [STORY…] [options]
 
+With no STORY and no --full, a run is --affected: only the stories whose
+MIME changed since the previous run, the families the changed modules
+declare, and dark added when a colour, token or image changed.
+
 options:
-  --backends a[,…]       serves backend A only (b/c/d land later)
-  --families F,…         default: every backend-A family (apple,thunderbird,
-                        chromium-baseline,gmailWeb,ganga,outlookWeb,
-                        imagesOff,wordApprox)
+  --backends a           backend A (local engines) is the only one served;
+                        b, c and d are refused naming the later backends
+  --families F,…         apple,thunderbird,chromium-baseline,gmailWeb,ganga,
+                        outlookWeb,imagesOff,wordApprox (default: all, or
+                        the affected ones on an --affected run)
   --clients C,…          filter by engine: chromium,webkit,firefox
-  --viewports V,…        mobile,desktop (defaults) or W / W@DPR, e.g. 600,600@2x
-  --schemes S,…          light (default),dark,forced-dark
-  --images on|off        default: on (off is a skip marker outside imagesOff)
+  --viewports V,…        mobile,desktop (default) or W / W@DPR, e.g. 600,600@2x
+  --schemes S,…          light,dark,forced-dark (default: light, plus dark
+                        on an --affected run whose change needs it;
+                        forced-dark is Chromium-only)
+  --images on,off        default: on; off captures every family with its
+                        images blocked (the imagesOff transform after the
+                        family's own); on,off captures both
   --out DIR              run directory (default: build/email-shots/<run>)
   --driver PATH          build-stories binary (default: build/capture/build-stories)
   --brief-driver PATH    brief-driver binary (default: build/review/brief-driver)
   --affected             capture only what changed since the previous run
-                        (stories by MIME hash, families/schemes by git diff;
-                        this is also what a bare run does)
+                        (stories by MIME hash; families from the per-module
+                        affects declarations of the files that changed in
+                        the working tree; this is also what a bare run does)
   --full                 capture the full matrix (cache reads still on)
   --no-cache             bypass the result cache (no reads, no writes)
   --assert               fail captures whose Tier-3 DOM assertions fail
                         (without it assertions are recorded, never gated)
   --help                 this text
+
+not yet served (refused with a reason): --async, --follow, --via.
+Captures never use the network: requests other than the story fixture
+host and data: URIs are blocked and listed in the run summary and in
+each capture's provenance (network.blocked).
 `;
 
 function failUsage(message: string): never {
@@ -448,6 +447,15 @@ interface AssertionResult {
   detail: string;
 }
 
+// URLs the network policy refused for a capture (from its provenance).
+function blockedUrls(meta: Record<string, unknown>): string[] {
+  const blocked = (meta.network as any)?.blocked;
+  if (!Array.isArray(blocked)) return [];
+  return blocked
+    .filter((b: any) => b !== null && b.reason === "network")
+    .map((b: any) => String(b.url));
+}
+
 async function imagesComplete(page: any, timeoutMs: number): Promise<boolean> {
   // Node-side polling: the page clock is fixed, so in-page
   // timers and Date.now() are frozen and the wait must live here.
@@ -476,10 +484,8 @@ async function captureOne(
   browserBuilds: Map<string, string>,
 ): Promise<{ entry: Entry; line: Record<string, unknown> }> {
   const storyDir = join(runDir, req.story);
-  const pngRel =
-    req.images === "on" || req.family === "imagesOff"
-      ? join(req.story, `${req.baseName}.png`)
-      : null;
+  const pngRel = join(req.story, `${req.baseName}.png`);
+  const chain = transformChain(req.family, req.images);
   const metaRel = join(req.story, `${req.baseName}.json`);
 
   const finish = (
@@ -504,6 +510,10 @@ async function captureOne(
     };
     const line: Record<string, unknown> = { ...entry };
     if (reason !== undefined) line.reason = reason;
+    // Requests the network policy refused, on the capture's own line
+    // (images-off aborts are the axis working, not news).
+    const refused = blockedUrls(meta);
+    if (refused.length > 0) line.blocked = refused;
     return { entry, line };
   };
 
@@ -514,6 +524,8 @@ async function captureOne(
     library: lib,
     mime_sha256: sha256File(req.emlPath),
     backend: "a",
+    provider: PROVIDER_ID,
+    provider_version: PROVIDER_VERSION,
     family: req.family,
     client: { id: req.client, build: "" },
     viewport: { width: req.viewport.width, height: 0, dpr: req.viewport.dpr },
@@ -528,45 +540,23 @@ async function captureOne(
     captured_at: new Date().toISOString(),
     cache: "uncached",
     approximation: FAMILIES[req.family].approximation,
+    // The transforms applied, in order: the family's own emulation,
+    // then imagesOff for images=off (transforms.ts). null for a raw
+    // capture with images on.
     emulation:
-      req.family === "gmailWeb"
-        ? { transform: "gmailWeb", version: GMAIL_WEB_TRANSFORM_VERSION }
-        : req.family === "ganga"
-          ? { transform: "ganga", version: GANGA_TRANSFORM_VERSION }
-          : req.family === "outlookWeb"
-            ? {
-                transform: "outlookWeb",
-                version: OUTLOOK_WEB_TRANSFORM_VERSION,
-              }
-            : req.family === "imagesOff"
-              ? {
-                  transform: "imagesOff",
-                  version: IMAGES_OFF_TRANSFORM_VERSION,
-                }
-              : req.family === "wordApprox"
-                ? {
-                    transform: "wordApprox",
-                    version: WORD_APPROX_TRANSFORM_VERSION,
-                  }
-                : null,
+      chain.length === 0
+        ? null
+        : {
+            transform: chain.map((t) => t.name).join("+"),
+            chain: chain.map((t) => ({
+              transform: t.name,
+              version: t.version,
+            })),
+            version: chain.length === 1 ? chain[0].version : null,
+          },
+    transform_version: transformVersion(chain),
     status: "",
   });
-
-  // images=off is a skip marker outside imagesOff: only that
-  // family's HTML→HTML transform exists, and network-blocking the
-  // images would render broken-image icons instead — a different,
-  // misleading picture. The variant is recorded honestly, with no PNG.
-  // Composition: --images off (request axis) and the imagesOff family
-  // (transform axis) are independent — the skip lifts only where the
-  // transform exists, so imagesOff captures under either/both while
-  // other families stay skipped under --images off.
-  if (req.images === "off" && req.family !== "imagesOff") {
-    const meta = baseMeta();
-    meta.status = "skipped";
-    meta.skip_reason =
-      "images=off outside the imagesOff family is a skip marker; the per-request images=off variant lands later";
-    return finish("skipped", null, meta, meta.skip_reason as string);
-  }
 
   // Forced-dark exists only for Chromium (WebContentsForceDark).
   if (req.scheme === "forced-dark" && req.engine !== "chromium") {
@@ -592,6 +582,8 @@ async function captureOne(
     ? null
     : cacheKey({
         mimeSha,
+        provider: PROVIDER_ID,
+        providerVersion: PROVIDER_VERSION,
         backend: "a",
         family: req.family,
         clientId: req.client,
@@ -601,6 +593,7 @@ async function captureOne(
         scheme: req.scheme,
         images: req.images,
         adapterVersion: ADAPTER_VERSION,
+        transformVersion: transformVersion(chain),
       });
   if (ckey !== null) {
     const hit = readCache(cacheRoot, ckey);
@@ -633,7 +626,7 @@ async function captureOne(
         return finish("failed", null, meta, meta.fail_reason as string);
       }
       mkdirSync(storyDir, { recursive: true });
-      writeFileSync(join(runDir, pngRel as string), hit.png);
+      writeFileSync(join(runDir, pngRel), hit.png);
       const meta = {
         ...hit.meta,
         run,
@@ -653,24 +646,23 @@ async function captureOne(
     colorScheme: req.scheme === "light" ? "light" : "dark",
   });
   try {
-    // Story images come from the local fixture host, never the network.
-    await installFixtureHost(context, storyAssetsDir);
+    // Nothing leaves the machine: story images come from the local
+    // fixture host, data: URIs stay inline, every other request is
+    // aborted and recorded in the provenance (fixture_host.ts).
+    const blocked = await installCapturePolicy(
+      context,
+      storyAssetsDir,
+      req.images,
+    );
+    const network = (): Record<string, unknown> => ({
+      policy: "fixture-host-and-data-only",
+      blocked: [...blocked],
+    });
     const page = await context.newPage();
     const html = readFileSync(req.htmlPath, "utf8");
-    // Emulated families rewrite the HTML before setContent; the
-    // provenance above records which transform.
-    const effective =
-      req.family === "gmailWeb"
-        ? gmailWeb(html)
-        : req.family === "ganga"
-          ? ganga(html)
-          : req.family === "outlookWeb"
-            ? outlookWeb(html, req.scheme)
-            : req.family === "imagesOff"
-              ? imagesOff(html)
-              : req.family === "wordApprox"
-                ? wordApprox(html)
-                : html;
+    // Emulated families (and images=off) rewrite the HTML before
+    // setContent; the provenance above records the chain.
+    const effective = applyChain(chain, html, req.scheme);
     await page.clock.setFixedTime(FIXED_CLOCK);
     const tSet = Date.now();
     await page.setContent(effective, { waitUntil: "load" });
@@ -688,6 +680,7 @@ async function captureOne(
         setcontent: timing.setcontent_ms,
         settle: timing.settle_ms,
       };
+      meta.network = network();
       meta.status = "failed";
       meta.fail_reason = `an image never finished loading within ${IMAGE_TIMEOUT_MS} ms`;
       return finish("failed", null, meta, meta.fail_reason as string);
@@ -725,13 +718,14 @@ async function captureOne(
         settle: timing.settle_ms,
       };
       meta.assertions = assertions;
+      meta.network = network();
       meta.status = "failed";
       meta.fail_reason =
         `Tier-3 DOM assertion(s) failed (--assert): ` +
         failedChecks.map((a) => `${a.check}: ${a.detail}`).join("; ");
       return finish("failed", null, meta, meta.fail_reason as string);
     }
-    const pngAbs = join(runDir, pngRel as string);
+    const pngAbs = join(runDir, pngRel);
     const tCap = Date.now();
     await page.screenshot({
       path: pngAbs,
@@ -750,6 +744,7 @@ async function captureOne(
       settle: timing.settle_ms,
     };
     meta.assertions = assertions;
+    meta.network = network();
     meta.status = "done";
     if (ckey !== null) {
       meta.cache = "miss";
@@ -1004,9 +999,8 @@ async function main(): Promise<void> {
   const browsers = new Map<string, any>();
   const keys = new Set<string>();
   for (const r of requests) {
-    // Mirror the skip gates in captureOne: only requests that never
+    // Mirror the skip gate in captureOne: only requests that never
     // reach setContent are excluded from the launch set.
-    if (r.images !== "on" && r.family !== "imagesOff") continue;
     if (r.scheme === "forced-dark" && r.engine !== "chromium") continue;
     keys.add(`${r.engine}|${r.scheme === "forced-dark" ? "forced" : "plain"}`);
   }
@@ -1045,7 +1039,10 @@ async function main(): Promise<void> {
   };
   writeIndex();
   let chain: Promise<void> = Promise.resolve();
+  const blockedTotal = new Set<string>();
   const record = (entry: Entry, line: Record<string, unknown>): void => {
+    if (Array.isArray(line.blocked))
+      for (const u of line.blocked as string[]) blockedTotal.add(u);
     chain = chain.then(() => {
       index.push(entry);
       writeIndex();
@@ -1235,6 +1232,10 @@ async function main(): Promise<void> {
   );
   if (verdict.warning !== null)
     process.stderr.write(`email-shots: ${verdict.warning}\n`);
+  if (blockedTotal.size > 0)
+    process.stderr.write(
+      `email-shots: blocked ${blockedTotal.size} request(s) outside the fixture host (captures never use the network; see each provenance's network.blocked): ${[...blockedTotal].sort().join(", ")}\n`,
+    );
   if (failed > 0) fail(`${failed} capture(s) failed (see ${indexPath})`);
 }
 

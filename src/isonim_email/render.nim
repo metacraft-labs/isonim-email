@@ -33,6 +33,10 @@ import ./passes/head
 import ./passes/a11y
 import ./passes/lint
 
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
+
 export renderer
 export target
 export diagnostics

@@ -10,6 +10,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { wordApprox } from "./wordApprox.ts";
 
+// The style attribute of the first <TAG …> in `html`, read the way an
+// HTML parser reads a double-quoted value: up to the next raw `"`.
+function styleOf(html: string, tag: string): string {
+  const m = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(html);
+  assert.ok(m !== null, `no <${tag} style="…"> in:\n${html}`);
+  return m[1];
+}
+
 function doc(head: string, body: string): string {
   return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
 }
@@ -168,5 +176,22 @@ describe("wordApprox: idempotent", () => {
     );
     const once = wordApprox(input);
     assert.equal(wordApprox(once), once);
+  });
+});
+
+describe("wordApprox: rewritten inline styles stay inside their attribute", () => {
+  it("re-escapes a decoded &quot; in both inline passes (step 2 and step 5)", () => {
+    const out = wordApprox(
+      `<div style="font-family:&quot;A B&quot;;max-width:600px;color:rgba(0,0,0,0.5);font-size:16px">x</div>` +
+        `<td style="font-family:&quot;C D&quot;;padding:8px;border-radius:4px;color:#111111">y</td>`,
+    );
+    assert.equal(
+      styleOf(out, "div"),
+      `font-family:&quot;A B&quot;;color:rgb(0,0,0);font-size:16px`,
+    );
+    assert.equal(
+      styleOf(out, "td"),
+      `font-family:&quot;C D&quot;;padding:8px;color:#111111`,
+    );
   });
 });

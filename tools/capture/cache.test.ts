@@ -1,6 +1,7 @@
 // tools/capture/cache.test.ts — fixtures for the result cache: key stability
-// and sensitivity, write→read roundtrip, read-missing → null, and
-// corrupt-JSON → null. Run with:
+// and sensitivity, the transform version in the key (a bumped transform
+// misses, an unchanged one hits), write→read roundtrip, read-missing →
+// null, and corrupt-JSON → null. Run with:
 //   node --test tools/capture/cache.test.ts
 
 import { describe, it } from "node:test";
@@ -12,14 +13,24 @@ import {
   ADAPTER_VERSION,
   cacheKey,
   cachePaths,
+  PROVIDER_ID,
+  PROVIDER_VERSION,
   readCache,
   writeCache,
   type CacheKeyParts,
 } from "./cache.ts";
+import {
+  TRANSFORMS,
+  transformChain,
+  transformVersion,
+  type Transform,
+} from "./transforms.ts";
 
 function parts(): CacheKeyParts {
   return {
     mimeSha: "abc123",
+    provider: PROVIDER_ID,
+    providerVersion: PROVIDER_VERSION,
     backend: "a",
     family: "gmailWeb",
     clientId: "chromium",
@@ -29,6 +40,7 @@ function parts(): CacheKeyParts {
     scheme: "light",
     images: "on",
     adapterVersion: ADAPTER_VERSION,
+    transformVersion: transformVersion(transformChain("gmailWeb", "on")),
   };
 }
 
@@ -54,12 +66,81 @@ describe("cacheKey", () => {
       ["scheme", (p) => (p.scheme = "dark")],
       ["images", (p) => (p.images = "off")],
       ["adapterVersion", (p) => (p.adapterVersion = ADAPTER_VERSION + 1)],
+      ["provider", (p) => (p.provider = "linux-desktop")],
+      ["providerVersion", (p) => (p.providerVersion = PROVIDER_VERSION + 1)],
+      ["transformVersion", (p) => (p.transformVersion = "gmailWeb@999")],
     ];
     for (const [name, flip] of flips) {
       const p = parts();
       flip(p);
       assert.notEqual(cacheKey(p), base, `flipping ${name} kept the key`);
     }
+  });
+});
+
+describe("the transform version in the key", () => {
+  // A registry identical to the real one except for one transform's
+  // version: what a transform change looks like to the cache.
+  function bumped(name: string): Record<string, Transform> {
+    return {
+      ...TRANSFORMS,
+      [name]: { ...TRANSFORMS[name], version: TRANSFORMS[name].version + 1 },
+    };
+  }
+
+  it("names the chain: family transform, then imagesOff for images=off", () => {
+    const v = (family: string, images: string): string =>
+      transformVersion(transformChain(family, images));
+    const g = TRANSFORMS.gmailWeb.version;
+    const i = TRANSFORMS.imagesOff.version;
+    assert.equal(v("apple", "on"), "");
+    assert.equal(v("gmailWeb", "on"), `gmailWeb@${g}`);
+    assert.equal(v("apple", "off"), `imagesOff@${i}`);
+    assert.equal(v("gmailWeb", "off"), `gmailWeb@${g}+imagesOff@${i}`);
+    // The imagesOff family is its own images-off view: never twice.
+    assert.equal(v("imagesOff", "off"), `imagesOff@${i}`);
+    assert.equal(v("imagesOff", "on"), `imagesOff@${i}`);
+  });
+
+  it("a bumped transform misses; an unchanged one hits", () => {
+    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    for (const [family, images, transform] of [
+      ["gmailWeb", "on", "gmailWeb"],
+      ["ganga", "on", "ganga"],
+      ["outlookWeb", "on", "outlookWeb"],
+      ["wordApprox", "on", "wordApprox"],
+      ["imagesOff", "on", "imagesOff"],
+      // images=off layers imagesOff on any family, raw ones included.
+      ["apple", "off", "imagesOff"],
+      ["gmailWeb", "off", "imagesOff"],
+    ]) {
+      const key = (registry: Record<string, Transform> = TRANSFORMS): string =>
+        cacheKey({
+          ...parts(),
+          family,
+          images,
+          transformVersion: transformVersion(
+            transformChain(family, images, registry),
+          ),
+        });
+      writeCache(root, key(), Buffer.from([1, 2, 3]), { family, images });
+      assert.ok(
+        readCache(root, key()) !== null,
+        `${family}/${images}: unchanged transform missed`,
+      );
+      assert.equal(
+        readCache(root, key(bumped(transform))),
+        null,
+        `${family}/${images}: bumping ${transform} still hit`,
+      );
+    }
+  });
+
+  it("a raw capture with images on does not depend on any transform version", () => {
+    const raw = (registry: Record<string, Transform>): string =>
+      transformVersion(transformChain("apple", "on", registry));
+    assert.equal(raw(bumped("gmailWeb")), raw(TRANSFORMS));
+    assert.equal(raw(bumped("imagesOff")), raw(TRANSFORMS));
   });
 });
 

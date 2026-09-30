@@ -20,6 +20,12 @@
 ## values changed. `tests/t3_snapshot_reproducible.nim` asserts this
 ## file is byte-identical to what the pinned inputs produce.
 
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
+
 type SupportValue* = enum
   svUnknown, svYes, svNo, svPartial
 

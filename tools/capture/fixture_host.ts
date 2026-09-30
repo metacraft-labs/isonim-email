@@ -75,17 +75,65 @@ export function resolveFixture(
   };
 }
 
-// Routes every fixture-host request of a Playwright browser context.
-export async function installFixtureHost(
+// The network policy of a capture: nothing leaves the machine. The
+// fixture host is answered from disk and data: URIs stay inline;
+// every other request is aborted and recorded, so a message that
+// points at a real server shows a missing resource in the capture and
+// says so in the provenance, instead of depending on (and leaking to)
+// the network. With images off, image requests to the fixture host
+// are aborted too — that is what an images-off client does.
+export type RouteDecision =
+  | { action: "fixture" }
+  | { action: "allow" }
+  | { action: "block"; reason: "network" | "images-off" };
+
+export function routeDecision(
+  url: string,
+  resourceType: string,
+  images: string,
+): RouteDecision {
+  if (url.startsWith("data:")) return { action: "allow" };
+  if (url.startsWith(`${FIXTURE_HOST}/`)) {
+    if (images === "off" && resourceType === "image")
+      return { action: "block", reason: "images-off" };
+    return { action: "fixture" };
+  }
+  return { action: "block", reason: "network" };
+}
+
+export interface BlockedRequest {
+  url: string;
+  reason: "network" | "images-off";
+}
+
+// Routes every request of a Playwright browser context through
+// routeDecision. Returns the list the blocked requests are appended to
+// as they happen.
+export async function installCapturePolicy(
   context: any,
   assetsDir: string,
-): Promise<void> {
-  await context.route(`${FIXTURE_HOST}/**`, async (route: any) => {
-    const res = resolveFixture(route.request().url(), assetsDir);
+  images: string,
+): Promise<BlockedRequest[]> {
+  const blocked: BlockedRequest[] = [];
+  await context.route("**/*", async (route: any) => {
+    const request = route.request();
+    const url: string = request.url();
+    const decision = routeDecision(url, request.resourceType(), images);
+    if (decision.action === "allow") {
+      await route.continue();
+      return;
+    }
+    if (decision.action === "block") {
+      blocked.push({ url, reason: decision.reason });
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const res = resolveFixture(url, assetsDir);
     await route.fulfill({
       status: res.status,
       contentType: res.contentType,
       body: res.body,
     });
   });
+  return blocked;
 }

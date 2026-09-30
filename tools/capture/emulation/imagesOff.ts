@@ -5,7 +5,10 @@
 // irrelevant in Chromium, so there is no VML handling here.
 // A pure HTML→HTML function applied before setContent.
 
-export const IMAGES_OFF_TRANSFORM_VERSION = 1;
+import { mapStyleAttributes } from "./style_attr.ts";
+
+// 2: inline styles are re-escaped after rewriting.
+export const IMAGES_OFF_TRANSFORM_VERSION = 2;
 
 // Empty the src of every <img> that has one, keeping alt and all other
 // attributes (including dimensions and styling) untouched. The
@@ -50,13 +53,8 @@ function stripBackgroundImages(html: string): string {
       return `${open}${stripBackgroundImageFromCss(css)}</style>`;
     },
   );
-  // Inline style= attributes, gmailWeb's stripVarDecls spelling
-  // (including its &quot; decoding).
-  return noBlockBg.replace(
-    /\bstyle\s*=\s*(["'])(.*?)\1/gi,
-    (_m: string, q: string, attr: string): string =>
-      `style=${q}${stripBackgroundImageFromCss(attr.replace(/&quot;/g, '"'))}${q}`,
-  );
+  // Inline style= attributes: decoded, rewritten, re-escaped.
+  return mapStyleAttributes(noBlockBg, stripBackgroundImageFromCss);
 }
 
 export function imagesOff(html: string): string {

@@ -11,6 +11,14 @@ function doc(head: string, body: string): string {
   return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
 }
 
+// The style attribute of the first <TAG …> in `html`, read the way an
+// HTML parser reads a double-quoted value: up to the next raw `"`.
+function styleOf(html: string, tag: string): string {
+  const m = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(html);
+  assert.ok(m !== null, `no <${tag} style="…"> in:\n${html}`);
+  return m[1];
+}
+
 // Step 5 rewrites classes with the input's hash; the expectation
 // builds only that prefix and pins everything else literally.
 function pref(input: string): string {
@@ -150,6 +158,73 @@ describe("gmailWeb step 6: clip", () => {
     assert.ok(out.endsWith(marker));
     const cut = out.slice(0, out.length - marker.length);
     assert.ok(Buffer.byteLength(cut, "utf8") <= 102400);
-    assert.ok(cut.endsWith(">"));
+    // Tag-aware: the cut never ends inside a tag (it may end in text).
+    assert.ok(!/<[^>]*$/.test(cut), cut.slice(-40));
+  });
+});
+
+describe("gmailWeb: rewritten inline styles stay inside their attribute", () => {
+  it("re-escapes a decoded &quot; so the declarations after it survive", () => {
+    const input = doc(
+      ``,
+      `<p style="font-family:&quot;Open Sans&quot;,Arial;--x:1px;margin:var(--x);color:#123456">x</p>` +
+        `<p style='font-family:&#39;Open Sans&#39;,Arial;color:#654321'>y</p>`,
+    );
+    const out = gmailWeb(input);
+    const style = styleOf(out, "p");
+    assert.equal(
+      style,
+      `font-family:&quot;Open Sans&quot;,Arial;--x:1px;color:#123456`,
+    );
+    assert.ok(
+      out.includes(
+        `style='font-family:&#39;Open Sans&#39;,Arial;color:#654321'`,
+      ),
+      out,
+    );
+  });
+});
+
+describe("gmailWeb step 6: the clip keeps text inside long elements", () => {
+  const marker = "\n<div>[Message clipped]  View entire message</div>";
+
+  it("clips one long paragraph mid-text, keeping everything up to the limit", () => {
+    const input = doc(``, `<p>${"x".repeat(200000)}</p>`);
+    const out = gmailWeb(input);
+    assert.ok(out.endsWith(marker));
+    const cut = out.slice(0, out.length - marker.length);
+    // Exactly the limit: the cut falls in text, so nothing backs up.
+    assert.equal(Buffer.byteLength(cut, "utf8"), 102400);
+    assert.ok(cut.endsWith("xxxx"), cut.slice(-40));
+  });
+
+  it("never cuts inside a tag, a character reference or a character", () => {
+    // The tail starts `into` bytes before the limit, so the limit falls
+    // inside its first construct; the cut must move back to where that
+    // construct starts (for "é", 2 bytes each, the second one). The
+    // last case lands just past a ">" inside a quoted attribute value.
+    const a3s = `<div class="a3s">`;
+    for (const [tail, into, kept] of [
+      [`<a href="https://example.test/a>b">link</a>`, 3, ``],
+      [`&amp;&amp;&amp;&amp;`, 3, ``],
+      [`ééééé`, 3, `é`],
+      [`<a href="https://example.test/a>b">link</a>`, 34, ``],
+    ] as const) {
+      const lead = doc(``, `<p>`).replace(`</body></html>`, "");
+      const pad = 102400 - into - Buffer.byteLength(lead, "utf8") - a3s.length;
+      const input = doc(
+        ``,
+        `<p>${"y".repeat(pad)}${tail}${"z".repeat(5000)}</p>`,
+      );
+      const out = gmailWeb(input);
+      assert.ok(out.endsWith(marker), tail);
+      const cut = out.slice(0, out.length - marker.length);
+      const expected = `${lead.replace("<body>", `<body>${a3s}`)}${"y".repeat(pad)}${kept}`;
+      assert.equal(
+        Buffer.byteLength(expected, "utf8"),
+        102400 - into + Buffer.byteLength(kept, "utf8"),
+      );
+      assert.equal(cut, expected, `${tail}: ${cut.slice(-30)}`);
+    }
   });
 });

@@ -7,10 +7,12 @@
 // max-width — are visible in seconds. What Word really does is judged
 // only on backends C and D.
 
-export const WORD_APPROX_TRANSFORM_VERSION = 1;
+// 2: inline styles are re-escaped after rewriting.
+export const WORD_APPROX_TRANSFORM_VERSION = 2;
 
 import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
 import { stripBackgroundImageFromCss } from "./imagesOff.ts";
+import { mapStyleAttributes } from "./style_attr.ts";
 
 const STYLE_BLOCK_RE = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
@@ -127,24 +129,14 @@ function stripStep2Styles(html: string): string {
 }
 
 // Inline style=: td/th keep their padding (and lose the rest); every
-// other element loses padding too. Tag-name spelling follows
-// imagesOff's whole-tag pass.
+// other element loses padding too. Decoded, rewritten and re-escaped
+// through mapStyleAttributes.
 function stripStep2Inline(html: string): string {
-  return html.replace(
-    /<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g,
-    (tag: string, name: string): string => {
-      if (!/\bstyle\s*=/i.test(tag)) return tag;
-      const keepPadding = /^(td|th)$/i.test(name);
-      return tag.replace(
-        /\bstyle\s*=\s*(["'])(.*?)\1/gi,
-        (_m: string, q: string, attr: string): string => {
-          const css = stripNonPaddingDecls(attr.replace(/&quot;/g, '"'));
-          const done = keepPadding ? css : css.replace(PADDING_RE, "");
-          return `style=${q}${done}${q}`;
-        },
-      );
-    },
-  );
+  return mapStyleAttributes(html, (attr: string, tag: string): string => {
+    const keepPadding = /^<(td|th)\b/i.test(tag);
+    const css = stripNonPaddingDecls(attr);
+    return keepPadding ? css : css.replace(PADDING_RE, "");
+  });
 }
 
 export function stripWordIgnoredCss(html: string): string {
@@ -275,11 +267,7 @@ export function dropRgbaAlpha(html: string): string {
       return `${open}${dropRgbaFromCss(css)}</style>`;
     },
   );
-  return inBlocks.replace(
-    /\bstyle\s*=\s*(["'])(.*?)\1/gi,
-    (_m: string, q: string, attr: string): string =>
-      `style=${q}${dropRgbaFromCss(attr.replace(/&quot;/g, '"'))}${q}`,
-  );
+  return mapStyleAttributes(inBlocks, dropRgbaFromCss);
 }
 
 // WordApprox: the full five-step pipeline. Pure: the

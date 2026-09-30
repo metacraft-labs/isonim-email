@@ -90,14 +90,14 @@ function discoverPrev(excludeDir: string): string | null {
 
 describe("selection + cache wiring", () => {
   before(() => {
-    for (const n of [1, 2, 3, 4, 5, 6])
+    for (const n of [1, 2, 3, 4, 5, 6, 7])
       rmSync(runDir(n), { recursive: true, force: true });
     rmSync(cacheRoot, { recursive: true, force: true });
     mkdirSync(shotsRoot, { recursive: true });
   });
 
   after(() => {
-    for (const n of [1, 2, 3, 4, 5, 6])
+    for (const n of [1, 2, 3, 4, 5, 6, 7])
       rmSync(runDir(n), { recursive: true, force: true });
   });
 
@@ -224,6 +224,60 @@ describe("selection + cache wiring", () => {
     assert.equal(index[0].family, "wordApprox");
     const meta = readJson(join(out, index[0].meta));
     assert.equal(meta.cache, "uncached");
+  });
+
+  it("--images off captures every family with its images blocked", () => {
+    // The images axis: off layers the imagesOff transform after the
+    // family's own (raw families get imagesOff alone); the imagesOff
+    // family is the same capture under either value.
+    const out = runDir(7);
+    const r = runCli([
+      "receipt",
+      "--families",
+      "apple,gmailWeb,wordApprox,imagesOff",
+      "--viewports",
+      "desktop",
+      "--schemes",
+      "light",
+      "--images",
+      "on,off",
+      "--no-cache",
+      "--out",
+      relative(repoRoot, out),
+    ]);
+    assert.equal(r.status, 0, `images run failed:\n${r.stderr}`);
+    const index = readJson(join(out, "index.json"));
+    assert.equal(index.length, 8);
+    const byKey = new Map<string, any>();
+    for (const e of index) {
+      assert.equal(e.status, "done", JSON.stringify(e));
+      assert.ok(e.png !== null && existsSync(join(out, e.png)), e.meta);
+      byKey.set(`${e.family}/${e.images}`, e);
+    }
+    const chain = (family: string, images: string): string[] => {
+      const meta = readJson(join(out, byKey.get(`${family}/${images}`).meta));
+      return (meta.emulation?.chain ?? []).map((t: any) => t.transform);
+    };
+    assert.deepEqual(chain("apple", "on"), []);
+    assert.deepEqual(chain("apple", "off"), ["imagesOff"]);
+    assert.deepEqual(chain("gmailWeb", "off"), ["gmailWeb", "imagesOff"]);
+    assert.deepEqual(chain("wordApprox", "off"), ["wordApprox", "imagesOff"]);
+    assert.deepEqual(chain("imagesOff", "off"), ["imagesOff"]);
+    const png = (family: string, images: string): Buffer =>
+      readFileSync(join(out, byKey.get(`${family}/${images}`).png));
+    // The receipt's logo is gone with images off: the pictures differ…
+    for (const family of ["apple", "gmailWeb", "wordApprox"])
+      assert.notDeepEqual(png(family, "off"), png(family, "on"), family);
+    // …except for the imagesOff family, which is images-off either way.
+    assert.deepEqual(png("imagesOff", "off"), png("imagesOff", "on"));
+    // No image request left the page with images off.
+    for (const family of ["apple", "gmailWeb", "wordApprox"]) {
+      const meta = readJson(join(out, byKey.get(`${family}/off`).meta));
+      assert.deepEqual(
+        meta.network.blocked.filter((b: any) => b.reason === "network"),
+        [],
+      );
+    }
   });
 
   it("bare rerun with unchanged MIME exits 0 printing 'nothing to capture'", () => {

@@ -2,14 +2,20 @@
 //
 // OutlookWeb: prefix every class and id with `x_` in
 // markup and CSS; keep attribute selectors; wrap the body in
-// `<div class="rps_xxxx">`. For scheme=dark, add `data-ogsc`/
-// `data-ogsb` attributes to recoloured elements (R-DRK-03's inverse,
-// using the partial-inversion model R-DRK-04). A pure HTML→HTML
-// function applied before setContent.
+// `<div class="rps_xxxx">`. For scheme=dark, recolour inline colours
+// with the partial-inversion model (R-DRK-04) and mark the recoloured
+// elements with `data-ogsc`/`data-ogsb` (R-DRK-03's inverse). A pure
+// HTML→HTML function applied before setContent.
 
 import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
+import {
+  decodeQuoteEntities,
+  escapeForQuote,
+  START_TAG_RE,
+} from "./style_attr.ts";
 
-export const OUTLOOK_WEB_TRANSFORM_VERSION = 1;
+// 2: dark recolours (partial inversion) instead of only marking.
+export const OUTLOOK_WEB_TRANSFORM_VERSION = 2;
 
 const STYLE_BLOCK_RE = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
@@ -125,8 +131,9 @@ function wrapRps(html: string): string {
 // recoloured set. Luminance is the WCAG 2 relative luminance, a TS
 // port of relativeLuminance in src/isonim_email/passes/lint.nim — TS
 // cannot import Nim, so the formula is duplicated here and cited.
-// Only inline `color` / `background-color` hex values participate;
-// named colours, rgb() and shorthand `background` never match.
+// Inline `color` / `background-color` hex values and `bgcolor`
+// attributes participate; named colours, rgb() and shorthand
+// `background` never match.
 function channelLuminance(c: number): number {
   const s = c / 255;
   return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
@@ -162,38 +169,136 @@ function hexToRgb(hex: string): [number, number, number] | null {
   ];
 }
 
-// R-DRK-03's inverse, dark scheme only: Outlook adds data-ogsc/
-// data-ogsb itself when it recolours, so the emulation adds them to
-// the elements the partial-inversion model selects — data-ogsc where
-// the inline text colour inverts (luminance < 0.5), data-ogsb where
-// the inline background inverts (luminance > 0.5). Bare attributes:
-// the [data-ogsc] / [data-ogsb] selectors match any value.
-function addDarkAttributes(html: string): string {
-  return html.replace(
-    /<[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*?)?>/g,
-    (tag: string): string => {
-      const style = /(?<![-\w])style\s*=\s*(["'])(.*?)\1/i.exec(tag)?.[2];
-      if (style === undefined) return tag;
-      let text = false;
-      let bg = false;
-      for (const decl of style.split(";")) {
-        const colon = decl.indexOf(":");
-        if (colon < 0) continue;
-        const prop = decl.slice(0, colon).trim().toLowerCase();
-        if (prop !== "color" && prop !== "background-color") continue;
-        const rgb = hexToRgb(decl.slice(colon + 1));
-        if (!rgb) continue;
-        const lum = relativeLuminance(rgb[0], rgb[1], rgb[2]);
-        if (prop === "color" && lum < 0.5) text = true;
-        if (prop === "background-color" && lum > 0.5) bg = true;
-      }
-      let attrs = "";
-      if (text && !/\sdata-ogsc(?:\s|=|>|\/)/i.test(tag)) attrs += " data-ogsc";
-      if (bg && !/\sdata-ogsb(?:\s|=|>|\/)/i.test(tag)) attrs += " data-ogsb";
-      if (!attrs) return tag;
-      return tag.replace(/^(<[a-zA-Z][a-zA-Z0-9-]*)/, `$1${attrs}`);
-    },
+// sRGB hex ↔ OKLab (Björn Ottosson's matrices, the same ones the
+// library's OKLCH parser uses in src/isonim_email/style/colors.nim).
+function srgbToLinear(c: number): number {
+  const s = c / 255;
+  return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+}
+
+function linearToSrgb(u: number): number {
+  const s =
+    u <= 0.0031308
+      ? 12.92 * u
+      : 1.055 * Math.pow(Math.max(u, 0), 1 / 2.4) - 0.055;
+  return Math.round(Math.min(1, Math.max(0, s)) * 255);
+}
+
+function rgbToOklab(r: number, g: number, b: number): [number, number, number] {
+  const lr = srgbToLinear(r);
+  const lg = srgbToLinear(g);
+  const lb = srgbToLinear(b);
+  const l = Math.cbrt(
+    0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb,
   );
+  const m = Math.cbrt(
+    0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb,
+  );
+  const s = Math.cbrt(
+    0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb,
+  );
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+function oklabToRgb(L: number, a: number, b: number): [number, number, number] {
+  const l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3);
+  const m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3);
+  const s = Math.pow(L - 0.0894841775 * a - 1.291485548 * b, 3);
+  return [
+    linearToSrgb(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    linearToSrgb(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+    linearToSrgb(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
+  ];
+}
+
+// R-DRK-04's inversion of one colour: OKLCH lightness L → 1 − L with
+// chroma and hue kept (in OKLab terms: a and b unchanged). Channels
+// that leave the sRGB gamut are clamped.
+export function invertLightness(hex: string): string | null {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return null;
+  const [L, a, b] = rgbToOklab(rgb[0], rgb[1], rgb[2]);
+  const [r, g, bl] = oklabToRgb(1 - L, a, b);
+  return "#" + [r, g, bl].map((c) => c.toString(16).padStart(2, "0")).join("");
+}
+
+// Partial inversion of one inline declaration list: the text colour
+// inverts when its luminance is < 0.5, the background when > 0.5.
+// Returns the rewritten list and which of the two were recoloured.
+function recolourDecls(css: string): {
+  css: string;
+  text: boolean;
+  bg: boolean;
+} {
+  let text = false;
+  let bg = false;
+  const out = css
+    .split(";")
+    .map((decl) => {
+      const colon = decl.indexOf(":");
+      if (colon < 0) return decl;
+      const prop = decl.slice(0, colon).trim().toLowerCase();
+      if (prop !== "color" && prop !== "background-color") return decl;
+      const value = decl.slice(colon + 1);
+      const rgb = hexToRgb(value);
+      if (!rgb) return decl;
+      const lum = relativeLuminance(rgb[0], rgb[1], rgb[2]);
+      const inverts = prop === "color" ? lum < 0.5 : lum > 0.5;
+      if (!inverts) return decl;
+      if (prop === "color") text = true;
+      else bg = true;
+      const important = /!\s*important\s*$/i.test(value) ? " !important" : "";
+      const hex = /#[0-9a-f]{3,6}/i.exec(value)![0];
+      return `${decl.slice(0, colon + 1)}${invertLightness(hex)}${important}`;
+    })
+    .join(";");
+  return { css: out, text, bg };
+}
+
+// R-DRK-03's inverse plus the recolouring itself, dark scheme only.
+// Outlook on the web recolours in dark mode with the partial-inversion
+// model (R-DRK-04) — inline text colours with luminance < 0.5 and
+// inline backgrounds (background-color or bgcolor) with luminance >
+// 0.5 are lightness-inverted — and marks what it recoloured with
+// data-ogsc (text) / data-ogsb (background). The message's own
+// `[data-ogsc] …` / `[data-ogsb] …` head rules then apply over the
+// recoloured values, exactly as they do in the client. Bare
+// attributes: the selectors match any value. Only 3/6-digit hex takes
+// part (the library emits 6-digit hex, R-CSS-12); named colours and
+// rgb() are left as they are.
+function recolourDark(html: string): string {
+  return html.replace(START_TAG_RE, (tag: string): string => {
+    let text = false;
+    let bg = false;
+    let out = tag.replace(
+      /(?<![-\w])style\s*=\s*(?:"([^"]*)"|'([^']*)')/i,
+      (_m: string, dq: string | undefined, sq: string | undefined): string => {
+        const quote = dq !== undefined ? '"' : "'";
+        const r = recolourDecls(decodeQuoteEntities(dq ?? sq ?? ""));
+        text ||= r.text;
+        bg ||= r.bg;
+        return `style=${quote}${escapeForQuote(r.css, quote)}${quote}`;
+      },
+    );
+    out = out.replace(
+      /(?<![-\w])bgcolor\s*=\s*(["']?)(#[0-9a-f]{3}(?:[0-9a-f]{3})?)\1/i,
+      (m: string, q: string, hex: string): string => {
+        const rgb = hexToRgb(hex)!;
+        if (relativeLuminance(rgb[0], rgb[1], rgb[2]) <= 0.5) return m;
+        bg = true;
+        return `bgcolor=${q}${invertLightness(hex)}${q}`;
+      },
+    );
+    let attrs = "";
+    if (text && !/\sdata-ogsc(?:\s|=|>|\/)/i.test(out)) attrs += " data-ogsc";
+    if (bg && !/\sdata-ogsb(?:\s|=|>|\/)/i.test(out)) attrs += " data-ogsb";
+    if (!attrs) return out;
+    return out.replace(/^(<[a-zA-Z][a-zA-Z0-9:-]*)/, `$1${attrs}`);
+  });
 }
 
 // OutlookWeb: the full pipeline. Pure: the output
@@ -201,5 +306,5 @@ function addDarkAttributes(html: string): string {
 // attributes: that inversion is left to Chromium's WebContentsForceDark.
 export function outlookWeb(html: string, scheme: string): string {
   const wrapped = wrapRps(prefixStyles(prefixMarkupNames(html)));
-  return scheme === "dark" ? addDarkAttributes(wrapped) : wrapped;
+  return scheme === "dark" ? recolourDark(wrapped) : wrapped;
 }

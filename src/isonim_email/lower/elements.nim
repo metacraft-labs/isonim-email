@@ -31,6 +31,11 @@ import ../assets
 import ../vocabulary as emailVocabulary
 import ../style/tokens
 import ./image
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 const loweredHere* = ["mailImage"]
   ## Elements this pass lowers.

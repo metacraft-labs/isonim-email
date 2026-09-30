@@ -146,9 +146,17 @@ suite "tailwind class map":
     if isonimWrites.len > 0:
       echo "written under ../isonim: ", isonimWrites
     # In this checkout, everything it wrote is under build/ (test-logs/
-    # is where the running test's own log goes).
+    # is where the running test's own log goes). .repro/ is the build
+    # engine's own state directory: when this test runs as one action
+    # of `repro test`, the engine's other actions write there while the
+    # script runs, so a timestamp scan cannot attribute those files to
+    # the script. Skipping it does not hide a write by the script: the
+    # script never names that directory (checked below), so it cannot
+    # write there, and a stray write anywhere else still fails.
+    check ".repro" notin readFile(repoRoot / "tools" / "tailwind" /
+      "build-tailwind.mjs")
     let strayWrites = modifiedSince(repoRoot, start,
-      [".git", "build", "test-logs"])
+      [".git", ".repro", "build", "test-logs"])
     check strayWrites.len == 0
     if strayWrites.len > 0:
       echo "written outside build/: ", strayWrites

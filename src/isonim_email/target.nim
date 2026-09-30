@@ -31,6 +31,14 @@ type
     headStyleBudget*: int ## Bytes of head CSS across all blocks
     preheaderPad*: string ## R-PRE-02 unit sequence (the measured sequence lands later)
 
+const allFamilies* = {low(ClientFamily) .. high(ClientFamily)}
+  ## Every client family: the `affects` value of a module whose edits
+  ## can change what any family renders.
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
+
 proc familyId*(f: ClientFamily): string =
   ## The family id used in diagnostics and briefs.
   case f

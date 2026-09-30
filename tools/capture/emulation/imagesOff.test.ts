@@ -8,6 +8,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { imagesOff } from "./imagesOff.ts";
 
+// The style attribute of the first <TAG …> in `html`, read the way an
+// HTML parser reads a double-quoted value: up to the next raw `"`.
+function styleOf(html: string, tag: string): string {
+  const m = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(html);
+  assert.ok(m !== null, `no <${tag} style="…"> in:\n${html}`);
+  return m[1];
+}
+
 function doc(head: string, body: string): string {
   return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
 }
@@ -128,5 +136,17 @@ describe("imagesOff: idempotent", () => {
     );
     const once = imagesOff(input);
     assert.equal(imagesOff(once), once);
+  });
+});
+
+describe("imagesOff: rewritten inline styles stay inside their attribute", () => {
+  it("re-escapes a decoded &quot; after dropping background-image", () => {
+    const out = imagesOff(
+      `<td style="background-image:url(&quot;https://x.test/a.png&quot;);font-family:&quot;A B&quot;;color:#123456">x</td>`,
+    );
+    assert.equal(
+      styleOf(out, "td"),
+      `font-family:&quot;A B&quot;;color:#123456`,
+    );
   });
 });

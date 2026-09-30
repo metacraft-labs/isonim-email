@@ -399,14 +399,25 @@ export const CONTACT_FAMILY_ORDER = [
   "thunderbird",
 ];
 
+// A capture family that stands in for an audience family takes that
+// family's place in the order: backend A's wordApprox is its
+// approximation of outlookWord, so it sits between ganga and
+// outlookWeb, not among the others.
+export const CONTACT_STANDS_IN_FOR: Record<string, string> = {
+  wordApprox: "outlookWord",
+};
+
 export function orderFamilies(names: string[]): string[] {
   // The fixed family order; missing families are skipped, never
-  // reordered; unknown families trail alphabetically (code-unit
-  // order, locale-independent so every host agrees).
+  // reordered; unknown families ("others": chromium-baseline,
+  // imagesOff) trail alphabetically (code-unit order,
+  // locale-independent so every host agrees).
   const rank = new Map(CONTACT_FAMILY_ORDER.map((f, i) => [f, i]));
+  const rankOf = (f: string): number =>
+    rank.get(CONTACT_STANDS_IN_FOR[f] ?? f) ?? CONTACT_FAMILY_ORDER.length;
   return [...names].sort((a, b) => {
-    const ra = rank.has(a) ? rank.get(a)! : CONTACT_FAMILY_ORDER.length;
-    const rb = rank.has(b) ? rank.get(b)! : CONTACT_FAMILY_ORDER.length;
+    const ra = rankOf(a);
+    const rb = rankOf(b);
     if (ra !== rb) return ra - rb;
     return a < b ? -1 : a > b ? 1 : 0;
   });

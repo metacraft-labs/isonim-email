@@ -13,7 +13,8 @@ import {
   wrapA3s,
 } from "./gmailWeb.ts";
 
-export const GANGA_TRANSFORM_VERSION = 1;
+// 2: gmailWeb's step 4 re-escapes inline styles after rewriting.
+export const GANGA_TRANSFORM_VERSION = 2;
 
 // Every <style> element, closed or unclosed, anywhere in the document.
 // (Links go through gmailWeb's stripLinks, called as part of step 4.)

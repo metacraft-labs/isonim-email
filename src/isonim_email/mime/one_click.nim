@@ -22,6 +22,11 @@
 
 import std/strutils
 import ./headers
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 type
   OneClickRequest* = object

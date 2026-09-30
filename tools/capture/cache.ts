@@ -1,8 +1,11 @@
 // tools/capture/cache.ts — result cache key + store.
 //
-// The cache key is the sha256 of the capture inputs, so a
-// client update changes the key automatically and stale results are never
-// served after an upgrade.
+// The cache key is the sha256 of the capture inputs, so a client
+// update changes the key automatically and stale results are never
+// served after an upgrade. The provider's version and the version of
+// the emulation transform(s) applied are inputs too: changing a
+// transform or the provider can never serve a capture made by the old
+// one.
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,8 +17,16 @@ import { join } from "node:path";
 // load, so every earlier capture of an image-bearing story is stale.
 export const ADAPTER_VERSION = 2;
 
+// The local provider (browser engines plus the emulation transforms).
+// Bump PROVIDER_VERSION whenever its output can change for reasons no
+// other key field captures.
+export const PROVIDER_ID = "browser-emulation";
+export const PROVIDER_VERSION = 1;
+
 export interface CacheKeyParts {
   mimeSha: string;
+  provider: string;
+  providerVersion: number;
   backend: string;
   family: string;
   clientId: string;
@@ -25,12 +36,18 @@ export interface CacheKeyParts {
   scheme: string;
   images: string;
   adapterVersion: number;
+  // The emulation transform(s) applied, as name@version joined by "+"
+  // in application order ("" for a raw capture). See
+  // transformVersion in email-shots.ts.
+  transformVersion: string;
 }
 
 // sha256 hex of the key fields joined by ‖, in field order.
 export function cacheKey(p: CacheKeyParts): string {
   const joined = [
     p.mimeSha,
+    p.provider,
+    String(p.providerVersion),
     p.backend,
     p.family,
     p.clientId,
@@ -40,6 +57,7 @@ export function cacheKey(p: CacheKeyParts): string {
     p.scheme,
     p.images,
     String(p.adapterVersion),
+    p.transformVersion,
   ].join("‖");
   return createHash("sha256").update(joined, "utf8").digest("hex");
 }

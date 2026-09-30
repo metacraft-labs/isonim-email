@@ -21,6 +21,11 @@ import isonim/core/owner
 import isonim/core/[types, graph, signals, computation, resource]
 import isonim/viewmodel
 import ./style/tokens
+import ./target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 export abstract_renderer
 export owner

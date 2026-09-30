@@ -6,6 +6,11 @@
 ## Backend-independent: pure string code, runs on C and JS.
 
 import std/[base64, strutils]
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 const
   qpLineLimit* = 76

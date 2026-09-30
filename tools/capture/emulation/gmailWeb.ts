@@ -4,7 +4,12 @@
 // before setContent. Every step cites its rendering-catalogue rule.
 // Targeted regex/string passes only — no CSS parser here.
 
-export const GMAIL_WEB_TRANSFORM_VERSION = 1;
+import { mapStyleAttributes } from "./style_attr.ts";
+
+// 2: inline styles are re-escaped after rewriting (a decoded &quot;
+// no longer ends the attribute), and the clip keeps text up to the
+// byte limit instead of backing up to the last tag.
+export const GMAIL_WEB_TRANSFORM_VERSION = 2;
 
 // Byte budget for kept head <style> blocks (R-CSS-07) and the clip
 // threshold for the whole document (R-SIZE-01).
@@ -313,11 +318,7 @@ export function stripVarDecls(html: string): string {
       return `${open}${stripVarDeclsFromCss(css)}</style>`;
     },
   );
-  return noBlockVars.replace(
-    /\bstyle\s*=\s*(["'])(.*?)\1/gi,
-    (_m: string, q: string, attr: string): string =>
-      `style=${q}${stripVarDeclsFromCss(attr.replace(/&quot;/g, '"'))}${q}`,
-  );
+  return mapStyleAttributes(noBlockVars, stripVarDeclsFromCss);
 }
 
 export function stripDataImages(html: string): string {
@@ -407,17 +408,36 @@ export function wrapA3s(html: string): string {
   );
 }
 
-// Step 6 (clip): if the HTML exceeds 102,400 bytes, cut it back to
-// the last tag boundary at or under the limit and append Gmail's
-// "[Message clipped]  View entire message" marker (R-SIZE-01).
-// Real-client captures will pin the exact threshold.
+// Step 6 (clip): if the HTML exceeds 102,400 bytes, cut it at that
+// byte offset and append Gmail's "[Message clipped]  View entire
+// message" marker (R-SIZE-01). Tag-aware: a cut that lands inside a
+// tag, a comment or a character reference moves back to its start, and
+// a cut inside a multi-byte character moves back to that character.
+// Text is never lost to the cut beyond the limit itself — a long
+// paragraph is clipped mid-text, as Gmail clips it, instead of backing
+// up to the last tag before it. Real-client captures will pin the
+// exact threshold.
 export function clipLongHtml(html: string): string {
-  if (byteLen(html) <= CLIP_THRESHOLD) return html;
-  let cut = Buffer.from(html, "utf8")
-    .subarray(0, CLIP_THRESHOLD)
-    .toString("utf8");
-  const gt = cut.lastIndexOf(">");
-  if (gt >= 0) cut = cut.slice(0, gt + 1);
+  const bytes = Buffer.from(html, "utf8");
+  if (bytes.length <= CLIP_THRESHOLD) return html;
+  let end = CLIP_THRESHOLD;
+  // A UTF-8 continuation byte (10xxxxxx) at the cut means the cut
+  // splits a character: back up to its lead byte.
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  let cut = bytes.subarray(0, end).toString("utf8");
+  const lastComment = cut.lastIndexOf("<!--");
+  const lastLt = cut.lastIndexOf("<");
+  if (lastComment >= 0 && cut.indexOf("-->", lastComment + 4) < 0)
+    cut = cut.slice(0, lastComment);
+  else if (
+    lastLt >= 0 &&
+    // The last tag is complete only if it closes outside quotes (a
+    // quoted value may itself hold a ">").
+    !/^<(?:[^"'<>]|"[^"]*"|'[^']*')*>/.test(cut.slice(lastLt))
+  )
+    cut = cut.slice(0, lastLt);
+  const amp = /&#?[a-zA-Z0-9]*$/.exec(cut);
+  if (amp !== null) cut = cut.slice(0, amp.index);
   return cut + `\n<div>[Message clipped]  View entire message</div>`;
 }
 

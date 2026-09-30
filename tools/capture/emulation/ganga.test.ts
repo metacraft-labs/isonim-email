@@ -10,6 +10,14 @@ import assert from "node:assert/strict";
 import { ganga } from "./ganga.ts";
 import { gmailWeb } from "./gmailWeb.ts";
 
+// The style attribute of the first <TAG …> in `html`, read the way an
+// HTML parser reads a double-quoted value: up to the next raw `"`.
+function styleOf(html: string, tag: string): string {
+  const m = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(html);
+  assert.ok(m !== null, `no <${tag} style="…"> in:\n${html}`);
+  return m[1];
+}
+
 function doc(head: string, body: string): string {
   return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
 }
@@ -47,5 +55,14 @@ describe("ganga steps 4-5 match gmailWeb on the same input", () => {
       doc(``, `<p>plain</p>`),
     ];
     for (const input of inputs) assert.equal(ganga(input), gmailWeb(input));
+  });
+});
+
+describe("ganga: rewritten inline styles stay inside their attribute", () => {
+  it("re-escapes a decoded &quot; after dropping var() declarations", () => {
+    const out = ganga(
+      `<html><head></head><body><td style="font-family:&quot;A B&quot;;margin:var(--m);padding:8px">x</td></body></html>`,
+    );
+    assert.equal(styleOf(out, "td"), `font-family:&quot;A B&quot;;padding:8px`);
   });
 });

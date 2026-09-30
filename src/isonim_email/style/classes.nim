@@ -21,6 +21,11 @@
 
 import std/tables
 import ./css
+import ../target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies - {cfGanga}
 
 export css
 

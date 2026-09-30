@@ -34,6 +34,10 @@ import ./passes/head
 import ./passes/a11y
 import ./style/tokens
 
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
+
 type
   StoryHtml* = tuple[html, text: string]
     ## One rendered story: the full document plus its plain-text

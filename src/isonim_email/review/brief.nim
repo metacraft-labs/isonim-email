@@ -28,6 +28,10 @@ import ../passes/styles
 import ../passes/a11y
 import ../style/tokens
 
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = {}
+
 type
   StoryTreeProc* = proc(): EmailNode {.closure.}
     ## Builds a fresh semantic tree for a story (one call per brief:

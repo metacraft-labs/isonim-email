@@ -23,6 +23,11 @@
 ## byte-identical to what the pinned inputs produce.
 
 import isonim_email/style/tokens
+import isonim_email/target
+
+## The client families an edit to this module can change: read by
+## the capture CLI to pick the families of an `--affected` run.
+const affects*: set[ClientFamily] = allFamilies
 
 const metacraftThemeSource* = "https://github.com/metacraft-labs/codetracer-design-system/tree/8fb101f29a2269d87b246e87f6c39eff454f0a3a/brand/brand.json (and alias/alias.json, mapped/mapped.json)"
 const metacraftThemeCommit* = "8fb101f29a2269d87b246e87f6c39eff454f0a3a"

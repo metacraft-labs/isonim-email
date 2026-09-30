@@ -143,9 +143,36 @@ describe("order and widths", () => {
         "chromium-baseline",
         "ganga",
       ]),
-      ["apple", "ganga", "thunderbird", "chromium-baseline", "wordApprox"],
+      ["apple", "ganga", "wordApprox", "thunderbird", "chromium-baseline"],
     );
     assert.deepEqual(orderFamilies([]), []);
+  });
+
+  it("orders the whole backend-A set with wordApprox in outlookWord's place", () => {
+    // apple, gmailWeb, gmailApp, ganga, outlookWord, outlookWeb,
+    // outlookApp, yahoo, samsung, thunderbird, others.
+    assert.deepEqual(
+      orderFamilies([
+        "imagesOff",
+        "wordApprox",
+        "outlookWeb",
+        "thunderbird",
+        "chromium-baseline",
+        "gmailWeb",
+        "ganga",
+        "apple",
+      ]),
+      [
+        "apple",
+        "gmailWeb",
+        "ganga",
+        "wordApprox",
+        "outlookWeb",
+        "thunderbird",
+        "chromium-baseline",
+        "imagesOff",
+      ],
+    );
   });
 
   it("derives cell widths from the viewport name", () => {
