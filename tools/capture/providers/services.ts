@@ -12,9 +12,13 @@
 // registered, or fails to start, makes every provider that declared it
 // unavailable with that reason.
 //
-// No service is registered yet; the registry and the lifecycle are here
-// so the providers that need them plug in without reshaping the harness.
+// Two services are registered: `imap` (Dovecot as the current user,
+// imap_service.ts) and `assets` (the story images over loopback HTTP,
+// which is also the egress guard proxy, assets_service.ts). Neither is
+// started unless an available provider declares it.
 
+import { AssetsService } from "./assets_service.ts";
+import { DovecotService } from "./imap_service.ts";
 import type {
   CaptureProvider,
   ProviderHealth,
@@ -39,7 +43,10 @@ export interface LocalService {
 export type ServiceRegistry = Partial<Record<ServiceName, () => LocalService>>;
 
 export function registeredServices(): ServiceRegistry {
-  return {};
+  return {
+    imap: () => new DovecotService(),
+    assets: () => new AssetsService(),
+  };
 }
 
 type ServiceRequirement = Requirement & { kind: "service" };
@@ -52,6 +59,35 @@ export function serviceRequirements(
     .filter((r): r is ServiceRequirement => r.kind === "service");
 }
 
+// Every RunServices with something started or starting, for the
+// signal teardown below.
+const live = new Set<RunServices>();
+let teardownInstalled = false;
+
+// Installs the run's SIGINT/SIGTERM handlers: stop every started
+// service (and every one still starting), then exit with the
+// conventional code (130, 143). A second signal exits at once. Called
+// once by the email-shots process before any service starts.
+export function installSignalTeardown(): void {
+  if (teardownInstalled) return;
+  teardownInstalled = true;
+  let stopping = false;
+  const handle = (signal: NodeJS.Signals, code: number): void => {
+    process.on(signal, () => {
+      if (stopping) process.exit(code);
+      stopping = true;
+      process.stderr.write(
+        `email-shots: ${signal}: stopping the local services\n`,
+      );
+      void Promise.allSettled([...live].map((s) => s.stopAll())).then(() =>
+        process.exit(code),
+      );
+    });
+  };
+  handle("SIGINT", 130);
+  handle("SIGTERM", 143);
+}
+
 // The services of one run: the ones started (with their handles) and
 // the ones that could not be (with the reason).
 export class RunServices {
@@ -59,6 +95,8 @@ export class RunServices {
     ServiceName,
     { service: LocalService; handle: ServiceHandle }
   >();
+  // Started but not yet answered: stopAll() stops these too.
+  private readonly starting = new Set<LocalService>();
   private readonly failed = new Map<ServiceName, string>();
 
   // The running services a provider declared, by name.
@@ -107,6 +145,8 @@ export class RunServices {
         continue;
       }
       const service = make();
+      live.add(this);
+      this.starting.add(service);
       try {
         this.running.set(name, { service, handle: await service.start(info) });
       } catch (err) {
@@ -115,6 +155,8 @@ export class RunServices {
           name,
           `service ${name} failed to start: ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        this.starting.delete(service);
       }
     }
     for (const p of providers) {
@@ -128,8 +170,13 @@ export class RunServices {
 
   // Stops every running service, in reverse start order.
   async stopAll(): Promise<void> {
-    const all = [...this.running.values()].reverse();
+    const all = [
+      ...[...this.starting].map((service) => ({ service })),
+      ...[...this.running.values()].reverse(),
+    ];
+    this.starting.clear();
     this.running.clear();
+    live.delete(this);
     for (const { service } of all) await service.stop().catch(() => {});
   }
 }

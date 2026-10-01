@@ -61,6 +61,7 @@ import {
   servedFamilies,
 } from "./providers/harness.ts";
 import { registeredProviders } from "./providers/registry.ts";
+import { installSignalTeardown } from "./providers/services.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./providers/types.ts";
 
 // The shapes a finished run's readers rely on.
@@ -586,6 +587,8 @@ async function main(): Promise<void> {
   // services the available ones declare, started once each. An
   // unavailable provider is named at once, and again in the run summary.
   const candidates = candidateProviders(PROVIDERS, spec);
+  // From here on, SIGINT/SIGTERM stop the shared services before exiting.
+  installSignalTeardown();
   const { availability, services } = await assessProviders(candidates, {
     run,
     runDir,

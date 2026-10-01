@@ -88,6 +88,91 @@ export interface ServiceHandle {
   detail: Record<string, unknown>;
 }
 
+// An IMAP account the imap service created for one capture: a fresh
+// user with a generated password and an INBOX of its own. Everything a
+// client needs to be configured with it, or a webmail to log in.
+export interface ImapAccount {
+  user: string;
+  password: string;
+  host: string;
+  port: number;
+  // Plain IMAP: the server listens on loopback only and lives only as
+  // long as the run.
+  tls: "none";
+  mailbox: "INBOX";
+}
+
+// How the copy injected into IMAP was changed so that a real client
+// can load the story's images: every `from` became `to`.
+export interface AssetRewrite {
+  from: string;
+  to: string;
+  count: number;
+}
+
+// One message delivered into an account's INBOX.
+export interface Delivery {
+  account: ImapAccount;
+  // The injected bytes (after any asset rewrite); they carry the
+  // per-run port, so they are never compared across runs. The cache
+  // key keeps the story's canonical mime_sha256.
+  injectedSha256: Sha256;
+  bytes: number;
+  // null: delivered without the assets service, so the story's images
+  // point at a host the client cannot reach.
+  assetRewrite: AssetRewrite | null;
+  timingMs: { account: number; inject: number };
+}
+
+// The running imap service, as a declaring provider sees it
+// (ctx.services.imap; narrow it with imapHandle() from
+// imap_service.ts).
+export interface ImapHandle extends ServiceHandle {
+  name: "imap";
+  host: string;
+  port: number;
+  tls: "none";
+  // A fresh user with a generated password and an empty INBOX.
+  createAccount(): Promise<ImapAccount>;
+  // Injects one message into the account's INBOX. With `assets`, the
+  // story's asset URLs are rewritten to that service first.
+  deliver(
+    account: ImapAccount,
+    mime: Uint8Array,
+    opts?: { assets?: AssetsHandle },
+  ): Promise<Delivery>;
+  // createAccount() + deliver(): the one-message mailbox of a capture.
+  mailboxFor(
+    mime: Uint8Array,
+    opts?: { assets?: AssetsHandle },
+  ): Promise<Delivery>;
+}
+
+// One request the assets service answered or refused.
+export interface AssetRequest {
+  // The path served, or the full URL / host:port a proxied request
+  // asked for.
+  url: string;
+  status: number;
+  // "asset": an asset path; "blocked": a proxied request for anything
+  // else, refused.
+  kind: "asset" | "blocked";
+}
+
+// The running assets service (ctx.services.assets; narrow it with
+// assetsHandle() from assets_service.ts).
+export interface AssetsHandle extends ServiceHandle {
+  name: "assets";
+  // "http://127.0.0.1:<port>/": what the story asset origin is
+  // rewritten to, and the HTTP proxy URL of the egress guard.
+  baseUrl: string;
+  // The origin the stories' MIME uses ("https://x.test/").
+  rewriteFrom: string;
+  // Every request since the service started, in order; slice from a
+  // previous length to see one capture's.
+  requests(): readonly AssetRequest[];
+}
+
 export type ProviderHealth =
   | { state: "ok" }
   | { state: "degraded"; reason: string }

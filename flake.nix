@@ -132,36 +132,53 @@
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [ config.pre-commit.devShell ];
-            packages = with pkgs; [
-              nim
-              nimble
-              just
-              git
-              nixfmt
-              # Dev-shell tooling: Nim, Node,
-              # Playwright browsers, Mailpit. (Dovecot, mjml, axe-core
-              # and fonttools arrive with the work that uses them;
-              # the pinned fonts are pinned below.)
-              nodejs_22
-              # The Tailwind v4 CLI for `just build-tailwind`: the
-              # standalone build, which bundles the `tailwindcss`
-              # stylesheet itself, so the extraction needs no
-              # node_modules here or in the isonim checkout.
-              tailwindcss_4
-              playwright-driver
-              mailpit
-              # fc-list for inspecting the pinned font set below
-              # (also used by tests/e2e_local_capture_deterministic.nim).
-              fontconfig
-              # Markdown linting (`just lint-markdown`).
-              markdownlint-cli2
-              # The independent RFC 2047 / MIME oracle for the header
-              # fuzz test (Python's `email` package, stdlib only).
-              python3
-              # The type checker for tools/**/*.ts (`just lint-ts`);
-              # its declarations come from tsTypes above.
-              typescript
-            ];
+            packages =
+              with pkgs;
+              [
+                nim
+                nimble
+                just
+                git
+                nixfmt
+                # Dev-shell tooling: Nim, Node,
+                # Playwright browsers, Mailpit. (mjml, axe-core and
+                # fonttools arrive with the work that uses them; the
+                # pinned fonts are pinned below.)
+                nodejs_22
+                # The Tailwind v4 CLI for `just build-tailwind`: the
+                # standalone build, which bundles the `tailwindcss`
+                # stylesheet itself, so the extraction needs no
+                # node_modules here or in the isonim checkout.
+                tailwindcss_4
+                playwright-driver
+                mailpit
+                # The capture harness's `imap` service: Dovecot run as
+                # the current user on loopback (dovecot -F, doveadm save),
+                # holding the one-message mailboxes real clients open.
+                dovecot
+                # fc-list for inspecting the pinned font set below
+                # (also used by tests/e2e_local_capture_deterministic.nim).
+                fontconfig
+                # Markdown linting (`just lint-markdown`).
+                markdownlint-cli2
+                # The independent RFC 2047 / MIME oracle for the header
+                # fuzz test (Python's `email` package, stdlib only).
+                python3
+                # The type checker for tools/**/*.ts (`just lint-ts`);
+                # its declarations come from tsTypes above.
+                typescript
+              ]
+              # `setpriv --pdeathsig` (util-linux) starts the imap
+              # service's Dovecot so that it dies with the capture run even
+              # when the run is killed with SIGKILL. Only that one binary
+              # is put on PATH, so util-linux's other tools do not shadow
+              # the host's.
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                (pkgs.runCommand "setpriv" { } ''
+                  mkdir -p $out/bin
+                  ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
+                '')
+              ];
 
             # tsc's declaration tree (see tsTypes); `just lint-ts`
             # links build/ts-types to it.
