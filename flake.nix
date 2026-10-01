@@ -181,14 +181,32 @@
               # with the capture run even when the run is killed with
               # SIGKILL; `unshare --pid --kill-child` gives php-fpm a PID
               # namespace of its own, so its forked workers die with it
-              # too. Only these two binaries are put on PATH, so
-              # util-linux's other tools do not shadow the host's.
+              # too. iproute2's `ip` brings loopback up in the network
+              # namespace a desktop-client session runs in (loopback
+              # only). Only these three binaries are put on PATH, so
+              # util-linux's and iproute2's other tools do not shadow
+              # the host's.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
                 (pkgs.runCommand "setpriv-unshare" { } ''
                   mkdir -p $out/bin
                   ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
                   ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
+                  ln -s ${pkgs.iproute2}/bin/ip $out/bin/ip
                 '')
+                # The linux-desktop capture provider: real mail clients in
+                # a headless sway (wlroots' headless backend and its
+                # software renderer, no GPU), each instance with a private
+                # D-Bus session bus (dbus-run-session); grim captures the
+                # output, wtype types into it, swaymsg drives it.
+                sway
+                grim
+                wtype
+                dbus
+                thunderbird
+                # OCR for the desktop end-to-end tests: the capture of a
+                # story must show the story's own heading. English only
+                # (the full language set is about ten times larger).
+                (tesseract.override { enableLanguages = [ "eng" ]; })
               ];
 
             # The webmail trees the selfhosted-webmail provider serves
@@ -200,6 +218,15 @@
             # tsc's declaration tree (see tsTypes); `just lint-ts`
             # links build/ts-types to it.
             ISONIM_EMAIL_TS_TYPES = "${tsTypes}";
+
+            # The locale archive the desktop clients run with (a fixed
+            # en_US.UTF-8, whatever the host's locale): the provider
+            # passes <dir>/locale-archive as LOCALE_ARCHIVE to the client
+            # only. glibc locales exist on Linux alone, as does the
+            # provider; elsewhere this names nothing and the provider is
+            # unavailable.
+            ISONIM_EMAIL_LOCALES =
+              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.glibcLocales}/lib/locale" else "";
 
             # Playwright must use the Nix-provided browsers, never download.
             PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";

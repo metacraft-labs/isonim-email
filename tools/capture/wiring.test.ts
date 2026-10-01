@@ -103,6 +103,28 @@ function discoverPrev(excludeDir: string): string | null {
   return cands[0]?.dir ?? null;
 }
 
+// A row the router recorded as not-applicable without asking a provider:
+// only a client that does not render that viewport or scheme (a desktop
+// client has no phone width) may produce one. Anything else not done
+// still fails.
+function notApplicable(e: Entry): boolean {
+  if (e.status !== "not-applicable") return false;
+  const d = registeredProviders()
+    .flatMap((p) => p.clients().map((c) => ({ backend: p.backend, c })))
+    .find((x) => x.backend === e.backend && x.c.clientId === e.client);
+  assert.ok(
+    d !== undefined,
+    `not-applicable row of no client: ${JSON.stringify(e)}`,
+  );
+  const vps = d.c.viewports;
+  assert.ok(
+    (vps !== "any" && !vps.some((v) => v.name === e.viewport)) ||
+      !d.c.schemes.includes(e.scheme as never),
+    `not-applicable row for a variant the client renders: ${JSON.stringify(e)}`,
+  );
+  return true;
+}
+
 describe("selection + cache wiring", () => {
   before(() => {
     for (const n of [1, 2, 3, 4, 5, 6, 7])
@@ -138,6 +160,7 @@ describe("selection + cache wiring", () => {
     const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty run1 index");
     for (const e of index) {
+      if (notApplicable(e)) continue;
       assert.equal(e.status, "done", JSON.stringify(e));
       assert.equal(metaOf(out, e).cache, "miss", e.meta ?? "");
       assert.ok(
@@ -153,7 +176,9 @@ describe("selection + cache wiring", () => {
     // skips. The filter is read back from run1's own index, so the
     // requested captures are exactly the ones run1 just cached
     // (same story, same MIME, same defaults).
-    const first = readJson<Entry[]>(join(runDir(1), "index.json"))[0];
+    const first = readJson<Entry[]>(join(runDir(1), "index.json")).find(
+      (e) => e.status === "done",
+    );
     assert.ok(first !== undefined, "empty run1 index");
     const out = runDir(6);
     const r = runCli([
@@ -171,6 +196,7 @@ describe("selection + cache wiring", () => {
     const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty hit-path index");
     for (const e of index) {
+      if (notApplicable(e)) continue;
       assert.equal(e.status, "done", JSON.stringify(e));
       assert.equal(metaOf(out, e).cache, "hit", e.meta ?? "");
     }
@@ -189,6 +215,7 @@ describe("selection + cache wiring", () => {
     // Whatever the affected set selected, every request was captured
     // by run1's full matrix, so every entry must be a cache hit.
     for (const e of index) {
+      if (notApplicable(e)) continue;
       assert.equal(e.status, "done", JSON.stringify(e));
       assert.equal(metaOf(out, e).cache, "hit", e.meta ?? "");
     }

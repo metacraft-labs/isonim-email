@@ -115,8 +115,9 @@ theme-snapshot:
 # Test: the full suite on the C backend, plus the backend-independent
 # passes on the JS backend, plus the capture emulation-transform tests,
 # plus the self-hosted webmail end-to-end tests (~90 s), plus the
+# desktop-client end-to-end tests (~55-80 s; Linux only), plus the
 # capture regression checks (Tier-1 + Tier-2, ~10-12 s).
-test: build-tailwind test-c test-js test-ts test-webmail test-capture-ci
+test: build-tailwind test-c test-js test-ts test-webmail test-desktop test-capture-ci
 
 # The capture regression checks as part of the full suite. The
 # baselines (Tier-1 exact hashes above all) are pinned to the
@@ -159,9 +160,10 @@ test-js: build-tailwind
 # suites, contact-sheet and findings suites):
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
-# The self-hosted webmail end-to-end file is left to `test-webmail`.
+# The self-hosted webmail and desktop-client end-to-end files are left
+# to `test-webmail` and `test-desktop`.
 test-ts:
-    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v '/selfhosted_webmail\.test\.ts$') "tools/review/*.test.ts"
+    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts"
 
 # The self-hosted webmail provider end to end: real Roundcube and
 # SnappyMail on php-fpm and caddy, Dovecot and Chromium (~90 s on a
@@ -169,6 +171,21 @@ test-ts:
 # run). Needs the story driver (`just email-shots-build`).
 test-webmail: email-shots-build
     node --test tools/capture/providers/selfhosted_webmail.test.ts
+
+# The linux-desktop provider end to end: real Thunderbird in a headless
+# sway (wlroots' software renderer), Dovecot, the assets service, grim,
+# wtype and OCR (~55-80 s on a loaded host, so on its own rather than
+# inside test-ts's parallel run). Linux only (the provider is):
+# elsewhere it says so and does not run. Needs the story driver
+# (`just email-shots-build`).
+test-desktop: email-shots-build
+    @if [ "$(uname -s)" = "Linux" ]; then       node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
+
+# Check the crop calibration of the desktop clients now (a capture run
+# does it by itself when a client's build changed since its last
+# calibration); records each pass under build/email-shots/.calibration/.
+email-calibrate *args:
+    node tools/capture/email-calibrate.ts {{args}}
 
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
@@ -196,7 +213,9 @@ email-shots *args: email-shots-build
 
 # Capture regression checks (Tier-1 + Tier-2, Tier-3 record/gate),
 # run locally as part of `just test` (test-capture-ci) or on their own.
-# Captures the full story set on the pinned CI matrix (core families ×
+# Captures the full story set on the pinned CI matrix (backend a only:
+# the real clients other providers serve under the same families are not
+# part of these baselines; core families ×
 # mobile,desktop × light, --full so MIME-diff selection cannot empty
 # it, --no-cache so every PNG is a real capture) into
 # build/email-capture-ci/<utc-date>, then checks it: Tier-1 exact
@@ -225,7 +244,7 @@ email-shots *args: email-shots-build
 # --update-baselines) re-approves one after a real review, and
 # `--require-approved` fails while any story is pending.
 email-capture-ci *args: email-shots-build
-    out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; node tools/capture/email-shots.ts --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" && node tools/capture/email-capture-ci.ts "$out" {{args}}
+    out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; node tools/capture/email-shots.ts --backends a --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" && node tools/capture/email-capture-ci.ts "$out" {{args}}
 
 # Lint everything.
 lint: lint-nim lint-ts lint-nix lint-markdown
@@ -257,6 +276,7 @@ lint-ts:
     @mkdir -p build && ln -sfn "$ISONIM_EMAIL_TS_TYPES" build/ts-types
     tsc -p tsconfig.json
     node tools/capture/email-shots.ts --help >/dev/null
+    node tools/capture/email-calibrate.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"

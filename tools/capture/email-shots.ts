@@ -36,6 +36,7 @@ import {
   type CommandRunner,
   darkNeeded,
   emptyMatrixReason,
+  selectFamilies,
   selectRunFamilies,
   type ServedClient,
   workingTreeHash,
@@ -62,7 +63,10 @@ import {
   servedClients,
   servedFamilies,
 } from "./providers/harness.ts";
-import { BROWSER_FAMILIES } from "./providers/browser_emulation.ts";
+import {
+  BROWSER_FAMILIES,
+  BrowserEmulationProvider,
+} from "./providers/browser_emulation.ts";
 import { registeredProviders } from "./providers/registry.ts";
 import { installSignalTeardown } from "./providers/services.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./providers/types.ts";
@@ -93,6 +97,9 @@ const SERVED: ServedClient[] = PROVIDERS.flatMap((p) =>
 );
 
 const SCHEMES = new Set(["light", "dark", "forced-dark"]);
+// Backend a's label: the provider whose stand-ins a change selects.
+const BROWSER_BACKEND =
+  PROVIDERS.find((p) => p instanceof BrowserEmulationProvider)?.backend ?? "a";
 
 type Viewport = ViewportSpec;
 
@@ -124,18 +131,23 @@ declare, and dark added when a colour, token or image changed.
 options:
   --backends L,…         the capture providers to route to, by backend label
                         (default: every registered provider): a, the local
-                        browser engines with the client emulations, and
+                        browser engines with the client emulations,
                         selfhosted-webmail, Roundcube and SnappyMail on a
-                        local mail stack; b, c and d are refused naming
-                        the later backends
+                        local mail stack, and linux-desktop, real desktop
+                        clients (Thunderbird) in a headless compositor
+                        (Linux); b, c and d are refused naming the later
+                        backends
   --families F,…         apple,thunderbird,chromium-baseline,gmailWeb,ganga,
                         outlookWeb,imagesOff,wordApprox, and verification
                         (the real verification clients: roundcube,
                         snappymail) (default: all, or the affected ones on
-                        an --affected run)
+                        an --affected run); thunderbird is served both by
+                        backend a's emulation and by the real Thunderbird
+                        of linux-desktop
   --clients C,…          filter by client id; backend A's clients are its
                         engines: chromium,webkit,firefox; the webmail
-                        clients are roundcube,snappymail. On an --affected
+                        clients are roundcube,snappymail; the desktop
+                        client is thunderbird. On an --affected
                         run a named client whose families the change did
                         not select gets all of them (so --clients
                         roundcube captures Roundcube after any change);
@@ -174,8 +186,14 @@ provider serves fails with that reason.
 Captures never use the network: requests other than the story fixture
 host and data: URIs (for a webmail: its own loopback origin and the
 local assets service) are blocked and listed in the run summary and in
-each capture's provenance (network.blocked).
+each capture's provenance (network.blocked); a desktop client runs in a
+network namespace with loopback only, reaching the local IMAP server and
+assets service and nothing else, its proxy the assets service's guard.
 Review briefs are written for the backend-a families only.
+On an --affected run the change selects backend a's captures only; the
+real clients of the other providers (the webmails, the real Thunderbird)
+run on --full, when nothing in this repository changed, or when named
+with --clients, --backends or --families.
 `;
 
 function failUsage(message: string): never {
@@ -548,6 +566,21 @@ async function main(): Promise<void> {
     clients: opt.clients,
     backends: opt.backendsExplicit ? opt.backends : null,
   });
+  // The module declarations name audience families, which select
+  // backend a's stand-ins only: on a run whose families come from the
+  // change alone (no --families, --clients or --backends, and a change
+  // in this repository that selects some family), the real clients other
+  // providers serve under an audience family (linux-desktop's
+  // Thunderbird) are left out, like the verification clients. They run
+  // on --full, on the fallback, and when named.
+  const changeSelectsBackendA =
+    familySource === "change" &&
+    !opt.backendsExplicit &&
+    opt.clients === null &&
+    selectFamilies(changed).some((f) => opt.families.includes(f));
+  const backends = changeSelectsBackendA
+    ? opt.backends.filter((b) => b === BROWSER_BACKEND)
+    : opt.backends;
   const schemes =
     opt.schemesExplicit || fullSelection
       ? opt.schemes
@@ -613,7 +646,7 @@ async function main(): Promise<void> {
     })),
     families,
     clients: opt.clients,
-    backends: opt.backends,
+    backends,
     viewports: opt.viewports,
     schemes: schemes.filter(isScheme),
     images: opt.images.filter((g) => g === "on" || g === "off"),
@@ -642,13 +675,7 @@ async function main(): Promise<void> {
   if (plan.items.length === 0) {
     await services.stopAll();
     fail(
-      emptyMatrixReason(
-        SERVED,
-        families,
-        familySource,
-        opt.backends,
-        opt.clients,
-      ),
+      emptyMatrixReason(SERVED, families, familySource, backends, opt.clients),
     );
   }
 

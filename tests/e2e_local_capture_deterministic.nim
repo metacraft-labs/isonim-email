@@ -84,9 +84,11 @@ proc requirePinnedFonts() =
         "allowed_mocks: None).")
 
 proc runCanary(outDir: string): JsonNode =
-  ## One full-matrix canary run; returns the parsed index.json.
+  ## One full-matrix canary run of backend a (`--backends a`: the real
+  ## Thunderbird of the desktop provider serves the thunderbird family
+  ## too, and is not part of this check); returns the parsed index.json.
   let (output, code) = execCmdEx(
-    "node tools/capture/email-shots.ts canary " &
+    "node tools/capture/email-shots.ts canary --backends a " &
     "--families apple,thunderbird,chromium-baseline,gmailWeb,ganga," &
     "outlookWeb,imagesOff,wordApprox " &
     "--viewports mobile,desktop --schemes light,dark,forced-dark " &
