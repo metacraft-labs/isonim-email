@@ -43,6 +43,7 @@ function sel(): Selection {
     schemes: ["light", "dark"],
     images: ["on"],
     cache: false,
+    cold: false,
   };
 }
 
@@ -58,6 +59,7 @@ describe("latency helpers", () => {
     const b = { ...sel(), families: ["thunderbird", "apple"] };
     assert.equal(selectionKey(a), selectionKey(b));
     assert.notEqual(selectionKey(a), selectionKey({ ...a, cache: true }));
+    assert.notEqual(selectionKey(a), selectionKey({ ...a, cold: true }));
     assert.notEqual(
       selectionKey(a),
       selectionKey({ ...a, schemes: ["light"] }),

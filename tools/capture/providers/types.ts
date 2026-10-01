@@ -1,0 +1,182 @@
+// tools/capture/providers/types.ts — the capture provider interface.
+//
+// Every way of producing a screenshot is a provider: the local browser
+// engines with their emulation transforms today, and later real mail
+// clients (desktop clients in a headless compositor, self-hosted and
+// hosted webmail, clients in VM guests, a device-farm service). Each one
+// is implemented once against CaptureProvider; the harness (harness.ts)
+// owns everything common to all of them: routing, requirement and health
+// checks, the result cache, the generic provenance fields, the output
+// files and the run summary. A provider only renders what the cache
+// cannot answer.
+
+export type Sha256 = string;
+
+export type Scheme = "light" | "dark" | "forced-dark";
+
+export type Engine =
+  | "webkit"
+  | "webkitgtk"
+  | "blink"
+  | "gecko"
+  | "qtwebengine"
+  | "litehtml"
+  | "word"
+  | "unknown";
+
+export interface ViewportSpec {
+  name: string;
+  width: number;
+  dpr: number;
+}
+
+export interface ClientDescriptor {
+  // What --clients selects: "thunderbird", "roundcube", …; the local
+  // browser provider's clients are its engines (chromium, webkit,
+  // firefox).
+  clientId: string;
+  // What --families selects: an audience family, one of the local
+  // emulation labels (gmailWeb, wordApprox, chromium-baseline, …), or
+  // "verification" for a client that stands in for no audience family.
+  family: string;
+  engine: Engine;
+  // The exact client version, valid after prepare(). It enters the
+  // cache key (client_build) and the provenance (client.build), so a
+  // client update never serves a stale capture.
+  build(): Promise<string>;
+  // "any": every CSS width × DPR the matrix asks for.
+  viewports: ViewportSpec[] | "any";
+  // A requested scheme a client does not list is recorded as
+  // not-applicable without calling the provider.
+  schemes: Scheme[];
+  imagesOff: boolean;
+  // True for emulations: the capture approximates a client, it is not
+  // one.
+  approximation: boolean;
+}
+
+interface RequirementBase {
+  // Why the provider needs it; printed with an unmet requirement.
+  why: string;
+}
+
+export type Requirement = RequirementBase &
+  (
+    | { kind: "binary"; name: string }
+    | { kind: "nix" }
+    | { kind: "env-dir"; variable: string }
+    | { kind: "credentials"; files: string[] }
+    | { kind: "host-os"; os: string[] }
+    // A shared local service the harness starts once per run for every
+    // provider that declares it (services.ts).
+    | { kind: "service"; name: ServiceName }
+  );
+
+// The shared local services the harness can own: an IMAP server holding
+// the messages real clients open, and a loopback server for asset URLs.
+export type ServiceName = "imap" | "assets";
+
+// A running shared service, as the providers that declared it see it.
+export interface ServiceHandle {
+  name: ServiceName;
+  // Where it listens, e.g. "imap://127.0.0.1:41143" or
+  // "http://127.0.0.1:38211/".
+  endpoint: string;
+  // Per-run users and passwords the service generated; never read from
+  // the credentials directory.
+  credentials: Record<string, string> | null;
+  detail: Record<string, unknown>;
+}
+
+export type ProviderHealth =
+  | { state: "ok" }
+  | { state: "degraded"; reason: string }
+  | { state: "unavailable"; reason: string };
+
+export interface CaptureRequest {
+  // The output base name (<backend>-<family>-<client>-<viewport>-
+  // <scheme>-<images>), unique within a run.
+  id: string;
+  story: string;
+  mimeSha256: Sha256;
+  provider: string;
+  backend: string;
+  family: string;
+  clientId: string;
+  viewport: ViewportSpec;
+  scheme: Scheme;
+  images: "on" | "off";
+}
+
+export interface StoryMessage {
+  story: string;
+  mime: Uint8Array;
+  // The message's rendered HTML part, as the library wrote it, so local
+  // engines need not decode the MIME.
+  html: string;
+}
+
+export interface SessionCtx {
+  run: string;
+  session: string | null;
+  runDir: string;
+  // Every request routed to this provider in this run, cache hits
+  // included (a provider may warm resources for all of them).
+  planned: CaptureRequest[];
+  // Gate captures on their Tier-3 DOM assertions.
+  assert: boolean;
+  // --cold: a fresh client and profile per capture. Without it a
+  // provider may keep clients warm between the captures of this run (and
+  // only this run: nothing stays warm across runs in-process).
+  cold: boolean;
+  // The running shared services this provider declared, by name.
+  services: Partial<Record<ServiceName, ServiceHandle>>;
+}
+
+// The emulation a request applies. transformVersion enters the cache key
+// ("" for a real client); detail is recorded as the provenance's
+// `emulation` (null for a real client).
+export interface Emulation {
+  transformVersion: string;
+  detail: Record<string, unknown> | null;
+}
+
+export interface CaptureResult {
+  request: CaptureRequest;
+  status: "done" | "failed";
+  png?: Uint8Array;
+  reason?: string;
+  // Provider-specific provenance (timings, network, assertions), merged
+  // over the generic fields the harness writes. A `client` object is
+  // merged key by key (e.g. client.account); client.id and client.build
+  // stay the harness's.
+  provenance: Record<string, unknown>;
+}
+
+export interface CaptureProvider {
+  id: string;
+  // Label in output names, index rows and --backends: "a" for the local
+  // browser provider; providers without a lettered backend use their id.
+  backend: string;
+  // Bumped whenever output can change; part of the cache key.
+  version: string;
+  // Bumped by hand when crop, mask or wait logic changes; part of the
+  // cache key.
+  adapterVersion: number;
+  // How captures reach the client, recorded as `via` in every provenance
+  // and in run.json; "local" when unset.
+  via?: string;
+  // Static: answering needs no tool, so routing and --help work on a
+  // host where the provider is unavailable.
+  clients(): ClientDescriptor[];
+  requirements(): Requirement[];
+  health(): Promise<ProviderHealth>;
+  prepare(ctx: SessionCtx): Promise<void>;
+  emulation(req: CaptureRequest): Emulation;
+  capture(
+    batch: CaptureRequest[],
+    messages: Map<Sha256, StoryMessage>,
+    ctx: SessionCtx,
+  ): AsyncIterable<CaptureResult>;
+  dispose(): Promise<void>;
+}

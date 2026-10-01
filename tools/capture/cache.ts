@@ -11,22 +11,15 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Bump by hand when crop/mask/wait changes, or anything else that
-// changes the pixels for the same MIME. 2: story images are served
-// from the local fixture host (fixture_host.ts) instead of failing to
-// load, so every earlier capture of an image-bearing story is stale.
-export const ADAPTER_VERSION = 2;
-
-// The local provider (browser engines plus the emulation transforms).
-// Bump PROVIDER_VERSION whenever its output can change for reasons no
-// other key field captures.
-export const PROVIDER_ID = "browser-emulation";
-export const PROVIDER_VERSION = 1;
+// Every field is supplied by the capture harness
+// (providers/harness.ts): the provider's id, version and adapter
+// version, the client build it reports, and the transform version of
+// the emulation it applies.
 
 export interface CacheKeyParts {
   mimeSha: string;
   provider: string;
-  providerVersion: number;
+  providerVersion: string;
   backend: string;
   family: string;
   clientId: string;
@@ -38,7 +31,7 @@ export interface CacheKeyParts {
   adapterVersion: number;
   // The emulation transform(s) applied, as name@version joined by "+"
   // in application order ("" for a raw capture). See
-  // transformVersion in email-shots.ts.
+  // transformVersion in transforms.ts.
   transformVersion: string;
 }
 
@@ -47,7 +40,7 @@ export function cacheKey(p: CacheKeyParts): string {
   const joined = [
     p.mimeSha,
     p.provider,
-    String(p.providerVersion),
+    p.providerVersion,
     p.backend,
     p.family,
     p.clientId,

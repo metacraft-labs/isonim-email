@@ -25,9 +25,10 @@ Enter the dev shell first (`direnv allow`, or prefix with
 
 ```sh
 just build           # compile the library and every test (no run)
-just test            # full suite on C, backend-independent passes on JS
-just email-shots     # backend-A captures (backend A only)
-just lint            # nim check + capture-CLI syntax gate + nixfmt --check + markdownlint
+just test            # full suite: C, JS, the TS tooling tests, capture checks
+just email-shots     # screenshot captures through the capture providers
+just email-capture-ci # capture regression checks (part of just test)
+just lint            # nim check, tsc, capture-CLI gate, nixfmt, markdownlint
 just format          # nimpretty + nixfmt (alias: just fmt)
 just bench           # benchmarks (none yet; they land later)
 just t               # alias for test
@@ -47,9 +48,16 @@ src/
                                    # vocabulary, style compiler, MIME, …)
 tests/
   t1_*.nim, t2_*, t3_*             # unit/golden/invariant tests
-  goldens/                         # re-recorded with EMAIL_GOLDEN_RECORD=1
+  golden/                          # byte-exact goldens; changed only on
+                                   # purpose, the reason recorded in the
+                                   # owning test's header
   compile_fail/                    # `# expect:` fixtures + runner
-tools/capture/                     # capture service, backends, review
+  baselines/                       # capture regression baselines
+tools/capture/                     # email-shots CLI, emulation transforms,
+                                   # cache, contact sheets, regression checks
+  providers/                       # capture provider interface, routing,
+                                   # requirement checks, providers
+tools/review/                      # review briefs and the findings list
 ```
 
 ## Layer rules
@@ -59,9 +67,13 @@ tools/capture/                     # capture service, backends, review
 - Passes under `src/isonim_email/passes/` transform the tree in
   pipeline order; MSO/VML constructors stay restricted to
   `src/isonim_email/mso/` and `passes/head.nim`.
-- Tests are `std/unittest`, one file per concern, each rule test
-  carrying `# rule: R-…` comments. No mocks of our own components:
-  external boundaries use real services (Mailpit for SMTP).
+- Nim tests are `std/unittest`, one file per concern, each rule test
+  carrying `# rule: R-…` comments; the capture and review tooling is
+  TypeScript, tested with `node:test` and type-checked by `tsc`
+  (`just lint-ts`). Tests use real services and boundaries (Mailpit for
+  SMTP, the pinned browsers, real files and processes). A test double is
+  used only where no real counterpart exists yet, and the test file's
+  header says why.
 - Every `nim c` names `--out:` and `--nimcache:` (never beside the
   source); keep the Justfile and `repro.nim` edges in step.
 
@@ -86,8 +98,8 @@ read reviewer summaries; update build/email-shots/findings.jsonl
 edit again …
 just email-shots --affected --schemes light,dark  # full set
                                                   # before done
-just email-shots --full --backends d --async      # Mailgun
-                                                  # spread behind
+# later: real-client providers join the same command; a slow
+# device-farm spread will run in the background (--async, refused today)
 ```
 
 Briefs (`brief-<family>-<viewport>-<scheme>.md`) and contact sheets
@@ -96,6 +108,40 @@ to its captures. The loop stops when the full capture set for the
 work in hand has no open P1/P2 findings; a
 rating summarises the list, it is never the gate itself.
 
-The capture CLI serves backend A only (`--backends a`, the default).
-Backend B/C coverage joins the done-line later; `--backends d` and
-`--async` land with backend D (today they fail naming it).
+### Capture providers
+
+Every way of producing a screenshot is a capture provider
+(`tools/capture/providers/`). A provider declares the clients it can
+render (client id, family, engine, schemes, viewports), its
+requirements (binaries, Nix, a credentials directory, the host OS) and
+its health. `just email-shots` routes each requested family (and, with
+`--clients`, client) to every available provider that serves it, runs
+the providers concurrently in-process, and streams each capture as it
+lands. The harness owns the result cache (keyed on the message, the
+provider and its version, the client build, the viewport, scheme and
+images, and the emulation's transform version), the provenance JSON
+next to each PNG, `index.json` and the run summary.
+
+An unavailable provider is never skipped silently: the run summary and
+`run.json` name it with its reason, and a request no available provider
+serves fails with that reason.
+
+Local services several providers share (an IMAP server, a loopback
+asset server) belong to the harness (`providers/services.ts`): a
+provider declares one as a `service` requirement, the harness starts it
+once per run before any provider is prepared, hands its endpoint to the
+providers that declared it, and stops it after the last provider is
+disposed; a service that fails to start makes those providers
+unavailable with the reason. Providers keep clients warm only within one
+run; `--cold` asks for a fresh client per capture.
+
+Today one provider is registered: `browser-emulation` (backend `a`), the
+dev shell's pinned Chromium, WebKit and Firefox, raw or through the
+client emulations (gmailWeb, ganga, outlookWeb, imagesOff, wordApprox).
+Later: real desktop clients in a headless compositor, self-hosted and
+hosted webmail, clients in VM guests, and a device-farm service, each as
+one more provider. `--backends b|c|d` and `--async` are refused today,
+naming what lands later. Providers that need accounts read their
+credentials from one directory on the machine running the captures
+(`$ISONIM_EMAIL_CREDENTIALS_DIR`); the directory must be mode 0700 and
+no file in it group- or world-readable.

@@ -10,11 +10,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ADAPTER_VERSION,
   cacheKey,
   cachePaths,
-  PROVIDER_ID,
-  PROVIDER_VERSION,
   readCache,
   writeCache,
   type CacheKeyParts,
@@ -25,6 +22,11 @@ import {
   transformVersion,
   type TransformRegistry,
 } from "./transforms.ts";
+import {
+  BROWSER_EMULATION_ADAPTER_VERSION as ADAPTER_VERSION,
+  BROWSER_EMULATION_ID as PROVIDER_ID,
+  BROWSER_EMULATION_VERSION as PROVIDER_VERSION,
+} from "./providers/browser_emulation.ts";
 
 function parts(): CacheKeyParts {
   return {
@@ -67,7 +69,7 @@ describe("cacheKey", () => {
       ["images", (p) => (p.images = "off")],
       ["adapterVersion", (p) => (p.adapterVersion = ADAPTER_VERSION + 1)],
       ["provider", (p) => (p.provider = "linux-desktop")],
-      ["providerVersion", (p) => (p.providerVersion = PROVIDER_VERSION + 1)],
+      ["providerVersion", (p) => (p.providerVersion = `${PROVIDER_VERSION}.1`)],
       ["transformVersion", (p) => (p.transformVersion = "gmailWeb@999")],
     ];
     for (const [name, flip] of flips) {

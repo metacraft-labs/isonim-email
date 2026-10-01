@@ -89,7 +89,11 @@ describe("email-shots --help", () => {
     for (const name of ["constructor", "toString", "__proto__"]) {
       const fam = run(["--families", name, "--driver", missing]);
       assert.equal(fam.status, 2, `--families ${name}: ${fam.err}`);
-      assert.match(fam.err, /is not a backend-A family/, fam.err);
+      assert.match(
+        fam.err,
+        /is not a family any capture provider serves/,
+        fam.err,
+      );
       const vp = run(["--viewports", name, "--driver", missing]);
       assert.equal(vp.status, 2, `--viewports ${name}: ${vp.err}`);
       assert.match(vp.err, /bad viewport/, vp.err);
@@ -105,5 +109,11 @@ describe("email-shots --help", () => {
     assert.match(help.out, /affects declarations/);
     // Captures never use the network.
     assert.match(help.out, /never use the network/);
+    // Warm means within one run; --cold asks for a fresh client.
+    assert.match(
+      help.out,
+      /--cold +a fresh client and profile for every capture/,
+    );
+    assert.match(help.out, /never across\s+runs/);
   });
 });

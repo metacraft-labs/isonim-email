@@ -154,11 +154,12 @@ test-js: build-tailwind
     done
 
 # Test the capture and review suites (emulation transforms,
-# cache/affected/wiring suites, contact-sheet and findings suites):
+# cache/affected/wiring suites, provider routing and requirement
+# suites, contact-sheet and findings suites):
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
 test-ts:
-    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" "tools/review/*.test.ts"
+    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" "tools/capture/providers/*.test.ts" "tools/review/*.test.ts"
 
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
@@ -236,8 +237,8 @@ lint-nim:
 # strict tsconfig.json at the repo root, then the runtime gate: --help
 # parses the whole capture CLI under Node's type stripping, and
 # importing each emulation module plus the contact-sheet,
-# dom-assertions, perceptual, capture-ci, latency, launch, fixture-host
-# and findings
+# dom-assertions, perceptual, capture-ci, latency, launch, fixture-host,
+# capture-provider and findings
 # modules parses those too (cache/affected ride along transitively).
 # The declarations tsc reads (@types/node, playwright-core's own) come
 # from the dev shell's ISONIM_EMAIL_TS_TYPES, a Nix-pinned tree linked
@@ -255,6 +256,7 @@ lint-ts:
     node --input-type=module -e "await import('./tools/capture/latency.ts')"
     node --input-type=module -e "await import('./tools/capture/launch.ts')"
     node --input-type=module -e "await import('./tools/capture/fixture_host.ts')"
+    for m in tools/capture/providers/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/review/findings.ts')"
 
 lint-nix:

@@ -41,6 +41,9 @@ export interface Selection {
   schemes: string[];
   images: string[];
   cache: boolean;
+  // --cold: a fresh client per capture is a different workload from a
+  // warm run, so the two never share a median.
+  cold: boolean;
 }
 
 export interface Verdict {
@@ -63,7 +66,8 @@ export function median(values: number[]): number | null {
 }
 
 /** Runs are only comparable when they captured the same matrix the
- *  same way; the key covers every selection axis plus cache use. */
+ *  same way; the key covers every selection axis plus cache use and
+ *  --cold. */
 export function selectionKey(sel: Selection): string {
   const norm = {
     stories: [...sel.stories].sort(),
@@ -72,6 +76,7 @@ export function selectionKey(sel: Selection): string {
     schemes: [...sel.schemes].sort(),
     images: [...sel.images].sort(),
     cache: sel.cache,
+    cold: sel.cold,
   };
   return createHash("sha256")
     .update(JSON.stringify(norm))

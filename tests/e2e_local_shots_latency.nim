@@ -12,7 +12,7 @@
 ## the recording itself: every provenance must carry timing_ms
 ## (total + capture, plus setcontent + settle for real captures),
 ## run.json must carry the run's total and per-step timings and the
-## backend-A provider slice, and the run must land in the latency
+## local browser provider's slice, and the run must land in the latency
 ## history (build/email-shots/latency-history.jsonl) that the CLI
 ## compares against its rolling median. The measured wall time is
 ## printed; a regression beyond 50% of the rolling median is a
@@ -175,7 +175,7 @@ suite "e2e local shots latency":
     check notApplicable == 4
     check failed == 0
 
-    # run.json: the run's total, per-step timings and the backend-A
+    # run.json: the run's total, per-step timings and the local browser
     # provider slice.
     let runJson = parseJson(readFile(outDir / "run.json"))
     let runTiming = runJson{"timing_ms"}
@@ -190,9 +190,11 @@ suite "e2e local shots latency":
       if steps != nil and steps.kind == JObject:
         for step in runSteps:
           check isMs(steps{step})
-    let provider = runJson{"providers", "a"}
+    let provider = runJson{"providers", "browser-emulation"}
     check provider != nil
     if provider != nil:
+      check provider{"backend"}.getStr() == "a"
+      check provider{"health"}.getStr() == "ok"
       check provider{"requests"}.getInt() == index.len
       check isMs(provider{"wall_ms"})
     check runJson{"latency", "recorded"}.getBool()
