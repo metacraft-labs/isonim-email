@@ -382,6 +382,7 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     assert.equal(rows.length, 8);
     const seen = new Set<string>();
     const accounts = new Set<string>();
+    const tokens = new Set<string>();
     for (const { entry, reason, meta, png } of rows) {
       const id = `${entry.client}-${entry.viewport}-${entry.scheme}`;
       seen.add(id);
@@ -404,9 +405,28 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
       assert.equal(rec(meta.scheme_applied).dark, entry.scheme === "dark");
       // The injected copy had its one image rewritten, and the image
       // was served 200 by the assets service to this page.
+      // Under a token of this capture's own: the service's log for the
+      // capture holds only requests under it.
       const rewrite = rec(meta.asset_rewrite);
       assert.equal(rewrite.count, 1);
-      assert.match(String(rewrite.to), /^http:\/\/127\.0\.0\.1:\d+\/$/);
+      const token = String(rewrite.token);
+      assert.match(token, /^[0-9a-f]{16}$/);
+      assert.ok(!tokens.has(token), `${id}: token reused`);
+      tokens.add(token);
+      assert.match(
+        String(rewrite.to),
+        new RegExp(`^http://127\\.0\\.0\\.1:\\d+/c/${token}/$`),
+      );
+      const log = meta.assets_log as {
+        url: string;
+        status: number;
+        token: string | null;
+      }[];
+      assert.ok(
+        log.some((e) => e.url === LOGO && e.status === 200),
+        `${id}: ${JSON.stringify(log)}`,
+      );
+      for (const e of log) assert.equal(e.token, token, id);
       const images = rec(meta.images);
       assert.deepEqual(images.expected, [LOGO]);
       assert.deepEqual(images.missing, []);
@@ -664,15 +684,27 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
       ),
       JSON.stringify(log),
     );
-    // The foreign one, refused at the guard (a CONNECT for https).
+    // The story image's request carries this capture's token.
+    const token = rec(rows[0]!.meta.asset_rewrite).token;
     assert.ok(
-      log.some(
+      log.every((r) => (r as { token?: string }).token === token),
+      JSON.stringify(log),
+    );
+    // The foreign one, refused at the guard (a CONNECT for https); a
+    // refusal carries no token, so it is listed with the refusals.
+    const refused = rows[0]!.meta.assets_refused as {
+      url: string;
+      status: number;
+      kind: string;
+    }[];
+    assert.ok(
+      refused.some(
         (r) =>
           r.url === "example.com:443" &&
           r.status === 403 &&
           r.kind === "blocked",
       ),
-      JSON.stringify(log),
+      JSON.stringify(refused),
     );
     // Nothing reached the service directly: PHP had no other way out.
     assert.ok(!log.some((r) => r.via === "direct"), JSON.stringify(log));
@@ -798,7 +830,7 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     assert.doesNotMatch(rc, /\srole=|\saria-/);
     assert.match(
       rc,
-      /<img src="http:\/\/127\.0\.0\.1:\d+\/2494f1185a00ab29\/logo\.png"/,
+      /<img src="http:\/\/127\.0\.0\.1:\d+\/c\/[0-9a-f]{16}\/2494f1185a00ab29\/logo\.png"/,
     );
 
     // SnappyMail (default settings): every <style> block and every
@@ -839,7 +871,7 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
       );
       assert.match(
         sm,
-        /src="http:\/\/127\.0\.0\.1:\d+\/2494f1185a00ab29\/logo\.png"/,
+        /src="http:\/\/127\.0\.0\.1:\d+\/c\/[0-9a-f]{16}\/2494f1185a00ab29\/logo\.png"/,
       );
       assert.ok(countColour(row.png!, DARK_BG) < 1500, story);
     }

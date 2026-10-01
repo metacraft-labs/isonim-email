@@ -143,20 +143,25 @@ caddy on loopback, against a harness-started Dovecot (family
 `verification`: real sanitisers that stand in for no audience family;
 select them with `--families verification`, `--clients
 roundcube,snappymail` or `--backends selfhosted-webmail`); and
-`linux-desktop` (Linux only), the real Thunderbird in a headless sway
-(software rendering, a private D-Bus bus and home, and a network
-namespace with loopback only), driven over its own remote protocol
-and captured with grim (family `thunderbird`, desktop width only;
-`--clients thunderbird` or `--backends linux-desktop`). A change
-alone selects backend `a` only; the real clients run on a run with
-nothing to diff against, on `--full`, or when named. Each desktop
-client's crop is calibrated against a fixture with a square in each
-corner whenever its build changes (recorded under
+`linux-desktop` (Linux only), real desktop clients in a headless sway
+(software rendering, a private D-Bus bus and home, a network namespace
+with loopback only and name resolution of its own), captured with
+grim: Thunderbird (family `thunderbird`), driven over its own remote
+protocol, and Evolution, Geary, KMail (with Akonadi on SQLite) and
+Claws Mail (family `verification`), driven through their own
+command-line, D-Bus and socket interfaces and their accessibility
+trees; desktop width only, and Claws Mail light only (`--clients
+thunderbird,evolution`, `--families verification` or `--backends
+linux-desktop`). A change alone selects backend `a` only; the real
+clients run on a run with nothing to diff against, on `--full`, or
+when named. Each desktop client's crop is calibrated against a fixture
+with a square in each corner whenever its build changes (recorded under
 `build/email-shots/.calibration/`); `just email-calibrate` runs the
-check on demand and `just test-desktop` the desktop end-to-end tests
-(part of `just test`). Later: more desktop clients, hosted webmail,
-clients in VM guests, and a device-farm service, each as one more
-provider or driver. `--backends b|c|d` and `--async`
+check on demand. `just test-desktop` (part of `just test`) runs the
+desktop end-to-end tests on Thunderbird and Claws Mail, and `just
+test-desktop-all` on all five clients (run it after changing the
+provider or a driver). Later: hosted webmail, clients in VM guests, and
+a device-farm service, each as one more provider. `--backends b|c|d` and `--async`
 are refused today, naming what lands later. Providers that need accounts read their
 credentials from one directory on the machine running the captures
 (`$ISONIM_EMAIL_CREDENTIALS_DIR`); the directory must be mode 0700 and

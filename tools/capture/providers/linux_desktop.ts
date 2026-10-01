@@ -1,7 +1,11 @@
 // tools/capture/providers/linux_desktop.ts — the linux-desktop capture
 // provider: real desktop mail clients, each in a headless sway session
 // of its own (desktop_session.ts), driven by a client driver
-// (desktop_clients.ts; Thunderbird in thunderbird_driver.ts).
+// (desktop_clients.ts): Thunderbird (thunderbird_driver.ts, over its
+// own remote protocol), Evolution, Geary, KMail and Claws Mail
+// (evolution_driver.ts, geary_driver.ts, kmail_driver.ts,
+// claws_driver.ts, through their own command-line, D-Bus and socket
+// interfaces and their accessibility trees, desktop_a11y.ts).
 //
 // For every capture the story's MIME is delivered into a fresh
 // one-message IMAP account (the imap service, with the story asset
@@ -12,7 +16,8 @@
 // captures the output and the PNG is the message body region the
 // driver reports, cropped in device pixels, nothing around it. The
 // capture is taken once two consecutive frames of that region are
-// identical.
+// identical (for a client that cannot report the images it loaded,
+// after the story's images were requested from the assets service).
 //
 // A capture fails, never passes quietly, when:
 // - the account's INBOX does not hold exactly the delivered message, or
@@ -30,19 +35,23 @@
 // that client's captures with the reason. `just email-calibrate` runs it
 // on demand.
 //
-// Network. The client's HTTP and HTTPS proxy is the assets service's
-// egress guard, with no exception: loopback (the assets service, IMAP)
-// is reached directly and everything else is refused there and listed
-// in the provenance (network.blocked).
+// Network. Every session's network namespace has loopback only, and its
+// name resolution is its own (no host nscd, localhost only); the
+// clients that take proxy settings (Thunderbird, Claws Mail's litehtml
+// fetcher) use the assets service's egress guard with no exception, so
+// a refused request is listed in the provenance (network.blocked).
 //
 // Warm (the default): one session per client for the whole run, started
 // in prepare(); each capture creates its account, captures, closes the
-// message and removes the account. A client's captures run one at a
-// time; different clients capture at once. --cold: a fresh session,
-// profile and client for every capture, one capture at a time.
+// message and removes the account (a client that reads its accounts
+// only at start, Geary and Claws Mail, restarts in the warm session;
+// one that applies its scheme only at start restarts when the scheme
+// changes). A client's captures run one at a time, scheme by scheme;
+// different clients capture at once. --cold: a fresh session, profile
+// and client for every capture, one capture at a time.
 
 import { storyImagePaths, subjectOf } from "./selfhosted_webmail.ts";
-import { assetsHandle } from "./assets_service.ts";
+import { assetsHandle, splitCaptureToken } from "./assets_service.ts";
 import {
   CALIBRATION_ROOT,
   calibrationMessage,
@@ -66,6 +75,10 @@ import {
 } from "./desktop_session.ts";
 import type { RgbaImage } from "../contact_sheet.ts";
 import { imapHandle } from "./imap_service.ts";
+import { ClawsDriver } from "./claws_driver.ts";
+import { EvolutionDriver } from "./evolution_driver.ts";
+import { GearyDriver } from "./geary_driver.ts";
+import { KMailDriver } from "./kmail_driver.ts";
 import { ThunderbirdDriver } from "./thunderbird_driver.ts";
 import type {
   AssetsHandle,
@@ -94,14 +107,25 @@ export const LINUX_DESKTOP_ID = "linux-desktop";
 export const LINUX_DESKTOP_VERSION = "1";
 // Bump by hand when the crop, wait or open logic of the provider or of
 // any driver changes.
-export const LINUX_DESKTOP_ADAPTER_VERSION = 1;
+export const LINUX_DESKTOP_ADAPTER_VERSION = 2;
 // The output's logical height before the driver grows it.
 export const DEFAULT_OUTPUT_HEIGHT = 900;
 // Frames compared before a capture is taken.
 const MAX_FRAMES = 6;
+// How long a capture waits for its story images to be requested when
+// the client cannot report the images it loaded, and then for them to be
+// painted.
+const IMAGE_WAIT_MS = 10000;
+const IMAGE_PAINT_MS = 150;
 
 export function defaultDrivers(): DesktopClientDriver[] {
-  return [new ThunderbirdDriver()];
+  return [
+    new ThunderbirdDriver(),
+    new EvolutionDriver(),
+    new GearyDriver(),
+    new KMailDriver(),
+    new ClawsDriver(),
+  ];
 }
 
 export interface LinuxDesktopOptions {
@@ -115,9 +139,16 @@ export interface LinuxDesktopOptions {
   // load remote content from, so a test can show that such a load ends
   // at the egress guard. Never set outside tests.
   extraRemoteOrigins?: string[];
+  // Test seam: clients whose injected copy keeps the story's own asset
+  // origin (no rewrite to the assets service), so the client cannot
+  // load the story's images while the other clients load the same
+  // images at the same time; a test shows such a capture fails. Never
+  // set outside tests.
+  withholdImagesFrom?: string[];
 }
 
 interface Running {
+  clientId: string;
   session: DesktopSession;
   sessionInfo: DesktopSessionInfo;
   instance: DesktopClientInstance;
@@ -183,6 +214,7 @@ export class LinuxDesktopProvider implements CaptureProvider {
   private readonly stateRoot: string | undefined;
   private readonly calibrationRoot: string;
   private readonly extraRemoteOrigins: string[];
+  private readonly withholdImagesFrom: readonly string[];
   private imap: ImapHandle | null = null;
   private assets: AssetsHandle | null = null;
   private swayVersion = "";
@@ -200,6 +232,15 @@ export class LinuxDesktopProvider implements CaptureProvider {
     this.stateRoot = opts.stateRoot;
     this.calibrationRoot = opts.calibrationRoot ?? CALIBRATION_ROOT;
     this.extraRemoteOrigins = opts.extraRemoteOrigins ?? [];
+    this.withholdImagesFrom = opts.withholdImagesFrom ?? [];
+  }
+
+  // The assets service a client's injected copy is rewritten to
+  // (undefined: not rewritten, the test seam above).
+  private assetsFor(clientId: string): AssetsHandle | undefined {
+    return this.withholdImagesFrom.includes(clientId)
+      ? undefined
+      : this.assets!;
   }
 
   private driver(clientId: string): DesktopClientDriver | undefined {
@@ -380,7 +421,7 @@ export class LinuxDesktopProvider implements CaptureProvider {
         assets: this.assets!,
         extraRemoteOrigins: this.extraRemoteOrigins,
       });
-      return { session, sessionInfo, instance: inst };
+      return { clientId: d.clientId, session, sessionInfo, instance: inst };
     } catch (err) {
       await session.stop();
       throw err;
@@ -404,6 +445,10 @@ export class LinuxDesktopProvider implements CaptureProvider {
     viewport: ViewportSpec,
     scheme: Scheme,
     timing: Record<string, number>,
+    // The story images the capture waits for (requested from the
+    // assets service under this delivery's token) when the client
+    // cannot report its images itself.
+    images: { paths: string[] } | null = null,
   ): Promise<{
     delivery: Awaited<ReturnType<ImapHandle["mailboxFor"]>>;
     opened: OpenedMessage;
@@ -417,17 +462,36 @@ export class LinuxDesktopProvider implements CaptureProvider {
       height: DEFAULT_OUTPUT_HEIGHT,
       scale: viewport.dpr,
     });
-    const delivery = await this.imap!.mailboxFor(message.mime, {
-      assets: this.assets!,
-    });
+    const assets = this.assetsFor(r.clientId);
+    const delivery = await this.imap!.mailboxFor(
+      message.mime,
+      assets === undefined ? {} : { assets },
+    );
     timing.account = delivery.timingMs.account;
     timing.inject = delivery.timingMs.inject;
     const opened = await r.instance.open({
       account: delivery.account,
       scheme,
       viewport,
+      remoteImages: storyImagePaths(message.html).length > 0,
     });
     Object.assign(timing, opened.timingMs);
+    if (opened.images === null && images !== null && images.paths.length > 0) {
+      const tImg = performance.now();
+      const token = delivery.assetRewrite?.token ?? null;
+      const served = (): boolean => {
+        if (token === null) return false;
+        const log = this.assets!.requestsFor(token);
+        // Answered at all: a path answered 404 is not waited for, it
+        // fails the capture below.
+        return images.paths.every((p) => log.some((e) => e.url === p));
+      };
+      while (!served() && performance.now() - tImg < IMAGE_WAIT_MS)
+        await new Promise((ok) => setTimeout(ok, 20));
+      // Served is not yet decoded and painted.
+      await new Promise((ok) => setTimeout(ok, IMAGE_PAINT_MS));
+      timing.images = performance.now() - tImg;
+    }
     const tCap = performance.now();
     const crop = deviceRect(opened.body, viewport.dpr);
     let full = r.session.screenshot();
@@ -555,9 +619,19 @@ export class LinuxDesktopProvider implements CaptureProvider {
   ): AsyncIterable<CaptureResult> {
     // Warm: one worker per client (each client's captures in order,
     // different clients at once). Cold: one capture at a time.
+    // A client's captures are taken scheme by scheme (a client that
+    // applies a scheme at start restarts only when it changes).
+    const order = (s: Scheme): number =>
+      ["light", "dark", "forced-dark"].indexOf(s);
     const queues: CaptureRequest[][] = ctx.cold
       ? [batch]
-      : this.drivers.map((d) => batch.filter((r) => r.clientId === d.clientId));
+      : this.drivers.map((d) =>
+          batch
+            .filter((r) => r.clientId === d.clientId)
+            .map((r, i) => ({ r, i }))
+            .sort((a, b) => order(a.r.scheme) - order(b.r.scheme) || a.i - b.i)
+            .map((x) => x.r),
+        );
     const ready: CaptureResult[] = [];
     let wake: (() => void) | null = null;
     let running = 0;
@@ -639,6 +713,9 @@ export class LinuxDesktopProvider implements CaptureProvider {
       provenance.client = {
         version: this.versions.get(d.clientId) ?? "",
       };
+      // The driver's own start-up steps for this client instance (its
+      // helper daemons, e.g. Akonadi, and the client), warm or cold.
+      provenance.client_start_ms = running.instance.timingMs;
       provenance.compositor = {
         name: "sway",
         version: this.swayVersion,
@@ -654,6 +731,7 @@ export class LinuxDesktopProvider implements CaptureProvider {
         req.viewport,
         req.scheme,
         timing,
+        req.images === "on" ? { paths: storyImagePaths(message.html) } : null,
       );
       (provenance.client as Record<string, unknown>).account =
         c.delivery.account.user;
@@ -689,14 +767,19 @@ export class LinuxDesktopProvider implements CaptureProvider {
           `${d.clientId}: requested ${req.scheme} but the client shows ${c.opened.scheme.dark ? "dark" : "light"} (${JSON.stringify(c.opened.scheme.evidence)})`,
         );
 
-      // The story's images: served 200 by the assets service during
-      // this capture, and loaded by the client.
-      const log = assets.requests().slice(assetsBefore);
+      // The story's images: served 200 by the assets service to this
+      // capture's copy (requests under its delivery token; other
+      // clients load the same paths at the same time under theirs),
+      // and loaded by the client.
+      const token = c.delivery.assetRewrite?.token ?? null;
+      const mine = token === null ? [] : assets.requestsFor(token);
       const assetsOrigin = new URL(assets.baseUrl).origin;
       const expected = storyImagePaths(message.html);
-      const served = log
-        .filter((e) => e.kind === "asset")
-        .map((e) => ({ path: e.url, status: e.status, via: e.via }));
+      const served = mine.map((e) => ({
+        path: e.url,
+        status: e.status,
+        via: e.via,
+      }));
       const clientLoaded = (c.opened.images ?? [])
         .filter((i) => {
           try {
@@ -705,12 +788,17 @@ export class LinuxDesktopProvider implements CaptureProvider {
             return false;
           }
         })
-        .map((i) => ({ path: new URL(i.url).pathname, loaded: i.loaded }));
+        .map((i) => {
+          const t = splitCaptureToken(new URL(i.url).pathname);
+          return { path: t.path, token: t.token, loaded: i.loaded };
+        });
       const missing = expected.filter(
         (p) =>
           !served.some((s) => s.path === p && s.status === 200) ||
           (c.opened.images !== null &&
-            !clientLoaded.some((i) => i.path === p && i.loaded)),
+            !clientLoaded.some(
+              (i) => i.path === p && i.token === token && i.loaded,
+            )),
       );
       provenance.images = {
         expected,
@@ -721,13 +809,17 @@ export class LinuxDesktopProvider implements CaptureProvider {
           ? { note: "the story loads no story image" }
           : {}),
       };
-      // The service's log over this capture; with other providers
-      // capturing at once it can include their requests.
-      provenance.assets_log = log;
+      // This capture's asset requests (its token's).
+      provenance.assets_log = mine;
+      // Refused requests carry no token: these are every refusal while
+      // this capture ran, other clients' included.
       provenance.network = {
         policy:
           "proxy: the assets service's egress guard, no exception (loopback is not proxied)",
-        blocked: log.filter((e) => e.kind === "blocked"),
+        blocked: assets
+          .requests()
+          .slice(assetsBefore)
+          .filter((e) => e.kind === "blocked"),
       };
       if (req.images === "on" && missing.length > 0)
         throw new CaptureError(

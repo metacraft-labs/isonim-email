@@ -1,14 +1,16 @@
 // tools/capture/providers/linux_desktop.test.ts — the linux-desktop
-// provider: real desktop mail clients (Thunderbird) in a headless sway,
-// end to end.
+// provider: real desktop mail clients (Thunderbird, Evolution, Geary,
+// KMail with Akonadi, Claws Mail) in a headless sway, end to end.
 //
 // Everything is real: the capture harness (assessProviders +
 // executePlan) with the registered imap and assets services (Dovecot run
 // as the user, the loopback asset server and egress guard), the
 // provider with sway (wlroots' headless backend, software renderer),
-// grim, wtype, a private D-Bus session bus and Thunderbird from the dev
-// shell, the stories built by the library's story driver, and the PNGs
-// decoded with the capture tools' own PNG codec. No mocks.
+// grim, wtype, a private D-Bus session bus, the clients from the dev
+// shell with their own helper daemons (an accessibility bus,
+// Evolution's source registry, a keyring daemon, Akonadi on SQLite),
+// the stories built by the library's story driver, and the PNGs decoded
+// with the capture tools' own PNG codec. No mocks.
 //
 // The vacuity guard of the capture test reads the PNG itself: OCR
 // (tesseract, English only, from the dev shell) must find the story's
@@ -16,11 +18,19 @@
 // wrong window, a crop of the client's chrome or a capture of the
 // wrong message fails it, whatever the client reports about itself.
 //
-// One test seam of the provider is used, justified: further origins
-// the client may load remote content from (`extraRemoteOrigins`), so a
-// message with an image on a foreign host makes Thunderbird request it
-// and the test can see that the request ends at the egress guard. The
-// provider itself allows the assets service's origin only. One test
+// Three test seams are used, each justified: further origins the
+// client may load remote content from (the provider's
+// `extraRemoteOrigins`), so a message with an image on a foreign host
+// makes Thunderbird request it and the test can see that the request
+// ends at the egress guard (the provider itself allows the assets
+// service's origin only); clients whose injected copy keeps the story's
+// own image origin (the provider's `withholdImagesFrom`), so one client
+// cannot load the story image while the others load the very same
+// image at once, which is what shows that each capture's image check
+// counts only its own requests; and the accessible name KMail's driver
+// looks for in the external-references notice (`noticeLink`), so the
+// link is never found and the test can show that the capture fails
+// rather than passing without its images. Nothing else is replaced. One test
 // reaches into the running Thunderbird instance's Marionette connection
 // (a private field) to put a text field in its window and read back
 // what wtype typed into it: the session's input path is what is under
@@ -28,7 +38,8 @@
 // back.
 //
 // Some tests deliver a small hand-written message instead of a story:
-// a stale asset hash, a foreign image.
+// a stale asset hash, a foreign image, a message whose colours follow
+// prefers-color-scheme.
 //
 // Every run uses scratch state roots, a scratch calibration root and a
 // scratch socket base, so the sweeps under test see only this file's
@@ -40,10 +51,14 @@
 // in and committed, so it runs the code under test): after a previous
 // run, `--clients thunderbird` captures the real Thunderbird.
 //
+// ISONIM_EMAIL_DESKTOP_CLIENTS (a comma-separated list of client ids)
+// narrows the clients the multi-client tests run; unset, they run every
+// registered client. `just test-desktop` sets it (see the Justfile);
+// `just test-desktop-all` does not.
+//
 // Needs `just email-shots-build` (which `just test-desktop` runs first)
 // and the dev shell. Run with:
 //   node --test tools/capture/providers/linux_desktop.test.ts
-
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -62,15 +77,19 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createConnection, createServer } from "node:net";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { readPng, type RgbaImage } from "../contact_sheet.ts";
 import { AssetsService } from "./assets_service.ts";
 import {
   calibrationPath,
   checkCalibration,
+  type DesktopClientDriver,
   MARKER_PX,
   readCalibration,
 } from "./desktop_clients.ts";
@@ -97,6 +116,7 @@ import {
 import type { Marionette } from "./marionette.ts";
 import { processAlive } from "./owned_state.ts";
 import { registeredServices } from "./services.ts";
+import { KMailDriver } from "./kmail_driver.ts";
 import { ThunderbirdDriver } from "./thunderbird_driver.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./types.ts";
 
@@ -184,15 +204,26 @@ function tree(root: number): Proc[] {
   return out;
 }
 
-// Processes whose command line mentions this file's scratch directory
-// (every sway, bus, Thunderbird and Dovecot this file starts names it).
-function scratchProcesses(): string[] {
+// Processes whose command line or environment mentions this file's
+// scratch directory: every sway, bus, Dovecot and helper this file
+// starts names it in its arguments, and every client and helper daemon
+// of a session has its home and runtime directory under it.
+function scratchProcesses(environOnly = false): string[] {
   const out: string[] = [];
   for (const e of readdirSync("/proc")) {
     if (!/^\d+$/.test(e) || Number(e) === process.pid) continue;
     try {
       const cmd = readFileSync(`/proc/${e}/cmdline`, "latin1");
-      if (cmd.includes(scratch)) out.push(`${e}: ${cmd.replace(/\0/g, " ")}`);
+      let environ = "";
+      try {
+        environ = readFileSync(`/proc/${e}/environ`, "latin1");
+      } catch {
+        // another user's process
+      }
+      const hit = environOnly
+        ? !cmd.includes(scratch) && environ.includes(scratch)
+        : cmd.includes(scratch) || environ.includes(scratch);
+      if (hit) out.push(`${e}: ${cmd.replace(/\0/g, " ")}`);
     } catch {
       // gone
     }
@@ -352,14 +383,18 @@ async function runDesktop(
     schemes?: Scheme[];
     cold?: boolean;
     provider?: LinuxDesktopOptions;
+    // The clients to run (default: Thunderbird).
+    clients?: string[];
   } = {},
 ): Promise<{ rows: Row[]; wallMs: number; passwords: string[] }> {
   const run = `ld-${process.pid}-${++runSeq}`;
   const runDir = join(scratch, "runs", run);
+  const clients = opts.clients ?? ["thunderbird"];
   const provider = new LinuxDesktopProvider({
     env,
     stateRoot: deskRoot,
     calibrationRoot: calRoot,
+    drivers: defaultDrivers().filter((d) => clients.includes(d.clientId)),
     ...opts.provider,
   });
   const spec: MatrixSpec = {
@@ -367,7 +402,7 @@ async function runDesktop(
       story: s.story,
       mimeSha256: sha256(s.mime),
     })),
-    families: ["thunderbird"],
+    families: ["thunderbird", "verification"],
     clients: provider.clients().map((c) => c.clientId),
     backends: null,
     viewports: opts.viewports ?? [DESKTOP],
@@ -423,62 +458,169 @@ async function runDesktop(
   return { rows, wallMs, passwords: Object.values(creds) };
 }
 
+// The clients the multi-client tests run (see the file header).
+const CLIENTS: string[] = (() => {
+  const all = defaultDrivers().map((d) => d.clientId);
+  const only = (process.env.ISONIM_EMAIL_DESKTOP_CLIENTS ?? "")
+    .split(",")
+    .filter((c) => c !== "");
+  for (const c of only) assert.ok(all.includes(c), `no desktop client ${c}`);
+  return only.length > 0 ? all.filter((c) => only.includes(c)) : all;
+})();
+
+function driverOf(client: string): DesktopClientDriver {
+  const d = defaultDrivers().find((x) => x.clientId === client);
+  assert.ok(d !== undefined, client);
+  return d;
+}
+
+function out(
+  cmd: string,
+  args: string[],
+  extra: Record<string, string> = {},
+): string {
+  const r = spawnSync(cmd, args, {
+    encoding: "utf8",
+    env: { ...process.env, ...extra },
+  });
+  return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+}
+
+// The exact client versions, read here independently of the drivers:
+// from each client's own binary, or (Evolution, which needs a display
+// even for --version) from its own package's pkg-config file.
+function clientVersion(client: string): string {
+  let v: string | undefined;
+  if (client === "thunderbird")
+    v = /Thunderbird (\S+)/.exec(out("thunderbird", ["--version"]))?.[1];
+  else if (client === "geary")
+    v = /geary:?\s+(\d\S*)/.exec(out("geary", ["--version"]))?.[1];
+  else if (client === "claws-mail")
+    v = /Claws Mail version (\S+)/.exec(out("claws-mail", ["--version"]))?.[1];
+  else if (client === "kmail") {
+    const m = /kmail2 (\S+) \((\S+)\)/.exec(
+      out("isonim-email-kde", ["kmail", "--version"], {
+        QT_QPA_PLATFORM: "offscreen",
+      }),
+    );
+    v = m === null ? undefined : `${m[1]}-${m[2]}`;
+  } else if (client === "evolution") {
+    const bin = execFileSync("sh", ["-c", "command -v evolution"], {
+      encoding: "utf8",
+    }).trim();
+    const pc = join(
+      dirname(dirname(realpathSync(bin))),
+      "lib",
+      "pkgconfig",
+      "evolution-shell-3.0.pc",
+    );
+    v = /^Version:\s*(\S+)/m.exec(readFileSync(pc, "utf8"))?.[1];
+  }
+  assert.ok(v !== undefined, `cannot read ${client}'s version`);
+  return v;
+}
+
+function swayVersion(): string {
+  const v = /sway version (\S+)/.exec(out("sway", ["--version"]))?.[1];
+  assert.ok(v !== undefined);
+  return v;
+}
+
 // The exact client and compositor versions, read here independently.
 function versions(): { thunderbird: string; sway: string } {
-  const tb = /Thunderbird (\S+)/.exec(
-    execFileSync("thunderbird", ["--version"], { encoding: "utf8" }),
-  )?.[1];
-  const sway = /sway version (\S+)/.exec(
-    execFileSync("sway", ["--version"], { encoding: "utf8" }),
-  )?.[1];
-  assert.ok(tb !== undefined && sway !== undefined);
-  return { thunderbird: tb, sway };
+  return { thunderbird: clientVersion("thunderbird"), sway: swayVersion() };
+}
+
+// A message whose colours follow prefers-color-scheme: a 320 px block,
+// white under light and black under dark, so a capture shows whether
+// the scheme reached the message.
+const SCHEME_PROBE_HTML = [
+  "<style>.probe{background:#ffffff;color:#000000;height:320px;margin:0}",
+  "@media (prefers-color-scheme: dark){.probe{background:#000000;color:#ffffff}}</style>",
+  '<div class="probe"><h1>Scheme probe</h1><p>light or dark</p></div>',
+].join("\r\n");
+
+// The share of an image's pixels that are dark (luminance below 50: the
+// probe's black, also as a client's own dark adaptation renders it).
+function darkShare(img: RgbaImage): number {
+  let n = 0;
+  for (let i = 0; i < img.data.length; i += 4)
+    if (
+      0.2126 * img.data[i]! +
+        0.7152 * img.data[i + 1]! +
+        0.0722 * img.data[i + 2]! <
+      50
+    )
+      n++;
+  return n / (img.width * img.height);
 }
 
 describe("linux desktop", { skip: process.platform !== "linux" }, () => {
   // The receipt in every desktop client, light and dark; mobile asked
-  // for too, to show it is not one a desktop client renders.
+  // for too, to show it is not one a desktop client renders, and dark
+  // not-applicable where the client renders light only.
   let main: Awaited<ReturnType<typeof runDesktop>>;
   before(async () => {
     main = await runDesktop([receipt], {
       viewports: [MOBILE, DESKTOP],
       schemes: ["light", "dark"],
+      clients: CLIENTS,
     });
   });
 
   it("e2e linux desktop captures the receipt story in every client", () => {
-    const clients = defaultDrivers().map((d) => d.clientId);
-    assert.ok(clients.includes("thunderbird"), clients.join(", "));
-    const v = versions();
+    assert.ok(CLIENTS.includes("thunderbird"), CLIENTS.join(", "));
+    const sway = swayVersion();
     const heading = headingOf(receipt.html);
     assert.equal(heading, "Receipt #1234");
     const accounts = new Set<string>();
+    const tokens = new Set<string>();
     const luminance: Record<string, Record<string, number>> = {};
-    for (const client of clients) {
+    let done = 0;
+    for (const client of CLIENTS) {
+      const d = driverOf(client);
+      const version = clientVersion(client);
       const mine = main.rows.filter((r) => r.entry.client === client);
       // Mobile: not a viewport a desktop client renders.
       const mobile = mine.filter((r) => r.entry.viewport === "mobile");
-      assert.equal(mobile.length, 2);
+      assert.equal(mobile.length, 2, client);
       for (const r of mobile) {
         assert.equal(r.entry.status, "not-applicable");
-        assert.match(String(r.reason), /renders: desktop/);
+        // (a scheme the client does not render is named first)
+        assert.match(String(r.reason), /renders: desktop|renders: light\)/);
       }
-      const done = mine.filter((r) => r.entry.viewport === "desktop");
-      assert.deepEqual(done.map((r) => r.entry.scheme).sort(), [
-        "dark",
-        "light",
-      ]);
-      for (const { entry, reason, meta, metaText, png } of done) {
+      // A scheme the client does not render: not-applicable.
+      for (const r of mine.filter(
+        (x) =>
+          x.entry.viewport === "desktop" &&
+          !d.schemes.includes(x.entry.scheme as Scheme),
+      )) {
+        assert.equal(r.entry.status, "not-applicable", client);
+        assert.match(String(r.reason), /is not a scheme client/);
+      }
+      const captured = mine.filter(
+        (r) =>
+          r.entry.viewport === "desktop" &&
+          d.schemes.includes(r.entry.scheme as Scheme),
+      );
+      assert.deepEqual(
+        captured.map((r) => r.entry.scheme).sort(),
+        [...d.schemes].sort(),
+        client,
+      );
+      for (const { entry, reason, meta, metaText, png } of captured) {
         const id = `${client}-${entry.scheme}`;
         assert.equal(entry.status, "done", `${id}: ${reason}`);
+        done++;
         assert.equal(meta.provider, "linux-desktop");
         assert.equal(meta.via, "inject");
         assert.equal(meta.approximation, false);
+        assert.equal(meta.family, d.family, id);
         // The client build, read from the client itself, in provenance.
         const c = rec(meta.client);
         assert.equal(c.id, client);
-        assert.equal(c.build, `thunderbird-${v.thunderbird}+sway-${v.sway}`);
-        assert.equal(c.version, v.thunderbird);
+        assert.equal(c.build, `${client}-${version}+sway-${sway}`, id);
+        assert.equal(c.version, version, id);
         assert.match(String(c.account), /^c\d+-[0-9a-f]{8}$/);
         accounts.add(String(c.account));
         // The account user, never its password.
@@ -486,30 +628,54 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
           assert.ok(!metaText.includes(p), `${id}: a password in provenance`);
         assert.doesNotMatch(metaText, /password/i);
         // The requested scheme, as the client applied it.
-        assert.equal(rec(meta.scheme_applied).dark, entry.scheme === "dark");
+        assert.equal(
+          rec(meta.scheme_applied).dark,
+          entry.scheme === "dark",
+          id,
+        );
         // The image: rewritten to the assets service, served 200, and
-        // loaded by the client.
+        // (where the client can say) loaded by the client.
+        // The rewrite carries the capture's own token, and every request
+        // in its assets log is under that token.
         const rewrite = rec(meta.asset_rewrite);
         assert.equal(rewrite.count, 1);
-        assert.match(String(rewrite.to), /^http:\/\/127\.0\.0\.1:\d+\/$/);
+        const token = String(rewrite.token);
+        assert.match(token, /^[0-9a-f]{16}$/);
+        assert.ok(!tokens.has(token), `${id}: token reused`);
+        tokens.add(token);
+        assert.equal(
+          String(rewrite.to),
+          `${new URL(String(rewrite.to)).origin}/c/${token}/`,
+        );
+        assert.match(String(rewrite.to), /^http:\/\/127\.0\.0\.1:\d+\//);
         const images = rec(meta.images);
         assert.deepEqual(images.expected, [LOGO]);
-        assert.deepEqual(images.missing, []);
+        assert.deepEqual(images.missing, [], id);
         assert.ok(
           (images.served as { path: string; status: number }[]).some(
             (s) => s.path === LOGO && s.status === 200,
           ),
+          id,
         );
-        assert.ok(Array.isArray(meta.assets_log));
+        if (client === "thunderbird") assert.ok(Array.isArray(images.client));
+        const log = meta.assets_log as { token: string | null }[];
+        assert.ok(log.length >= 1, id);
+        for (const e of log) assert.equal(e.token, token, id);
         assert.deepEqual(rec(meta.network).blocked, []);
         // Cropped to the message body: the PNG is the crop the client's
-        // geometry gave, below the client's header, full width.
+        // geometry gave, below the client's own header and tool bars,
+        // within the output's width.
         const crop = rec(rec(meta.crop).device);
         const img = readPng(png!);
         assert.equal(img.width, Number(crop.width), id);
         assert.equal(img.height, Number(crop.height), id);
-        assert.equal(img.width, DESKTOP.width * DESKTOP.dpr, id);
+        assert.ok(img.width <= DESKTOP.width * DESKTOP.dpr, id);
+        assert.ok(img.width >= 700, `${id}: crop ${img.width} px wide`);
+        if (client === "thunderbird")
+          assert.equal(img.width, DESKTOP.width * DESKTOP.dpr, id);
         assert.ok(Number(crop.y) > 60, `${id}: crop at y=${String(crop.y)}`);
+        // The calibration held for this build.
+        assert.notEqual(rec(rec(meta.crop).calibration).state, "failed", id);
         // Vacuity guard: the crop shows the story's own heading.
         const text = ocr(png!);
         assert.ok(
@@ -518,82 +684,135 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         );
         (luminance[client] ??= {})[entry.scheme] = meanLuminance(img);
       }
-      // Light is light and dark is dark, in the pixels.
+      // Light is light in the pixels; Thunderbird adapts the message to
+      // dark itself (its dark reader), the others leave a message
+      // without dark styles as it is (the scheme probe below shows the
+      // scheme reaching the message).
       const l = luminance[client]!;
       assert.ok(l.light! > 150, `${client} light: mean luminance ${l.light}`);
-      assert.ok(l.dark! < 110, `${client} dark: mean luminance ${l.dark}`);
+      if (client === "thunderbird")
+        assert.ok(l.dark! < 110, `${client} dark: mean luminance ${l.dark}`);
     }
-    assert.equal(accounts.size, 2 * clients.length, "one account per capture");
+    assert.equal(accounts.size, done, "one account per capture");
     process.stderr.write(
       `linux-desktop: mean luminance ${JSON.stringify(luminance)}\n`,
     );
   });
 
+  it("the dark scheme reaches the message in every client that renders it", async () => {
+    // A message whose own styles follow prefers-color-scheme: black
+    // under dark, white under light.
+    const probe = crafted("schemeProbe", SCHEME_PROBE_HTML);
+    const dark = CLIENTS.filter((c) => driverOf(c).schemes.includes("dark"));
+    const { rows } = await runDesktop([probe], {
+      schemes: ["light", "dark"],
+      clients: dark,
+    });
+    for (const client of dark) {
+      const share: Record<string, number> = {};
+      for (const r of rows.filter((x) => x.entry.client === client)) {
+        assert.equal(
+          r.entry.status,
+          "done",
+          `${client} ${r.entry.scheme}: ${r.reason}`,
+        );
+        share[r.entry.scheme] = darkShare(readPng(r.png!));
+      }
+      // Light: dark only in the text; dark: the block is (KMail's crop
+      // also holds its header, dark in its dark colour scheme: about a
+      // sixth of the crop, under the bound).
+      assert.ok(
+        share.light! < 0.05,
+        `${client} light: dark share ${share.light}`,
+      );
+      assert.ok(share.dark! > 0.3, `${client} dark: dark share ${share.dark}`);
+      process.stderr.write(
+        `linux-desktop: scheme probe ${client}: dark share light ${share.light!.toFixed(3)}, dark ${share.dark!.toFixed(3)}\n`,
+      );
+    }
+  });
+
   it("e2e linux desktop warm capture latency is recorded", async () => {
-    // Warm: one session for the run, four captures (two stories, two
-    // schemes). Cold: a fresh session and client per capture.
+    // Warm: one session per client for the run, two stories in each
+    // scheme the client renders. Cold: a fresh session and client per
+    // capture (the receipt, light).
     const warm = await runDesktop([receipt, alert], {
       schemes: ["light", "dark"],
+      clients: CLIENTS,
     });
     const cold = await runDesktop([receipt], {
-      schemes: ["light", "dark"],
+      schemes: ["light"],
       cold: true,
+      clients: CLIENTS,
     });
     const p50 = (xs: number[]): number => {
       const s = [...xs].sort((a, b) => a - b);
       return s[Math.floor((s.length - 1) / 2)]!;
     };
+    // Steps every client records; the drivers add their own (scheme,
+    // configure, client start, images).
     const steps = [
       "account",
       "inject",
-      "scheme",
-      "configure",
       "sync",
       "open",
       "settle",
       "capture",
       "total",
     ];
-    const totals = { warm: [] as number[], cold: [] as number[] };
+    const totals: Record<string, { warm: number[]; cold: number[] }> = {};
     for (const [mode, run] of [
       ["warm", warm],
       ["cold", cold],
     ] as const) {
-      assert.equal(run.rows.length, mode === "warm" ? 4 : 2);
-      const sessions = new Set<string>();
-      for (const { entry, reason, meta } of run.rows) {
-        assert.equal(entry.status, "done", `${mode}: ${reason}`);
+      const expected = CLIENTS.reduce(
+        (n, c) => n + (mode === "warm" ? 2 * driverOf(c).schemes.length : 1),
+        0,
+      );
+      const rows = run.rows.filter((r) => r.entry.status !== "not-applicable");
+      assert.equal(rows.length, expected, mode);
+      for (const { entry, reason, meta } of rows) {
+        const id = `${mode} ${entry.client} ${entry.story} ${entry.scheme}`;
+        assert.equal(entry.status, "done", `${id}: ${reason}`);
         const t = rec(meta.timing_ms);
         for (const s of steps)
           assert.ok(
             typeof t[s] === "number" && (t[s] as number) >= 0,
-            `${mode} ${s}: ${String(t[s])}`,
+            `${id} ${s}: ${String(t[s])}`,
           );
         assert.ok(
           (t.total as number) >=
             (t.open as number) + (t.settle as number) + (t.capture as number),
+          id,
         );
         const compositor = rec(meta.compositor);
-        assert.equal(compositor.warm, mode === "warm");
+        assert.equal(compositor.warm, mode === "warm", id);
         // Cold captures start a session and a client of their own.
         if (mode === "cold") {
-          assert.ok((t.session as number) > 0 && (t.launch as number) > 0);
+          assert.ok((t.session as number) > 0 && (t.launch as number) > 0, id);
         } else {
-          assert.equal(t.session, undefined);
+          assert.equal(t.session, undefined, id);
         }
-        sessions.add(String(rec(rec(meta.client).window).main_window));
-        totals[mode].push(t.total as number);
+        (totals[entry.client] ??= { warm: [], cold: [] })[mode].push(
+          t.total as number,
+        );
+        const start = rec(meta.client_start_ms);
         process.stderr.write(
-          `linux-desktop latency: ${mode} ${entry.story} ${entry.scheme}: ${steps
-            .concat(mode === "cold" ? ["session", "launch"] : [])
-            .map((s) => `${s} ${Math.round(Number(t[s]))}`)
+          `linux-desktop latency: ${id}: ${Object.entries(t)
+            .map(([k, v]) => `${k} ${Math.round(Number(v))}`)
+            .join(", ")}; client instance start: ${Object.entries(start)
+            .map(([k, v]) => `${k} ${Math.round(Number(v))}`)
             .join(", ")}\n`,
         );
       }
     }
     // Recorded, not asserted (targets: 10 s p50 warm, 30 s cold).
+    for (const [client, t] of Object.entries(totals))
+      process.stderr.write(
+        `linux-desktop latency: ${client}: warm p50 ${Math.round(p50(t.warm))} ms over ${t.warm.length} captures (target 10000 ms); cold ${Math.round(p50(t.cold))} ms (target 30000 ms)\n`,
+      );
     process.stderr.write(
-      `linux-desktop latency: warm p50 ${Math.round(p50(totals.warm))} ms over ${totals.warm.length} captures (target 10000 ms); cold p50 ${Math.round(p50(totals.cold))} ms over ${totals.cold.length} (target 30000 ms); run wall warm ${warm.wallMs} ms, cold ${cold.wallMs} ms (session, client start and calibration check included)\n`,
+      `linux-desktop latency: run wall warm ${warm.wallMs} ms, cold ${cold.wallMs} ms (sessions, client starts and calibration checks included)\n`,
     );
   });
 
@@ -641,6 +860,7 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
       env,
       stateRoot: deskRoot,
       calibrationRoot: join(scratch, "cal-check"),
+      drivers: defaultDrivers().filter((d) => CLIENTS.includes(d.clientId)),
     });
     const run = `ld-${process.pid}-cal`;
     const { availability, services } = await assessProviders(
@@ -662,47 +882,57 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         cold: false,
         services: services.handlesFor(provider),
       });
-      const r = await provider.calibrate("thunderbird", true);
-      assert.equal(r.ok, true, r.problems.join("; "));
-      assert.equal(r.checks.length, 2);
-      for (const c of r.checks) {
-        assert.equal(
-          c.check.ok,
-          true,
-          `${c.scheme}: ${c.check.problems.join("; ")}`,
+      for (const client of CLIENTS) {
+        const r = await provider.calibrate(client, true);
+        assert.equal(r.ok, true, `${client}: ${r.problems.join("; ")}`);
+        assert.equal(r.checks.length, driverOf(client).schemes.length, client);
+        process.stderr.write(
+          `linux-desktop calibration: ${r.build}: ${r.checks
+            .map(
+              (c) =>
+                `${c.scheme} crop ${c.crop.width}x${c.crop.height}+${c.crop.x}+${c.crop.y}`,
+            )
+            .join(", ")} in ${Math.round(r.timingMs)} ms\n`,
         );
-        // A crop one device pixel off in any direction, or one pixel
-        // larger or smaller, is caught.
-        const off = [
-          { x: 1, y: 0, w: 0, h: 0 },
-          { x: -1, y: 0, w: 0, h: 0 },
-          { x: 0, y: 1, w: 0, h: 0 },
-          { x: 0, y: -1, w: 0, h: 0 },
-          { x: 0, y: 0, w: 1, h: 0 },
-          { x: 0, y: 0, w: -1, h: 0 },
-          { x: 0, y: 0, w: 0, h: 1 },
-          { x: 0, y: 0, w: 0, h: -1 },
-        ];
-        for (const o of off) {
-          const shifted = cropImage(c.full, {
-            x: c.crop.x + o.x,
-            y: c.crop.y + o.y,
-            width: c.crop.width + o.w,
-            height: c.crop.height + o.h,
-          });
-          // A crop that runs off the output's edge is clamped (and so
-          // is no longer shifted); only the in-bounds variants count.
-          if (
-            c.crop.x + o.x < 0 ||
-            c.crop.x + o.x + c.crop.width + o.w > c.full.width
-          )
-            continue;
-          const check = checkCalibration(shifted, c.viewport.dpr);
+        for (const c of r.checks) {
           assert.equal(
-            check.ok,
-            false,
-            `${c.scheme}: a crop off by ${JSON.stringify(o)} passed`,
+            c.check.ok,
+            true,
+            `${c.scheme}: ${c.check.problems.join("; ")}`,
           );
+          // A crop one device pixel off in any direction, or one pixel
+          // larger or smaller, is caught.
+          const off = [
+            { x: 1, y: 0, w: 0, h: 0 },
+            { x: -1, y: 0, w: 0, h: 0 },
+            { x: 0, y: 1, w: 0, h: 0 },
+            { x: 0, y: -1, w: 0, h: 0 },
+            { x: 0, y: 0, w: 1, h: 0 },
+            { x: 0, y: 0, w: -1, h: 0 },
+            { x: 0, y: 0, w: 0, h: 1 },
+            { x: 0, y: 0, w: 0, h: -1 },
+          ];
+          for (const o of off) {
+            const shifted = cropImage(c.full, {
+              x: c.crop.x + o.x,
+              y: c.crop.y + o.y,
+              width: c.crop.width + o.w,
+              height: c.crop.height + o.h,
+            });
+            // A crop that runs off the output's edge is clamped (and so
+            // is no longer shifted); only the in-bounds variants count.
+            if (
+              c.crop.x + o.x < 0 ||
+              c.crop.x + o.x + c.crop.width + o.w > c.full.width
+            )
+              continue;
+            const check = checkCalibration(shifted, c.viewport.dpr);
+            assert.equal(
+              check.ok,
+              false,
+              `${client} ${c.scheme}: a crop off by ${JSON.stringify(o)} passed`,
+            );
+          }
         }
       }
     } finally {
@@ -716,22 +946,93 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
       "stale",
       '<h1>Stale</h1><img src="https://x.test/0000000000000000/logo.png" width="80" height="20" alt="">',
     );
-    const { rows } = await runDesktop([stale]);
-    assert.equal(rows.length, 1);
-    const [r] = rows;
-    assert.equal(r!.entry.status, "failed");
+    const { rows } = await runDesktop([stale], { clients: CLIENTS });
+    assert.equal(rows.length, CLIENTS.length);
+    for (const r of rows) {
+      assert.equal(r.entry.status, "failed", r.entry.client);
+      assert.match(
+        String(r.reason),
+        /not served 200 by the assets service and loaded by the client: \/0000000000000000\/logo\.png/,
+        r.entry.client,
+      );
+      const images = rec(r.meta.images);
+      assert.deepEqual(images.missing, ["/0000000000000000/logo.png"]);
+      assert.ok(
+        (images.served as { path: string; status: number }[]).some(
+          (s) => s.path === "/0000000000000000/logo.png" && s.status === 404,
+        ),
+        r.entry.client,
+      );
+    }
+  });
+
+  it("attributes image requests to each capture: a client that loads no image fails while the others load the same image at once", async () => {
+    // Every client captures the receipt in one warm run (one worker per
+    // client, all at once); one of them gets a copy whose image keeps
+    // the story's own origin (the provider's test seam), so it cannot
+    // load it while the others request the very same path from the
+    // assets service. A client that can report its own images
+    // (Thunderbird) would fail on that alone, so the client chosen is
+    // one that cannot, where the assets service's log is the evidence.
+    const target =
+      CLIENTS.find((c) => c === "kmail") ??
+      CLIENTS.find((c) => c !== "thunderbird") ??
+      "thunderbird";
+    const { rows } = await runDesktop([receipt], {
+      clients: CLIENTS,
+      schemes: ["light"],
+      provider: { withholdImagesFrom: [target] },
+    });
+    assert.equal(rows.length, CLIENTS.length);
+    const failed = rows.find((r) => r.entry.client === target)!;
+    assert.equal(failed.entry.status, "failed", failed.reason ?? "");
     assert.match(
-      String(r!.reason),
-      /not served 200 by the assets service and loaded by the client: \/0000000000000000\/logo\.png/,
-    );
-    const images = rec(r!.meta.images);
-    assert.deepEqual(images.missing, ["/0000000000000000/logo.png"]);
-    assert.ok(
-      (images.served as { path: string; status: number }[]).some(
-        (s) => s.path === "/0000000000000000/logo.png" && s.status === 404,
+      String(failed.reason),
+      new RegExp(
+        `^${target}: image\\(s\\) the story contains were not served 200 by the assets service and loaded by the client: ${LOGO.replace(/\./g, "\\.")}$`,
       ),
     );
+    assert.equal(failed.meta.asset_rewrite, null);
+    assert.deepEqual(rec(failed.meta.images).served, []);
+    assert.deepEqual(rec(failed.meta.images).missing, [LOGO]);
+    assert.deepEqual(failed.meta.assets_log, []);
+    // The others, at the same time, were served the same path.
+    for (const r of rows.filter((x) => x.entry.client !== target)) {
+      assert.equal(r.entry.status, "done", `${r.entry.client}: ${r.reason}`);
+      const token = String(rec(r.meta.asset_rewrite).token);
+      const log = r.meta.assets_log as {
+        url: string;
+        status: number;
+        token: string;
+      }[];
+      assert.ok(
+        log.some((e) => e.url === LOGO && e.status === 200),
+        `${r.entry.client}: ${JSON.stringify(log)}`,
+      );
+      for (const e of log) assert.equal(e.token, token, r.entry.client);
+    }
   });
+
+  it(
+    "KMail fails a capture whose external-references link never shows, rather than capturing without its images",
+    { skip: !CLIENTS.includes("kmail") },
+    async () => {
+      const { rows } = await runDesktop([receipt], {
+        clients: ["kmail"],
+        provider: {
+          drivers: [new KMailDriver({ noticeLink: "no such link" })],
+        },
+      });
+      assert.equal(rows.length, 1);
+      const [r] = rows;
+      assert.equal(r!.entry.status, "failed", r!.reason ?? "");
+      assert.equal(r!.png, null);
+      assert.equal(
+        r!.reason,
+        "kmail: the message has remote images but KMail's notice offered no 'load the external references' link within 60 s",
+      );
+    },
+  );
 
   it("a remote image from any other host ends at the egress guard", async () => {
     const foreign = crafted(
@@ -877,6 +1178,177 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         readFileSync(join(session.stateDir, "bus.conf"), "utf8"),
         /servicedir/,
       );
+      // The session's processes are found by their environment too (the
+      // leftover check below relies on it): Thunderbird's content
+      // processes name no scratch path in their arguments.
+      assert.ok(
+        scratchProcesses(true).length > 0,
+        "no session process found by its environment alone",
+      );
+    });
+
+    it("resolves names only through its own files: no host nscd, localhost only, no nameserver", async () => {
+      // The host's nscd socket is not there inside (it is outside, on a
+      // host that runs nscd), and no name but localhost resolves.
+      const socket = "/run/nscd/socket";
+      const inside = await session.runInside("nscd-socket", [
+        "sh",
+        "-c",
+        `test -e ${socket}`,
+      ]);
+      if (existsSync(socket))
+        assert.notEqual(inside.status, 0, `${socket} is reachable inside`);
+      const ls = await session.runInside("nscd-dir", [
+        "sh",
+        "-c",
+        "ls -A /run/nscd 2>/dev/null",
+      ]);
+      assert.equal(ls.output.trim(), "");
+      const ex = await session.runInside("getent-example", [
+        "getent",
+        "hosts",
+        "example.com",
+      ]);
+      assert.notEqual(
+        ex.status,
+        0,
+        `example.com resolved inside: ${ex.output}`,
+      );
+      const own = await session.runInside("getent-own", [
+        "getent",
+        "hosts",
+        hostname(),
+      ]);
+      assert.notEqual(
+        own.status,
+        0,
+        `the machine's own name resolved inside: ${own.output}`,
+      );
+      // localhost still resolves (the session's own hosts file).
+      const lh = await session.runInside("getent-localhost", [
+        "getent",
+        "hosts",
+        "localhost",
+      ]);
+      assert.equal(lh.status, 0, lh.output);
+      assert.match(lh.output, /localhost/);
+    });
+
+    it("reaches no host unix socket: no journal, no system bus, no host user bus, nothing under /tmp; its own bus answers", async () => {
+      // Each stream socket the host has is connected to from outside (a
+      // positive control: it is there and answers) and from inside the
+      // session, where it must not exist. One is created under /tmp
+      // after the session started, as a client could find there.
+      const probeDir = mkdtempSync("/tmp/ie-sock-");
+      const probePath = join(probeDir, "probe.sock");
+      const probe = createServer((c) => c.end());
+      await new Promise<void>((ok) => probe.listen(probePath, ok));
+      try {
+        const hostUserBus = join(
+          process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid!()}`,
+          "bus",
+        );
+        const candidates = [
+          "/run/systemd/journal/stdout",
+          "/run/dbus/system_bus_socket",
+          "/run/systemd/private",
+          hostUserBus,
+          "/nix/var/nix/daemon-socket/socket",
+          probePath,
+        ];
+        const connectFrom = (path: string): Promise<string> =>
+          new Promise((ok) => {
+            const c = createConnection(path);
+            c.on("connect", () => {
+              c.destroy();
+              ok("connected");
+            });
+            c.on("error", (e: NodeJS.ErrnoException) => ok(e.code ?? "error"));
+          });
+        const reachable: string[] = [];
+        for (const p of candidates)
+          if ((await connectFrom(p)) === "connected") reachable.push(p);
+        // The journal, the system bus and the probe at least are there
+        // on a host like this one; the others where the host has them.
+        assert.ok(reachable.includes(probePath), reachable.join(", "));
+        assert.ok(
+          reachable.includes("/run/dbus/system_bus_socket") ||
+            !existsSync("/run/dbus/system_bus_socket"),
+        );
+        const code = [
+          "const net = require('node:net');",
+          "let left = process.argv.length - 1;",
+          "for (const p of process.argv.slice(1)) {",
+          "  const c = net.createConnection(p);",
+          "  c.on('connect', () => { console.log(p + ' connected'); c.destroy(); if (--left === 0) process.exit(0); });",
+          "  c.on('error', (e) => { console.log(p + ' ' + e.code); if (--left === 0) process.exit(0); });",
+          "}",
+        ].join("\n");
+        const inside = await session.runInside("host-sockets", [
+          process.execPath,
+          "-e",
+          code,
+          ...reachable,
+        ]);
+        assert.equal(inside.status, 0, inside.output);
+        const lines = inside.output.trim().split("\n").sort();
+        assert.deepEqual(
+          lines,
+          reachable.map((p) => `${p} ENOENT`).sort(),
+          inside.output,
+        );
+        // POSIX shared memory: a host object is not visible inside.
+        const shmProbe = `/dev/shm/ie-shm-probe-${process.pid}`;
+        writeFileSync(shmProbe, "host");
+        try {
+          const shm = await session.runInside("shm", [
+            "sh",
+            "-c",
+            `test -e ${shmProbe}`,
+          ]);
+          assert.notEqual(shm.status, 0, `${shmProbe} is visible inside`);
+        } finally {
+          rmSync(shmProbe, { force: true });
+        }
+        // What is under /run inside: nothing of the host's.
+        const run = await session.runInside("run-listing", [
+          "sh",
+          "-c",
+          "ls -A /run",
+        ]);
+        for (const name of run.output.trim().split(/\s+/))
+          assert.ok(
+            ["user", "mount", "opengl-driver", "current-system"].includes(name),
+            `/run/${name} inside: ${run.output}`,
+          );
+        // The one system program a helper runs by its NixOS path is the
+        // dev shell's, nothing else of the host system is there.
+        const sys = await session.runInside("system-bin", [
+          "sh",
+          "-c",
+          "ls -A /run/current-system /run/current-system/sw /run/current-system/sw/bin; readlink /run/current-system/sw/bin/dbus-daemon",
+        ]);
+        assert.equal(sys.status, 0, sys.output);
+        assert.match(
+          sys.output,
+          /^\/run\/current-system:\nsw\n\n\/run\/current-system\/sw:\nbin\n\n\/run\/current-system\/sw\/bin:\ndbus-daemon\n\/nix\/store\/[^\n]*-dbus-[^\n]*\/bin\/dbus-daemon\n$/,
+          sys.output,
+        );
+        // The session's own runtime directory and its bus are there.
+        const own = await session.runInside("own-bus", [
+          "dbus-send",
+          "--session",
+          "--print-reply",
+          "--dest=org.freedesktop.DBus",
+          "/org/freedesktop/DBus",
+          "org.freedesktop.DBus.ListNames",
+        ]);
+        assert.equal(own.status, 0, own.output);
+        assert.match(own.output, /org\.freedesktop\.DBus/);
+      } finally {
+        await new Promise<void>((ok) => probe.close(() => ok()));
+        rmSync(probeDir, { recursive: true, force: true });
+      }
     });
 
     it("sets the output mode and scale through swaymsg and captures it with grim", () => {
@@ -926,7 +1398,7 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
     });
   });
 
-  it("leaves no sway, bus, Thunderbird or Dovecot process and no state after the runs", () => {
+  it("leaves no sway, bus, client, helper daemon or Dovecot process and no state after the runs", () => {
     assert.deepEqual(scratchProcesses(), []);
     assert.deepEqual(staleScratch(), []);
   });

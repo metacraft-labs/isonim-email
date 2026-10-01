@@ -505,12 +505,23 @@ describe("local mail stack", () => {
       rows.map((r) => r.entry.status),
       ["done", "done"],
     );
+    const tokens = new Set<string>();
     for (const s of probe.seen) {
       const original = stories.find((m) => m.story === s.request.story)!;
       const rw = s.delivery.assetRewrite;
       assert.ok(rw !== null);
       assert.equal(rw.from, "https://x.test/");
-      assert.equal(rw.to, assets.baseUrl);
+      // Rewritten under a token fresh for this delivery, which the
+      // assets service strips and logs with each request.
+      assert.match(rw.token, /^[0-9a-f]{16}$/);
+      assert.equal(rw.to, `${assets.baseUrl}c/${rw.token}/`);
+      tokens.add(rw.token);
+      assert.ok(
+        assets
+          .requestsFor(rw.token)
+          .some((r) => r.status === 200 && /^\/[0-9a-f]{16}\//.test(r.url)),
+        `${s.request.story}: no request under its token`,
+      );
       assert.ok(rw.count >= 1, `${s.request.story}: ${rw.count} rewrites`);
       // The canonical MIME is untouched (the cache key's mime_sha256);
       // the injected copy differs from it.
@@ -550,6 +561,8 @@ describe("local mail stack", () => {
       });
       assert.equal(meta.mime_sha256, s.request.mimeSha256);
     }
+    // One token per delivery.
+    assert.equal(tokens.size, probe.seen.length);
     // The service's request log names what was served.
     assert.ok(
       assets.requests().some((r) => r.kind === "asset" && r.status === 200),

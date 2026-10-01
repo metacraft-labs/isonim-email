@@ -44,7 +44,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -54,6 +53,7 @@ import { socketBases } from "./imap_service.ts";
 import {
   type OwnerRecord,
   type ProcessId,
+  removeRunDirSync,
   sweepDeadOwners,
   thisProcess,
   writeOwner,
@@ -319,7 +319,7 @@ export class WebmailServers {
     this.caddy?.kill("SIGKILL");
     this.phpFpm?.kill("SIGKILL");
     for (const d of [this.stateDir, this.socketDir])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
   };
 
   constructor(opts: WebmailServersOptions = {}) {
@@ -700,7 +700,7 @@ include ${phpString(join(smVersionDir, "include.php"))};
     await this.killChild("caddy");
     await this.killChild("phpFpm");
     for (const d of [this.stateDir, this.socketDir])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
     this.stateDir = null;
     this.socketDir = null;
     process.off("exit", this.onExit);

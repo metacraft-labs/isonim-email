@@ -55,6 +55,10 @@ export interface OpenRequest {
   account: ImapAccount;
   scheme: Scheme;
   viewport: ViewportSpec;
+  // The message has story images to load: a driver that must act for
+  // a message's remote content to load (KMail's notice link) waits for
+  // that to be possible and fails the open if it never is.
+  remoteImages: boolean;
 }
 
 // What a driver reports once the message is open and settled.

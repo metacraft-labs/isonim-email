@@ -38,7 +38,8 @@
 //
 // Each capture gets a fresh user whose INBOX holds exactly one message,
 // injected with `doveadm save`; with the assets service, the injected
-// copy has the story asset origin rewritten to it (mime_rewrite.ts).
+// copy has the story asset origin rewritten to it (mime_rewrite.ts),
+// under a token fresh for each delivery (assets_service.ts).
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -49,16 +50,17 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer, type AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { rewriteAssetOrigin } from "./mime_rewrite.ts";
+import { captureToken, tokenPrefix } from "./assets_service.ts";
 import {
   type OwnerRecord,
   processAlive,
+  removeRunDirSync,
   sweepDeadOwners,
   thisProcess,
   writeOwner,
@@ -210,7 +212,7 @@ export class DovecotService implements LocalService {
   private readonly onExit = (): void => {
     this.child?.kill("SIGKILL");
     for (const d of [this.stateDir, this.socketDir])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
   };
 
   constructor(opts: DovecotServiceOptions = {}) {
@@ -406,11 +408,14 @@ export class DovecotService implements LocalService {
       let bytes = mime;
       let assetRewrite: Delivery["assetRewrite"] = null;
       if (opts.assets !== undefined) {
+        // A token fresh for this delivery, so the assets service can
+        // tell this copy's image requests from every other's.
+        const token = captureToken();
         const from = opts.assets.rewriteFrom;
-        const to = opts.assets.baseUrl;
+        const to = `${opts.assets.baseUrl}${tokenPrefix(token)}`;
         const r = rewriteAssetOrigin(mime, from, to);
         bytes = r.bytes;
-        assetRewrite = { from, to, count: r.count };
+        assetRewrite = { from, to, token, count: r.count };
       }
       const t0 = performance.now();
       const r = spawnSync(
@@ -477,7 +482,7 @@ export class DovecotService implements LocalService {
     this.stopping = true;
     await this.killChild();
     for (const d of [this.stateDir, this.socketDir])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
     this.stateDir = null;
     this.socketDir = null;
     process.off("exit", this.onExit);

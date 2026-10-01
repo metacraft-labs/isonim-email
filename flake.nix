@@ -69,6 +69,69 @@
             tar -xzf ${undiciTypes} -C $out/node_modules/undici-types --strip-components=1
             ln -s ${pkgs.playwright-driver} $out/node_modules/playwright-core
           '';
+          # The linux-desktop provider's accessibility client: Python
+          # with PyGObject and the AT-SPI typelib, run outside the
+          # capture session against the session's own accessibility bus
+          # (tools/capture/providers/atspi_helper.py). One command, so the
+          # typelib search path cannot be lost on the way.
+          atspiPython = pkgs.python3.withPackages (ps: [ ps.pygobject3 ]);
+          atspiHelper = pkgs.writeShellScriptBin "isonim-email-atspi" ''
+            export GI_TYPELIB_PATH=${
+              pkgs.lib.makeSearchPath "lib/girepository-1.0" [
+                pkgs.at-spi2-core
+                pkgs.glib.out
+                pkgs.gobject-introspection
+              ]
+            }
+            exec ${atspiPython}/bin/python3 "$@"
+          '';
+          # The desktop clients' helper daemons, by name on PATH: the
+          # accessibility bus launcher (at-spi2-core), Evolution's source
+          # registry (evolution-data-server) and the keyring daemon whose
+          # Secret Service Geary and KMail's IMAP resource require. Only
+          # these binaries are linked, so nothing else of those packages
+          # shadows the host's tools.
+          desktopDaemons = pkgs.runCommand "isonim-email-desktop-daemons" { } ''
+            mkdir -p $out/bin
+            ln -s ${pkgs.at-spi2-core}/libexec/at-spi-bus-launcher $out/bin/at-spi-bus-launcher
+            ln -s ${pkgs.evolution-data-server}/libexec/evolution-source-registry $out/bin/evolution-source-registry
+            ln -s ${pkgs.gnome-keyring}/bin/gnome-keyring-daemon $out/bin/gnome-keyring-daemon
+          '';
+          # KMail and Akonadi are not wrapped in nixpkgs (a Plasma session
+          # provides the Qt plugin, QML and data paths); this wrapper
+          # provides them from the closure of KMail, Akonadi, the PIM
+          # runtime (the IMAP and maildir resources), the Wayland platform
+          # plugin, Breeze (the colour schemes) and the KDE platform theme
+          # (which reports a dark colour scheme to Qt, and so to
+          # QtWebEngine's prefers-color-scheme): `isonim-email-kde CMD
+          # ARGS…` runs CMD with them. Akonadi's agents inherit it.
+          kdeMail = with pkgs.kdePackages; [
+            kmail
+            akonadi
+            kdepim-runtime
+            qtwayland
+            breeze
+            plasma-integration
+          ];
+          kdeMailClosure = pkgs.closureInfo { rootPaths = kdeMail; };
+          kdeMailEnv = pkgs.runCommand "isonim-email-kde" { } ''
+            qp=""; qml=""; xdg=""
+            for p in $(cat ${kdeMailClosure}/store-paths); do
+              if [ -d "$p/lib/qt-6/plugins" ]; then qp="$qp''${qp:+:}$p/lib/qt-6/plugins"; fi
+              if [ -d "$p/lib/qt-6/qml" ]; then qml="$qml''${qml:+:}$p/lib/qt-6/qml"; fi
+              if [ -d "$p/share" ]; then xdg="$xdg''${xdg:+:}$p/share"; fi
+            done
+            mkdir -p $out/bin
+            {
+              echo '#!${pkgs.runtimeShell}'
+              echo "export QT_PLUGIN_PATH='$qp'"
+              echo "export QML2_IMPORT_PATH='$qml'"
+              echo "export XDG_DATA_DIRS='$xdg'\''${XDG_DATA_DIRS:+:\$XDG_DATA_DIRS}"
+              echo "export PATH='${pkgs.lib.makeBinPath kdeMail}'\''${PATH:+:\$PATH}"
+              echo 'exec "$@"'
+            } > $out/bin/isonim-email-kde
+            chmod +x $out/bin/isonim-email-kde
+          '';
         in
         {
           # The mcl-standard-hooks set (large-file ban, .ct ban, hygiene)
@@ -183,15 +246,17 @@
               # namespace of its own, so its forked workers die with it
               # too. iproute2's `ip` brings loopback up in the network
               # namespace a desktop-client session runs in (loopback
-              # only). Only these three binaries are put on PATH, so
-              # util-linux's and iproute2's other tools do not shadow
-              # the host's.
+              # only), and util-linux's `mount` sets up the session's own
+              # name resolution in its mount namespace. Only these four
+              # binaries are put on PATH, so util-linux's and iproute2's
+              # other tools do not shadow the host's.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
                 (pkgs.runCommand "setpriv-unshare" { } ''
                   mkdir -p $out/bin
                   ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
                   ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
                   ln -s ${pkgs.iproute2}/bin/ip $out/bin/ip
+                  ln -s ${pkgs.util-linux}/bin/mount $out/bin/mount
                 '')
                 # The linux-desktop capture provider: real mail clients in
                 # a headless sway (wlroots' headless backend and its
@@ -203,6 +268,20 @@
                 wtype
                 dbus
                 thunderbird
+                # The other desktop clients (verification clients):
+                # Evolution and Geary (WebKitGTK), KMail with Akonadi on
+                # SQLite (QtWebEngine; through the isonim-email-kde
+                # wrapper above) and Claws Mail (its litehtml viewer),
+                # with the helper daemons and the accessibility client
+                # their drivers use. getent checks the sessions' name
+                # resolution in the tests.
+                evolution
+                geary
+                claws-mail
+                desktopDaemons
+                kdeMailEnv
+                atspiHelper
+                getent
                 # OCR for the desktop end-to-end tests: the capture of a
                 # story must show the story's own heading. English only
                 # (the full language set is about ten times larger).
@@ -214,6 +293,11 @@
             # run under build/).
             ISONIM_EMAIL_ROUNDCUBE = "${pkgs.roundcube}";
             ISONIM_EMAIL_SNAPPYMAIL = "${pkgs.snappymail}";
+
+            # Breeze's colour schemes, which the KMail driver writes into
+            # the session's kdeglobals (as applying a scheme does).
+            ISONIM_EMAIL_KDE_COLOR_SCHEMES =
+              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.kdePackages.breeze}/share/color-schemes" else "";
 
             # tsc's declaration tree (see tsTypes); `just lint-ts`
             # links build/ts-types to it.

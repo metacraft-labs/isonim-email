@@ -32,11 +32,16 @@ import {
   MODULE_ROOT,
   parseAffects,
   selectFamilies,
+  selectRunBackends,
   selectRunFamilies,
   type RunSelection,
   type ServedClient,
 } from "./affected.ts";
-import { servedFamilies } from "./providers/harness.ts";
+import {
+  candidateProviders,
+  servedBackends,
+  servedFamilies,
+} from "./providers/harness.ts";
 import { registeredProviders } from "./providers/registry.ts";
 
 const repoRoot = resolve(
@@ -502,5 +507,88 @@ describe("selectRunFamilies over the registered providers", () => {
         .source,
       "change",
     );
+  });
+});
+
+describe("selectRunBackends: the providers a run routes to", () => {
+  // The CLI's routing in miniature, over the registered providers: the
+  // run's families and backends as the CLI selects them, then the
+  // providers the request matrix reaches (the ones whose availability
+  // the run establishes and whose clients it captures).
+  const providers = registeredProviders();
+  const served: ServedClient[] = providers.flatMap((p) =>
+    p.clients().map((c) => ({
+      backend: p.backend,
+      clientId: c.clientId,
+      family: c.family,
+    })),
+  );
+  const families = servedFamilies(providers);
+  const backends = servedBackends(providers);
+  const routed = (over: Partial<RunSelection>): string[] => {
+    const sel: RunSelection = {
+      served,
+      families,
+      familiesExplicit: false,
+      full: false,
+      changedFiles: ["docs/rendering-rules.md"],
+      clients: null,
+      backends: null,
+      ...over,
+    };
+    const f = selectRunFamilies(sel);
+    const b = selectRunBackends({
+      backends: sel.backends ?? backends,
+      backendsExplicit: sel.backends !== null,
+      clients: sel.clients,
+      source: f.source,
+      changedFiles: sel.changedFiles,
+      families,
+      browserBackend: "a",
+    });
+    return candidateProviders(providers, {
+      stories: [],
+      families: f.families,
+      clients: sel.clients,
+      backends: b,
+      viewports: [],
+      schemes: [],
+      images: [],
+    }).map((p) => p.id);
+  };
+
+  it("--full routes to every registered provider, every real client included", () => {
+    assert.ok(providers.length >= 3, providers.map((p) => p.id).join(", "));
+    assert.deepEqual(
+      routed({ full: true }),
+      providers.map((p) => p.id),
+    );
+    // Every client of every provider is reached by some family.
+    const f = selectRunFamilies({
+      served,
+      families,
+      familiesExplicit: false,
+      full: true,
+      changedFiles: [],
+      clients: null,
+      backends: null,
+    }).families;
+    for (const c of served) assert.ok(f.includes(c.family), c.clientId);
+  });
+
+  it("a change alone routes to backend a only; a named backend or client adds its provider", () => {
+    const a = providers.filter((p) => p.backend === "a").map((p) => p.id);
+    assert.deepEqual(routed({}), a);
+    for (const p of providers.filter((x) => x.backend !== "a")) {
+      assert.ok(
+        routed({ backends: [p.backend] }).includes(p.id),
+        `--backends ${p.backend}`,
+      );
+      const client = p.clients()[0]!.clientId;
+      assert.ok(
+        routed({ clients: [client] }).includes(p.id),
+        `--clients ${client}`,
+      );
+    }
   });
 });

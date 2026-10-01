@@ -33,7 +33,7 @@ import { pathToFileURL } from "node:url";
 import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
 import { FIXTURE_HOST } from "../fixture_host.ts";
 import { launchOptions } from "../launch.ts";
-import { assetsHandle } from "./assets_service.ts";
+import { assetsHandle, splitCaptureToken } from "./assets_service.ts";
 import { resolveDriver } from "./browser_emulation.ts";
 import { imapHandle } from "./imap_service.ts";
 import type {
@@ -634,14 +634,22 @@ export class SelfhostedWebmailProvider implements CaptureProvider {
       timing.settle = performance.now() - tSettle;
 
       // The images the story contains, against what the assets service
-      // served this page.
+      // served this page for this capture's copy: the page's responses
+      // under the delivery's token, each also in the service's own log
+      // under that token (the other webmail loads the same paths at
+      // the same time, under its own).
+      const token = delivery.assetRewrite?.token ?? null;
+      const mine = token === null ? [] : assets.requestsFor(token);
       const expected = storyImagePaths(message.html);
-      const served = session.assets.slice(assetResponsesBefore).map((a) => ({
-        path: new URL(a.url).pathname,
-        status: a.status,
-      }));
+      const served = session.assets.slice(assetResponsesBefore).map((a) => {
+        const t = splitCaptureToken(new URL(a.url).pathname);
+        return { path: t.path, token: t.token, status: a.status };
+      });
       const missing = expected.filter(
-        (p) => !served.some((s) => s.path === p && s.status === 200),
+        (p) =>
+          !served.some(
+            (s) => s.path === p && s.token === token && s.status === 200,
+          ) || !mine.some((e) => e.url === p && e.status === 200),
       );
       provenance.images = {
         expected,
@@ -653,9 +661,16 @@ export class SelfhostedWebmailProvider implements CaptureProvider {
           ? { note: "the story loads no story image" }
           : {}),
       };
-      // The service's log over this capture; with two webmails
-      // capturing at once it can include the other one's requests.
-      provenance.assets_log = assets.requests().slice(assetsBefore);
+      // This capture's asset requests in the service's log (its token's),
+      // and every request the egress guard refused while it ran (PHP's
+      // outbound HTTP goes through the guard; a refusal carries no
+      // token, so with both webmails capturing at once it can include
+      // the other one's).
+      provenance.assets_log = mine;
+      provenance.assets_refused = assets
+        .requests()
+        .slice(assetsBefore)
+        .filter((e) => e.kind === "blocked");
       provenance.network = {
         policy: "webmail-and-assets-only",
         blocked: session.blocked.slice(blockedBefore),

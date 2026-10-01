@@ -138,6 +138,31 @@ export function directChildOf(
   return null;
 }
 
+// Removes a run's directory, synchronously (also from an exit handler).
+// A server process that was just killed can still be writing into it
+// (a php-fpm worker its log, Dovecot its own): a file it creates after
+// the removal listed the directory makes the final rmdir fail with
+// ENOTEMPTY and leaves the directory behind. So the removal is
+// repeated, every 20 ms, until it succeeds; after `timeoutMs` the last
+// error is thrown, never swallowed.
+export function removeRunDirSync(dir: string, timeoutMs = 5000): void {
+  const t0 = Date.now();
+  for (;;) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (
+        (code !== "ENOTEMPTY" && code !== "EBUSY") ||
+        Date.now() - t0 > timeoutMs
+      )
+        throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
 function sameOwner(a: OwnerRecord, b: OwnerRecord): boolean {
   return (
     a.owner.pid === b.owner.pid &&

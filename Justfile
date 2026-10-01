@@ -115,8 +115,9 @@ theme-snapshot:
 # Test: the full suite on the C backend, plus the backend-independent
 # passes on the JS backend, plus the capture emulation-transform tests,
 # plus the self-hosted webmail end-to-end tests (~90 s), plus the
-# desktop-client end-to-end tests (~55-80 s; Linux only), plus the
-# capture regression checks (Tier-1 + Tier-2, ~10-12 s).
+# desktop-client end-to-end tests for Thunderbird and Claws Mail (~2 min;
+# Linux only; `just test-desktop-all` runs every desktop client), plus
+# the capture regression checks (Tier-1 + Tier-2, ~10-12 s).
 test: build-tailwind test-c test-js test-ts test-webmail test-desktop test-capture-ci
 
 # The capture regression checks as part of the full suite. The
@@ -172,14 +173,21 @@ test-ts:
 test-webmail: email-shots-build
     node --test tools/capture/providers/selfhosted_webmail.test.ts
 
-# The linux-desktop provider end to end: real Thunderbird in a headless
+# The linux-desktop provider end to end: real clients in a headless
 # sway (wlroots' software renderer), Dovecot, the assets service, grim,
-# wtype and OCR (~55-80 s on a loaded host, so on its own rather than
-# inside test-ts's parallel run). Linux only (the provider is):
-# elsewhere it says so and does not run. Needs the story driver
-# (`just email-shots-build`).
+# wtype, the accessibility bus and OCR, on its own rather than inside
+# test-ts's parallel run. Linux only (the provider is): elsewhere it says
+# so and does not run. Needs the story driver (`just email-shots-build`).
+# `test-desktop` runs the multi-client tests on Thunderbird (the
+# thunderbird family's client) and Claws Mail (the quickest verification
+# client), ~2 min on a loaded host; `test-desktop-all` runs them on all
+# five clients (Evolution, Geary and KMail with Akonadi add ~3 min), and
+# is the one to run after a change to the desktop provider or a driver.
 test-desktop: email-shots-build
-    @if [ "$(uname -s)" = "Linux" ]; then       node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
+    @if [ "$(uname -s)" = "Linux" ]; then       ISONIM_EMAIL_DESKTOP_CLIENTS=thunderbird,claws-mail node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
+
+test-desktop-all: email-shots-build
+    @if [ "$(uname -s)" = "Linux" ]; then       node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop-all: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
 
 # Check the crop calibration of the desktop clients now (a capture run
 # does it by itself when a client's build changed since its last

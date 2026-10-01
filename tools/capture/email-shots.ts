@@ -36,7 +36,7 @@ import {
   type CommandRunner,
   darkNeeded,
   emptyMatrixReason,
-  selectFamilies,
+  selectRunBackends,
   selectRunFamilies,
   type ServedClient,
   workingTreeHash,
@@ -134,20 +134,22 @@ options:
                         browser engines with the client emulations,
                         selfhosted-webmail, Roundcube and SnappyMail on a
                         local mail stack, and linux-desktop, real desktop
-                        clients (Thunderbird) in a headless compositor
-                        (Linux); b, c and d are refused naming the later
-                        backends
+                        clients (Thunderbird, Evolution, Geary, KMail,
+                        Claws Mail) in a headless compositor (Linux); b, c
+                        and d are refused naming the later backends
   --families F,…         apple,thunderbird,chromium-baseline,gmailWeb,ganga,
                         outlookWeb,imagesOff,wordApprox, and verification
                         (the real verification clients: roundcube,
-                        snappymail) (default: all, or the affected ones on
-                        an --affected run); thunderbird is served both by
+                        snappymail, evolution, geary, kmail, claws-mail)
+                        (default: all, or the affected ones on an
+                        --affected run); thunderbird is served both by
                         backend a's emulation and by the real Thunderbird
                         of linux-desktop
   --clients C,…          filter by client id; backend A's clients are its
                         engines: chromium,webkit,firefox; the webmail
                         clients are roundcube,snappymail; the desktop
-                        client is thunderbird. On an --affected
+                        clients are thunderbird,evolution,geary,kmail,
+                        claws-mail. On an --affected
                         run a named client whose families the change did
                         not select gets all of them (so --clients
                         roundcube captures Roundcube after any change);
@@ -187,11 +189,12 @@ Captures never use the network: requests other than the story fixture
 host and data: URIs (for a webmail: its own loopback origin and the
 local assets service) are blocked and listed in the run summary and in
 each capture's provenance (network.blocked); a desktop client runs in a
-network namespace with loopback only, reaching the local IMAP server and
-assets service and nothing else, its proxy the assets service's guard.
+network namespace with loopback only and name resolution of its own,
+reaching the local IMAP server and assets service and nothing else (a
+client that takes a proxy uses the assets service's guard).
 Review briefs are written for the backend-a families only.
 On an --affected run the change selects backend a's captures only; the
-real clients of the other providers (the webmails, the real Thunderbird)
+real clients of the other providers (the webmails, the desktop clients)
 run on --full, when nothing in this repository changed, or when named
 with --clients, --backends or --families.
 `;
@@ -566,21 +569,18 @@ async function main(): Promise<void> {
     clients: opt.clients,
     backends: opt.backendsExplicit ? opt.backends : null,
   });
-  // The module declarations name audience families, which select
-  // backend a's stand-ins only: on a run whose families come from the
-  // change alone (no --families, --clients or --backends, and a change
-  // in this repository that selects some family), the real clients other
-  // providers serve under an audience family (linux-desktop's
-  // Thunderbird) are left out, like the verification clients. They run
-  // on --full, on the fallback, and when named.
-  const changeSelectsBackendA =
-    familySource === "change" &&
-    !opt.backendsExplicit &&
-    opt.clients === null &&
-    selectFamilies(changed).some((f) => opt.families.includes(f));
-  const backends = changeSelectsBackendA
-    ? opt.backends.filter((b) => b === BROWSER_BACKEND)
-    : opt.backends;
+  // A change alone selects backend a's stand-ins only; the real clients
+  // of the other providers run on --full, on the fallback, and when
+  // named (selectRunBackends).
+  const backends = selectRunBackends({
+    backends: opt.backends,
+    backendsExplicit: opt.backendsExplicit,
+    clients: opt.clients,
+    source: familySource,
+    changedFiles: changed,
+    families: opt.families,
+    browserBackend: BROWSER_BACKEND,
+  });
   const schemes =
     opt.schemesExplicit || fullSelection
       ? opt.schemes

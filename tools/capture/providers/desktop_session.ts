@@ -36,12 +36,43 @@
 // a client's own port inside (Thunderbird's Marionette) is reached from
 // outside through the same bridge (connectInner).
 //
+// Host sockets. A network namespace separates abstract unix sockets but
+// not filesystem ones, so the session also has a mount namespace of its
+// own, in which the host directories that hold filesystem sockets are
+// covered by empty tmpfs mounts (coveredDirs(): /run, a separate
+// /var/run, /tmp, /var/tmp, /dev/shm, the caller's home directory, and
+// the Nix daemon's socket directories). That hides, among others, the host's
+// journal (/run/systemd/journal), its system bus (/run/dbus), systemd's
+// private sockets, nscd, the caller's own user runtime directory
+// (/run/user/<uid>: the host session bus, ssh and gpg agents), tmux and
+// other sockets under /tmp, ssh-agent sockets under the home directory
+// and the Nix daemon; the session's POSIX shared memory (/dev/shm) is
+// its own too. Bound back on top, and nothing else: the
+// session's own runtime and state directories, the directory of the
+// bridge's inside half, and /run/opengl-driver (a Nix store path the
+// graphics libraries look in). The rest of the host filesystem stays
+// visible.
+// One host socket is reached before the covering: the setup shell
+// (bash) looks its own uid up through the host's nscd as it starts,
+// before its first line runs; nothing started after the covering, and
+// so no client, reaches it.
+//
+// Name resolution. With /run covered, the host's nscd cannot resolve
+// names for the session (which would be a real DNS query by the host);
+// /etc/hosts holds localhost only and /etc/resolv.conf names no
+// nameserver.
+//
+// A session can run a command to completion inside it (runInside) and
+// end what it launched (stopLaunched), for the drivers of clients that
+// restart per capture and for the tests.
+//
 // Nothing outlives the run (the discipline of the imap service and the
 // webmail servers):
 // - the session runs as `setpriv --pdeathsig KILL -- unshare --user
-//   --map-root-user --net --pid --fork --kill-child`, which brings
-//   loopback up and then, in a nested user namespace that maps the
-//   caller's uid and gid back (everything runs as the caller), runs
+//   --map-root-user --net --mount --pid --fork --kill-child`, which sets
+//   up name resolution, brings loopback up and then, in a nested user
+//   namespace that maps the caller's uid and gid back (everything runs
+//   as the caller), runs
 //   `dbus-run-session -- sway` and the bridge: sway, the bus, the
 //   bridge and every client launched in the session live in a PID
 //   namespace of their own, so when the namespace's first process goes
@@ -58,13 +89,17 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { userInfo } from "node:os";
 import {
   createConnection,
   createServer,
@@ -77,6 +112,7 @@ import { socketBases } from "./imap_service.ts";
 import {
   type OwnerRecord,
   processAlive,
+  removeRunDirSync,
   sweepDeadOwners,
   thisProcess,
   writeOwner,
@@ -107,7 +143,75 @@ export const SESSION_BINARIES = [
   "wtype",
   "dbus-run-session",
   "ip",
+  "mount",
 ] as const;
+// The host directories covered by an empty tmpfs inside a session,
+// with the tmpfs mode: each that exists as a directory of its own (not
+// a symlink to another), outermost first, none inside another. The
+// caller's home directory is added by coveredDirs().
+export const COVERED_DIRS: readonly (readonly [string, string])[] = [
+  ["/run", "0755"],
+  ["/var/run", "0755"],
+  ["/tmp", "1777"],
+  ["/var/tmp", "1777"],
+  ["/dev/shm", "1777"],
+  ["/nix/var/nix/daemon-socket", "0755"],
+  ["/nix/var/nix/gc-socket", "0755"],
+];
+// Links under a covered directory that point into the Nix store and
+// are re-exposed (bound from their target) inside a session.
+export const REEXPOSED_STORE_LINKS = ["/run/opengl-driver"] as const;
+// Programs some client helpers run by a fixed NixOS system path under
+// /run (nixpkgs builds at-spi-bus-launcher to spawn
+// /run/current-system/sw/bin/dbus-daemon): inside a session that
+// directory holds only these, linked to the dev shell's own (the
+// dbus-daemon beside dbus-run-session), never the host system's.
+export const SESSION_SYSTEM_BIN = "/run/current-system/sw/bin";
+export const SESSION_SYSTEM_PROGRAMS = ["dbus-daemon"] as const;
+
+// The directories covered inside a session, with their tmpfs modes.
+export function coveredDirs(home: string): [string, string][] {
+  const all: [string, string][] = [...COVERED_DIRS, [home, "0700"]].map(
+    ([d, m]) => [d, m],
+  );
+  const out: [string, string][] = [];
+  for (const [d, m] of all.sort((a, b) => a[0].length - b[0].length)) {
+    let st;
+    try {
+      st = lstatSync(d);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    if (out.some(([o]) => within(d, o))) continue;
+    out.push([d, m]);
+  }
+  return out;
+}
+
+// `p` is `dir` or below it.
+function within(p: string, dir: string): boolean {
+  return p === dir || p.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
+}
+
+// Of `keep`, those under a covered directory, each bound back after the
+// covering (none inside another kept one).
+export function boundBack(keep: string[], covered: string[]): string[] {
+  const under = [
+    ...new Set(keep.filter((k) => covered.some((c) => within(k, c)))),
+  ].sort((a, b) => a.length - b.length);
+  const out: string[] = [];
+  for (const k of under) if (!out.some((o) => within(k, o))) out.push(k);
+  return out;
+}
+
+// Name resolution inside a session: /etc/hosts and /etc/resolv.conf
+// are replaced by these: localhost only, and no nameserver (glibc then
+// asks 127.0.0.1:53, which inside the namespace is nobody).
+export const SESSION_HOSTS =
+  "# Generated for one capture session: localhost only.\n127.0.0.1 localhost\n::1 localhost\n";
+export const SESSION_RESOLV_CONF =
+  "# Generated for one capture session: no nameserver.\noptions attempts:1 timeout:1\n";
 
 const START_TIMEOUT_MS = 20000;
 const WTYPE_SETTLE_MS = 100;
@@ -171,6 +275,15 @@ export interface DesktopSessionInfo {
 }
 
 // Single-quoted for sh.
+// The path with symlinks resolved, or itself when it does not resolve.
+function realOr(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
@@ -229,12 +342,13 @@ export class DesktopSession {
   private readonly env: Record<string, string | undefined>;
   private bins: Record<string, string> = {};
   private launches = 0;
+  private readonly launched = new Set<string>();
   private readonly bridges: Server[] = [];
   private readonly bridged = new Set<Socket>();
   private readonly onExit = (): void => {
     this.child?.kill("SIGKILL");
     for (const d of [this.stateDirPath, this.runtimeDirPath])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
   };
 
   constructor(opts: DesktopSessionOptions = {}) {
@@ -348,6 +462,8 @@ export class DesktopSession {
       mkdirSync(d, { recursive: true, mode: 0o700 });
     writeFileSync(join(stateDir, "sway.conf"), swayConfig(info.output));
     writeFileSync(join(stateDir, "bus.conf"), busConfig(this.runtimeDirPath));
+    writeFileSync(join(stateDir, "hosts"), SESSION_HOSTS);
+    writeFileSync(join(stateDir, "resolv.conf"), SESSION_RESOLV_CONF);
     this.mode = { ...info.output };
 
     const env: Record<string, string> = {
@@ -413,11 +529,18 @@ export class DesktopSession {
     // bridge's inside half, and sway.
     const sh = this.bins.sh!;
     const q = (argv: string[]): string => argv.map(shQuote).join(" ");
+    const coverScript = this.coverScript(stateDir, q);
     writeFileSync(
       join(stateDir, "init.sh"),
       `#!${sh}
 # Generated for one capture session; removed at teardown.
 set -e
+# Name resolution: localhost only, no nameserver.
+if [ -e /etc/hosts ]; then ${q([this.bins.mount!, "--bind", join(stateDir, "hosts"), "/etc/hosts"])}; fi
+if [ -e /etc/resolv.conf ]; then ${q([this.bins.mount!, "--bind", join(stateDir, "resolv.conf"), "/etc/resolv.conf"])}; fi
+# Host sockets: the directories that hold them covered, the session's
+# own directories bound back (through descriptors opened before).
+${coverScript}
 ${q([this.bins.ip!, "link", "set", "lo", "up"])}
 exec ${q([
         this.bins.unshare!,
@@ -452,6 +575,7 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
       "--user",
       "--map-root-user",
       "--net",
+      "--mount",
       "--pid",
       "--fork",
       "--kill-child",
@@ -515,6 +639,64 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
       swept,
       timingMs: { start: performance.now() - t0 },
     };
+  }
+
+  // The init script's part that covers the host directories holding
+  // unix sockets and binds the session's own directories back.
+  private coverScript(stateDir: string, q: (argv: string[]) => string): string {
+    const mount = this.bins.mount!;
+    const covered = coveredDirs(realOr(userInfo().homedir));
+    const keep = boundBack(
+      [this.runtimeDirPath!, stateDir, dirname(BRIDGE_SCRIPT)].map(realOr),
+      covered.map(([d]) => d),
+    );
+    const lines: string[] = [];
+    keep.forEach((k, i) => lines.push(`exec ${i + 3}<${shQuote(k)}`));
+    for (const [d, mode] of covered)
+      lines.push(
+        q([mount, "-t", "tmpfs", "-o", `mode=${mode}`, "ie-cover", d]),
+      );
+    keep.forEach((k, i) =>
+      lines.push(
+        q([
+          mount,
+          "--bind",
+          "-o",
+          "X-mount.mkdir",
+          `/proc/self/fd/${i + 3}`,
+          k,
+        ]),
+      ),
+    );
+    keep.forEach((_, i) => lines.push(`exec ${i + 3}<&-`));
+    if (covered.some(([d]) => within(SESSION_SYSTEM_BIN, d))) {
+      const dir = join(stateDir, "system-bin");
+      mkdirSync(dir, { recursive: true });
+      for (const prog of SESSION_SYSTEM_PROGRAMS) {
+        const target = realOr(
+          join(dirname(this.bins["dbus-run-session"]!), prog),
+        );
+        if (!existsSync(target))
+          throw new Error(`${prog} is not beside dbus-run-session`);
+        symlinkSync(target, join(dir, prog));
+      }
+      lines.push(
+        q([mount, "--bind", "-o", "X-mount.mkdir", dir, SESSION_SYSTEM_BIN]),
+      );
+    }
+    for (const link of REEXPOSED_STORE_LINKS) {
+      let target: string;
+      try {
+        if (!lstatSync(link).isSymbolicLink()) continue;
+        target = realpathSync(link);
+      } catch {
+        continue;
+      }
+      if (!target.startsWith("/nix/store/")) continue;
+      if (!covered.some(([d]) => within(link, d))) continue;
+      lines.push(q([mount, "--bind", "-o", "X-mount.mkdir", target, link]));
+    }
+    return lines.join("\n");
   }
 
   private makeRuntimeDir(): string {
@@ -657,20 +839,90 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
   }
 
   // Launches `argv` inside the session (it inherits the session's
-  // environment); its output goes to <stateDir>/<name>.log.
-  launch(name: string, argv: string[]): void {
+  // environment, plus `env`); its output goes to <stateDir>/<name>.log.
+  // sway runs it in a process group of its own, whose leader's pid
+  // (inside the session) is recorded so that stopLaunched() can end the
+  // whole group.
+  launch(name: string, argv: string[], env: Record<string, string> = {}): void {
     const sh = findExecutable("sh", {
       ...currentHost(),
       env: { PATH: storeOnly(this.env.PATH) },
     });
     if (sh === null) throw new Error("no sh on PATH");
     const script = join(this.stateDir, `launch-${++this.launches}-${name}.sh`);
+    const exports = Object.entries(env)
+      .map(([k, v]) => `export ${k}=${shQuote(v)}\n`)
+      .join("");
     writeFileSync(
       script,
-      `#!${sh}\nexec ${argv.map(shQuote).join(" ")} >>${shQuote(join(this.stateDir, `${name}.log`))} 2>&1\n`,
+      `#!${sh}\necho $$ >${shQuote(join(this.stateDir, `${name}.pid`))}\n${exports}exec ${argv.map(shQuote).join(" ")} >>${shQuote(join(this.stateDir, `${name}.log`))} 2>&1\n`,
       { mode: 0o700 },
     );
+    this.launched.add(name);
     this.swaymsg(["exec", script]);
+  }
+
+  hasLaunched(name: string): boolean {
+    return this.launched.has(name);
+  }
+
+  // Ends the process group launch(name) started (SIGKILL), and waits
+  // until its leader is gone.
+  async stopLaunched(name: string, timeoutMs = 10000): Promise<void> {
+    const pidFile = join(this.stateDir, `${name}.pid`);
+    if (!existsSync(pidFile)) return;
+    const pid = readFileSync(pidFile, "utf8").trim();
+    rmSync(pidFile, { force: true });
+    this.launched.delete(name);
+    if (!/^\d+$/.test(pid)) return;
+    await this.runInside(
+      `stop-${name}`,
+      [
+        "sh",
+        "-c",
+        `kill -KILL -- -${pid} 2>/dev/null; kill -KILL ${pid} 2>/dev/null; while kill -0 ${pid} 2>/dev/null; do sleep 0.02; done; exit 0`,
+      ],
+      timeoutMs,
+    );
+  }
+
+  // Runs `argv` inside the session to completion; its exit status and
+  // output (stdout and stderr together).
+  async runInside(
+    name: string,
+    argv: string[],
+    timeoutMs = 20000,
+  ): Promise<{ status: number; output: string }> {
+    const tag = `run-${++this.launches}-${name}`;
+    const done = join(this.stateDir, `${tag}.status`);
+    const log = join(this.stateDir, `${tag}.log`);
+    this.launch(tag, [
+      "sh",
+      "-c",
+      `"$@" >${shQuote(log)} 2>&1; echo $? >${shQuote(`${done}.tmp`)}; mv ${shQuote(`${done}.tmp`)} ${shQuote(done)}`,
+      "sh",
+      ...argv,
+    ]);
+    const t0 = Date.now();
+    while (!existsSync(done)) {
+      if (!this.running)
+        throw new Error(`the session exited while running ${name}`);
+      if (Date.now() - t0 > timeoutMs)
+        throw new Error(`${name} did not finish within ${timeoutMs / 1000} s`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    this.launched.delete(tag);
+    const status = Number(readFileSync(done, "utf8").trim());
+    const output = existsSync(log) ? readFileSync(log, "utf8") : "";
+    return { status, output };
+  }
+
+  // The session bus's address (the bus listens in the runtime
+  // directory), for a client of it outside the session.
+  busAddress(): string {
+    const sock = readdirSync(this.runtimeDir).find((f) => /^dbus-/.test(f));
+    if (sock === undefined) throw new Error("the session bus has no socket");
+    return `unix:path=${join(this.runtimeDir, sock)}`;
   }
 
   // The whole output at its scale, as an RGBA image (device pixels).
@@ -755,7 +1007,7 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
     // Every process of the namespace is gone once its first process is
     // reaped; wait for that before removing the directories they use.
     for (const d of [this.stateDirPath, this.runtimeDirPath])
-      if (d !== null) rmSync(d, { recursive: true, force: true });
+      if (d !== null) removeRunDirSync(d);
     this.stateDirPath = null;
     this.runtimeDirPath = null;
     process.off("exit", this.onExit);

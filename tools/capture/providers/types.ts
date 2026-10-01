@@ -103,10 +103,16 @@ export interface ImapAccount {
 }
 
 // How the copy injected into IMAP was changed so that a real client
-// can load the story's images: every `from` became `to`.
+// can load the story's images: every `from` became `to`, which is the
+// assets service's base URL followed by `c/<token>/`. The token is
+// fresh for each delivery, so every request for the copy's images
+// carries it and the service's log attributes each request to the
+// capture that made it, also while other captures load the same
+// images at once.
 export interface AssetRewrite {
   from: string;
   to: string;
+  token: string;
   count: number;
 }
 
@@ -161,6 +167,10 @@ export interface AssetRequest {
   // absolute-form request or a CONNECT); "direct": an ordinary request
   // for a path of this service.
   via: "proxy" | "direct";
+  // The delivery token an asset path was requested under (its
+  // `/c/<token>/` prefix, stripped from `url`); null for a path
+  // without one and for a refused request.
+  token: string | null;
 }
 
 // The running assets service (ctx.services.assets; narrow it with
@@ -172,9 +182,12 @@ export interface AssetsHandle extends ServiceHandle {
   baseUrl: string;
   // The origin the stories' MIME uses ("https://x.test/").
   rewriteFrom: string;
-  // Every request since the service started, in order; slice from a
-  // previous length to see one capture's.
+  // Every request since the service started, in order. One capture's
+  // asset requests are those carrying its delivery's token
+  // (requestsFor); refused requests carry none.
   requests(): readonly AssetRequest[];
+  // The asset requests made under `token`, in order.
+  requestsFor(token: string): AssetRequest[];
 }
 
 export type ProviderHealth =

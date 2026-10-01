@@ -11,6 +11,14 @@
 // The explicit --families hit-path rerun needs no dirt (explicit
 // filters bypass affected-selection), so cache-hit wiring is covered
 // on clean trees too.
+//
+// The --full runs here pin `--backends a`: this file is about the CLI's
+// selection, index, cache and run.json wiring, which backend a's
+// browsers exercise in seconds, not about the real clients (each
+// provider's own end-to-end file runs those). That --full routes to
+// every registered provider is shown by affected.test.ts
+// ("selectRunBackends: the providers a run routes to"), on the same
+// selection functions the CLI calls.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -28,8 +36,8 @@ import {
   darkNeeded,
   changedFilesSince,
   type CommandRunner,
-  familiesForChange,
   selectFamilies,
+  selectRunFamilies,
 } from "./affected.ts";
 import type {
   Entry,
@@ -143,6 +151,8 @@ describe("selection + cache wiring", () => {
     const r = runCli([
       "canary",
       "--full",
+      "--backends",
+      "a",
       "--schemes",
       "light,dark",
       "--out",
@@ -183,6 +193,8 @@ describe("selection + cache wiring", () => {
     const out = runDir(6);
     const r = runCli([
       "canary",
+      "--backends",
+      "a",
       "--families",
       first.family,
       "--viewports",
@@ -208,7 +220,15 @@ describe("selection + cache wiring", () => {
       return;
     }
     const out = runDir(2);
-    const r = runCli(["canary", "--out", relative(repoRoot, runDir(2))]);
+    // Backend a only, like run1: the real clients' routing is not this
+    // file's subject (see the header).
+    const r = runCli([
+      "canary",
+      "--backends",
+      "a",
+      "--out",
+      relative(repoRoot, runDir(2)),
+    ]);
     assert.equal(r.status, 0, `run2 failed:\n${r.stderr}`);
     const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty run2 index");
@@ -231,8 +251,27 @@ describe("selection + cache wiring", () => {
         encoding: "utf8",
       }) as string;
     const changed = changedFilesSince(run, prevTree, curTree);
+    const providers = registeredProviders();
     const wantFamilies = new Set(
-      familiesForChange(changed, servedFamilies(registeredProviders())),
+      selectRunFamilies({
+        served: providers.flatMap((p) =>
+          p.clients().map((c) => ({
+            backend: p.backend,
+            clientId: c.clientId,
+            family: c.family,
+          })),
+        ),
+        families: servedFamilies(providers),
+        familiesExplicit: false,
+        full: false,
+        changedFiles: changed,
+        clients: null,
+        backends: ["a"],
+      }).families.filter((f) =>
+        providers.some(
+          (p) => p.backend === "a" && p.clients().some((c) => c.family === f),
+        ),
+      ),
     );
     const wantSchemes = new Set(
       darkNeeded(changed) ? ["light", "dark"] : ["light"],
@@ -332,12 +371,18 @@ describe("selection + cache wiring", () => {
   });
 
   it("bare rerun with unchanged MIME exits 0 printing 'nothing to capture'", () => {
-    // Seed: a bare --full run (all stories, default matrix), so the
+    // Seed: a --full run (all stories, default matrix, backend a), so the
     // rerun's MIME-diff sees every story unchanged and selects zero
     // stories: a clean no-op, not a failure (exit 1 stays for explicit
     // filters that empty the matrix).
     const seed = runDir(4);
-    const s = runCli(["--full", "--out", relative(repoRoot, seed)]);
+    const s = runCli([
+      "--full",
+      "--backends",
+      "a",
+      "--out",
+      relative(repoRoot, seed),
+    ]);
     assert.equal(s.status, 0, `seed failed:\n${s.stderr}`);
     const out = runDir(5);
     const r = runCli(["--out", relative(repoRoot, out)]);

@@ -15,7 +15,13 @@ import { readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { FIXTURE_HOST, resolveFixture } from "../fixture_host.ts";
-import { AssetsService, STORY_ASSETS_DIR } from "./assets_service.ts";
+import {
+  AssetsService,
+  captureToken,
+  splitCaptureToken,
+  STORY_ASSETS_DIR,
+  tokenPrefix,
+} from "./assets_service.ts";
 import type { AssetsHandle } from "./types.ts";
 
 function hashedPath(name: string): string {
@@ -153,6 +159,89 @@ describe("assets service", () => {
         ["asset", 200, hashedPath("logo.png"), "direct"],
       ],
     );
+  });
+
+  it("serves a path under a delivery token as the path itself and logs the token with the request", async () => {
+    const a = captureToken();
+    const b = captureToken();
+    assert.match(a, /^[0-9a-f]{16}$/);
+    assert.notEqual(a, b);
+    const logo = hashedPath("logo.png");
+    const before = h.requests().length;
+    for (const t of [a, b, a]) {
+      const res = await fetch(`${h.baseUrl}${tokenPrefix(t)}${logo.slice(1)}`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(
+        Buffer.from(await res.arrayBuffer()),
+        readFileSync(join(STORY_ASSETS_DIR, "logo.png")),
+      );
+    }
+    // A stale hash under a token: the same 404 as without one.
+    const stale = logo.replace(/^\/[0-9a-f]{16}\//, "/0000000000000000/");
+    assert.equal(
+      (await fetch(`${h.baseUrl}${tokenPrefix(b)}${stale.slice(1)}`)).status,
+      404,
+    );
+    // Through the proxy, too.
+    assert.equal(
+      await raw(
+        port,
+        `GET http://127.0.0.1:${port}/${tokenPrefix(b)}${logo.slice(1)} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
+      ),
+      200,
+    );
+    assert.deepEqual(
+      h
+        .requests()
+        .slice(before)
+        .map((r) => [r.token, r.status, r.url, r.via]),
+      [
+        [a, 200, logo, "direct"],
+        [b, 200, logo, "direct"],
+        [a, 200, logo, "direct"],
+        [b, 404, stale, "direct"],
+        [b, 200, logo, "proxy"],
+      ],
+    );
+    // Each token's requests, and only those.
+    assert.deepEqual(
+      h.requestsFor(a).map((r) => [r.status, r.url]),
+      [
+        [200, logo],
+        [200, logo],
+      ],
+    );
+    assert.deepEqual(
+      h.requestsFor(b).map((r) => [r.status, r.url, r.via]),
+      [
+        [200, logo, "direct"],
+        [404, stale, "direct"],
+        [200, logo, "proxy"],
+      ],
+    );
+    // A path without a token is still served, with token null; a
+    // malformed token is no token.
+    assert.equal((await fetch(`${h.baseUrl}${logo.slice(1)}`)).status, 200);
+    assert.equal(h.requests().at(-1)!.token, null);
+    assert.equal(
+      (await fetch(`${h.baseUrl}c/XYZ/${logo.slice(1)}`)).status,
+      404,
+    );
+    assert.equal(h.requests().at(-1)!.token, null);
+    // A well-formed token no delivery was given is served and logged
+    // under that token; neither it nor a path without a token counts
+    // for a delivery's token.
+    const unknown = captureToken();
+    assert.equal(
+      (await fetch(`${h.baseUrl}${tokenPrefix(unknown)}${logo.slice(1)}`))
+        .status,
+      200,
+    );
+    assert.equal(h.requests().at(-1)!.token, unknown);
+    assert.equal(h.requestsFor(a).length, 2);
+    assert.equal(h.requestsFor(b).length, 3);
+    assert.equal(splitCaptureToken(`/c/${a}${logo}`).path, logo);
+    assert.throws(() => tokenPrefix("../x"), /malformed delivery token/);
   });
 
   it("is gone after stop", async () => {

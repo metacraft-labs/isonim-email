@@ -10,6 +10,14 @@
 // fixture host's own resolver, so a stale hash or an unknown name is
 // the same 404 here as in backend A.
 //
+// Each injected copy is rewritten to `/c/{token}/{sha256[0:16]}/{name}`
+// with a token fresh for that delivery (captureToken()). The service
+// strips the token before resolving, so it changes nothing about what
+// is served, and records it with the request: a provider attributes
+// each request to the capture whose copy made it, also while other
+// clients load the same images at the same time. A path without a
+// token is still served, and logged with token null.
+//
 // The same port is also an HTTP proxy that refuses everything: a
 // client configured with it as its proxy can fetch the asset paths
 // (also when it sends them through the proxy) and nothing else; every
@@ -23,6 +31,7 @@
 // instead of capturing before it has arrived. It is never set outside
 // tests (registeredServices() constructs the service without it).
 
+import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -33,6 +42,28 @@ import type { AssetRequest, AssetsHandle, ServiceHandle } from "./types.ts";
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..", "..");
 export const STORY_ASSETS_DIR = join(repoRoot, "tests", "stories", "assets");
+
+// A fresh delivery token: 16 lowercase hex digits.
+export function captureToken(): string {
+  return randomBytes(8).toString("hex");
+}
+
+// The part of an asset URL a token adds after the service's base URL.
+export function tokenPrefix(token: string): string {
+  if (!/^[0-9a-f]{16}$/.test(token))
+    throw new Error(`assets: malformed delivery token '${token}'`);
+  return `c/${token}/`;
+}
+
+// Splits `/c/{token}/{rest}` into the token and `/{rest}`; any other
+// path has no token.
+export function splitCaptureToken(path: string): {
+  token: string | null;
+  path: string;
+} {
+  const m = /^\/c\/([0-9a-f]{16})(\/.*)$/.exec(path);
+  return m === null ? { token: null, path } : { token: m[1]!, path: m[2]! };
+}
 
 export function assetsHandle(h: ServiceHandle | undefined): AssetsHandle {
   if (
@@ -91,6 +122,7 @@ export class AssetsService implements LocalService {
         status: 403,
         kind: "blocked",
         via: "proxy",
+        token: null,
       });
       socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n");
     });
@@ -117,6 +149,8 @@ export class AssetsService implements LocalService {
       baseUrl,
       rewriteFrom: `${FIXTURE_HOST}/`,
       requests: () => log,
+      requestsFor: (token: string) =>
+        log.filter((e) => e.kind === "asset" && e.token === token),
     };
   }
 
@@ -152,24 +186,32 @@ export class AssetsService implements LocalService {
           status: 403,
           contentType: "text/plain",
           body: Buffer.from(`assets: egress refused: ${raw}\n`),
-          entry: { url: raw, status: 403, kind: "blocked", via: "proxy" },
+          entry: {
+            url: raw,
+            status: 403,
+            kind: "blocked",
+            via: "proxy",
+            token: null,
+          },
         };
       path = u.pathname;
     }
+    const { token, path: pathOnly } = splitCaptureToken(
+      path.split("?")[0] ?? path,
+    );
     if (req.method !== "GET" && req.method !== "HEAD")
       return {
         status: 405,
         contentType: "text/plain",
         body: Buffer.from(`assets: ${req.method ?? "?"} not allowed\n`),
-        entry: { url: path, status: 405, kind: "asset", via },
+        entry: { url: pathOnly, status: 405, kind: "asset", via, token },
       };
-    const pathOnly = path.split("?")[0] ?? path;
     const res = resolveFixture(`${FIXTURE_HOST}${pathOnly}`, this.assetsDir);
     return {
       status: res.status,
       contentType: res.contentType,
       body: res.body,
-      entry: { url: pathOnly, status: res.status, kind: "asset", via },
+      entry: { url: pathOnly, status: res.status, kind: "asset", via, token },
     };
   }
 

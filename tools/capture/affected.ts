@@ -236,6 +236,39 @@ export function selectRunFamilies(
   };
 }
 
+// The backends a run routes to.
+//
+// The module declarations name audience families, which select backend
+// A's stand-ins only: on a run whose families come from the change alone
+// (no --families, --clients or --backends, and a change in this
+// repository that selects some family), the real clients other providers
+// serve under an audience family (linux-desktop's Thunderbird) are left
+// out, like the verification clients, so only `browserBackend` remains.
+// Every other run (--full, the fallback with nothing to diff against,
+// or one that names its clients, backends or families) routes to every
+// backend given.
+export function selectRunBackends(sel: {
+  // The --backends value, or every served backend when it was not given.
+  backends: string[];
+  backendsExplicit: boolean;
+  clients: string[] | null;
+  // The families' source (selectRunFamilies) and the change behind it.
+  source: FamilySource;
+  changedFiles: string[];
+  // The --families value, or every served family.
+  families: string[];
+  browserBackend: string;
+}): string[] {
+  const changeSelectsBackendA =
+    sel.source === "change" &&
+    !sel.backendsExplicit &&
+    sel.clients === null &&
+    selectFamilies(sel.changedFiles).some((f) => sel.families.includes(f));
+  return changeSelectsBackendA
+    ? sel.backends.filter((b) => b === sel.browserBackend)
+    : [...sel.backends];
+}
+
 // Why no served client matches the selected families, backends and
 // clients together: the message for an empty request matrix.
 export function emptyMatrixReason(
