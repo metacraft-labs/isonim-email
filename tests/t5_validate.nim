@@ -3,7 +3,10 @@
 ## (R-A11Y-03), `alt` on every image (R-A11Y-04), valid UTF-8 text,
 ## raw nodes only inside `mailRaw`, no sectioning elements (R-A11Y-10)
 ## and no reactive residue. Pure collection: the tree is
-## never mutated.
+## never mutated. Diagnostics carry the span of the element they are
+## about: the `ui(r)` macro's for template elements (pinned to the
+## line and column by test_validate_alt_missing_template_span), the
+## builder's for hand-built trees.
 ##
 ## Backend-independent (tree walk + pure checks), so `just test`
 ## also runs it on JS.
@@ -22,6 +25,18 @@ proc validDoc(r: EmailRenderer): EmailNode =
 
 proc codesOf(diags: seq[EmailDiagnostic]): seq[string] =
   diags.mapIt(it.code)
+
+# A real template: the spans below come from the `ui(r)` macro, not from
+# hand-set origins. Its line and column numbers are pinned by
+# test_validate_alt_missing_template_span; moving these lines must
+# update that test.
+proc altTpl(r: EmailRenderer; x: int): EmailNode =
+  ui(r):
+    mailDocument(lang = "en", title = "Alt"):
+      h1: text "Alt"
+      mailImage(src = "https://x.test/a.png", width = "120px")
+      mailImage(src = "https://x.test/b.png", width = "120px", alt = "Logo")
+      mailImage(src = "https://x.test/c.png", width = "120px", alt = "")
 
 suite "P1 validate":
   test "test_validate_clean_tree":
@@ -84,6 +99,9 @@ suite "P1 validate":
 
   test "test_validate_alt_missing":
     # rule: R-A11Y-04
+    # Hand-built tree with hand-set spans: the only way a plain `img`
+    # reaches P1, since the template vocabulary forbids `img` (it names
+    # mailImage instead). Template spans: the next test.
     let r = EmailRenderer()
     let doc = validDoc(r)
     let img = r.createElement("mailImage")
@@ -98,6 +116,34 @@ suite "P1 validate":
     check codesOf(diags) == @[codeA11yAltMissing, codeA11yAltMissing]
     check diags[0].origin == SourceSpan(file: "alt.nim", line: 9, col: 5)
     check diags[1].origin == SourceSpan(file: "alt.nim", line: 12, col: 5)
+
+  test "test_validate_alt_missing_template_span":
+    # rule: R-A11Y-04
+    # Through the whole render of a real template: each image without
+    # a usable alt reports the template file and the line and column of
+    # its tag, never "unknown location"; the image with alt is silent.
+    let res = renderEmail(altTpl, 0)
+    var alts: seq[EmailDiagnostic] = @[]
+    for d in res.diagnostics:
+      if d.code == codeA11yAltMissing:
+        alts.add(d)
+    check alts.len == 2
+    if alts.len == 2:
+      check alts[0].origin.file.endsWith("t5_validate.nim")
+      check alts[0].origin.line == 37
+      check alts[0].origin.col == 6
+      check alts[1].origin.file.endsWith("t5_validate.nim")
+      check alts[1].origin.line == 39
+      check alts[1].origin.col == 6
+      check "without alt" in alts[0].message
+      check "empty alt" in alts[1].message
+      for d in alts:
+        check d.severity == sevError
+        let shown = $d
+        check shown.startsWith(d.origin.file & ":" & $d.origin.line &
+          ":" & $d.origin.col & ": error E-A11Y-ALT-MISSING: ")
+        check "unknown location" notin shown
+    check hasErrors(res.diagnostics)
 
   test "test_validate_alt_variants":
     # rule: R-A11Y-04

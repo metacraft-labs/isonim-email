@@ -99,6 +99,7 @@ suite "ganga strip":
     var target = defaultTarget()
     target.outlookWord = false
     target.headStyleBudget = 1_000_000
+    target.darkMode = dmDesigned # Only the designed strategy has dark CSS.
     # A three-block head (reset + responsive + dark) so the strip
     # removes plain and @media-carrying blocks alike.
     let decls = styled.head & @[

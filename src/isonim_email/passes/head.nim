@@ -35,11 +35,19 @@
 ## carries `!important`, because each must beat an inline value
 ## (R-CSS-03, R-INT-02). Class names hash the variant with the
 ## declarations (R-CSS-08), so one variant's rule never matches another
-## variant's element. The dark block is not emitted at all under
-## `darkMode = dmNone`; otherwise its Outlook copies split by property
-## (R-DRK-03): `[data-ogsc]` rules carry `color` only and `[data-ogsb]`
-## rules `background-color` only, while the media query carries every
-## dark declaration.
+## variant's element. The dark block is emitted only under
+## `darkMode = dmDesigned` (R-DRK-02): `dmNone` writes no dark CSS, and
+## `dmAccommodate` keeps the colour-scheme metas and the inversion lint
+## but recolours nothing, so it writes no dark CSS either. Under
+## `dmDesigned` the Outlook copies split by property (R-DRK-03):
+## `[data-ogsc]` rules carry `color` only and `[data-ogsb]` rules
+## `background-color` only, while the media query carries every dark
+## declaration.
+##
+## Rule order (R-CSS-16): the rules P6 generates are sorted, which is
+## cascade-safe because each generated class is one rule per variant.
+## The reset block is not generated: it is catalogue §2's text, emitted
+## verbatim in the catalogue's order, never re-sorted.
 ##
 ## `webfonts`/`msoRules` arrive as parameters: the component work owns
 ## feeding them; this pass only places them (`@font-face`
@@ -128,11 +136,13 @@ proc emitMediaRule(query: string;
   "@media " & query.strip() & "{" & parts.join("") & "}"
 
 proc resetRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
-  ## Catalogue §2's exact 13-line reset, in order (R-RST-01…11). The
-  ## declaration order inside each rule is the catalogue's, NOT
-  ## serialiser-sorted: lines 1, 6 and 10 are deliberately unsorted,
-  ## so `resetBlockText` emits them verbatim — validated, never
-  ## re-sorted.
+  ## Catalogue §2's exact 13-line reset, in order (R-RST-01…11, 13).
+  ## Both orders are the catalogue's, NOT serialiser-sorted: the rule
+  ## order (R-CSS-16 sorts generated rules only; the reset is emitted
+  ## in the order its sources wrote and verified it) and the
+  ## declaration order inside each rule (lines 1, 6 and 10 are
+  ## deliberately unsorted). `resetBlockText` emits them verbatim —
+  ## validated, never re-sorted.
   @[
     ("html,body", @[ # R-RST-01
       Declaration(prop: "margin", value: "0 auto", important: true),
@@ -165,9 +175,8 @@ proc resetRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
       Declaration(prop: "line-height", value: "100%"),
       Declaration(prop: "outline", value: "none"),
       Declaration(prop: "text-decoration", value: "none")]),
-    # Unowned line, in exact content: no R-RST-* rule covers it, but
-    # catalogue §2 line 8 carries it, so the reset does too.
-    ("a", @[Declaration(prop: "text-decoration", value: "none")]),
+    ("a", @[ # R-RST-13
+      Declaration(prop: "text-decoration", value: "none")]),
     ("#outlook a", @[ # R-RST-08
       Declaration(prop: "padding", value: "0")]),
     ("a[x-apple-data-detectors],.unstyle-auto-detected-links a,.aBn", @[ # R-RST-09
@@ -326,7 +335,8 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   var darkAttach: seq[tuple[node: EmailNode; cls: string]] = @[]
   var seenDark: seq[string] = @[]
   let darkGroupsIn =
-    if target.darkMode == dmNone: @[] # No dark rules at all.
+    # Dark CSS is the designed dark palette: only `dmDesigned` has one.
+    if target.darkMode != dmDesigned: @[]
     else: groupDecls(decls, "dark")
   for g in darkGroupsIn:
     let cls = gen.classFor(g.decls, "dark")

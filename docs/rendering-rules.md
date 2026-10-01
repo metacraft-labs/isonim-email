@@ -9,7 +9,7 @@
 > **Status:** Normative. This catalogue is the **exact behaviour** the
 > implementation must produce. The rule-traceability test
 > (`tests/t1_rule_traceability.nim`) reads it directly.
-> **Last Updated:** 2026-09-30
+> **Last Updated:** 2026-10-01
 
 This catalogue turns published HTML-email practice (RFCs, vendor
 documentation, caniemail data, framework sources and community write-ups)
@@ -113,6 +113,15 @@ resets. Each line is its own rule, so that a capture can
 withdraw one without touching the others. Serialisation is minified by the
 CSS serialiser. It is shown expanded here for review.
 
+The block is emitted **verbatim, in the order printed here**: the rule
+order and the declaration order inside each rule are both this table's.
+R-CSS-16's sorting applies to generated rules only. When two rules of
+equal specificity set the same property on the same element, the later
+one wins in every client, so the order of a hand-curated reset is part
+of its meaning. These lines reproduce the order in which their sources
+ship and were checked. A line added later is placed where its source
+puts it, and does not go in sorted position.
+
 ```css
 html,body{margin:0 auto !important;padding:0 !important;height:100% !important;width:100% !important;}
 *{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%;}
@@ -164,7 +173,7 @@ img.g-img+div{display:none !important;}
 | R-CSS-13 | Lengths are px for box properties, `font-size` and `line-height`; `%` for widths only. `rem`/`em` are converted with a 16px root. Unitless numbers from the Tailwind extractor get `px` restored from the extractor's unit record. | style/units | outlookWord | Cerberus; caniemail Outlook notes (read) | ✓ |
 | R-CSS-14 | Semi-transparent colours: when the family set includes `outlookWord`, the opaque blend against the resolved background colour is emitted first, followed by `rgba()` for the others (`color:#7f7f7f;color:rgba(0,0,0,.5)`). | style/colors | outlookWord | inference (Word ignores rgba) | ☐ (to be settled by a Word-engine Outlook capture) |
 | R-CSS-15 | Any rule in the head that exists only to override an inline value (responsive or dark) is paired with a **class** on the element. Selectors never depend on the element's position or on inline style content. | P6 | all | inference, from R-CSS-09 | ✓ (design rule) |
-| R-CSS-16 | Declarations inside a rule are sorted by property name, and rules by selector, both deterministically. A shorthand always precedes its own longhands (`border`, then `border-top` and `border-color`, then `border-top-color`), so sorting never lets a shorthand override a longhand written to refine it. | style/css | — | design rule: byte-identical output for the same input | ✓ (design rule) |
+| R-CSS-16 | Declarations inside a generated rule are sorted by property name, and generated rules by selector, both deterministically. A shorthand always precedes its own longhands (`border`, then `border-top` and `border-color`, then `border-top-color`), so sorting never lets a shorthand override a longhand written to refine it. Sorting generated rules is cascade-safe, because each element gets at most one generated class per variant. The reset block (§2) is not generated: it is emitted verbatim in the catalogue's order (§2 explains why). | style/css | — | design rule: byte-identical output for the same input | ✓ (design rule) |
 | R-CSS-17 | `!important` is stripped by Gmail when images are off (email-bugs #70). No rule may depend on `!important` for **legibility**; it may only depend on it for layout improvement. | P6 | gmail* | hteumeuleu/email-bugs #70 | ◐ (to be confirmed by a real-client capture) |
 | R-CSS-18 | In the "View entire message" window of a clipped email, Gmail removes all `<style>` (email-bugs #56). A clipped message is therefore also style-less, which is one more reason for R-SIZE-01. | — | gmailWeb | hteumeuleu/email-bugs #56 (read) | ✓ |
 
@@ -362,7 +371,7 @@ VML variant (Campaign Monitor pattern):
 | ID | Rule | Where | Source | Status |
 |---|---|---|---|---|
 | R-DRK-01 | Families that honour `prefers-color-scheme`: apple, outlookApp, outlookWeb (limited), samsung, thunderbird, fastmail. Families that do not: gmail*, ganga, yahoo (mangled), outlookWord, proton; hey rewrites it to `(false)`. | target | caniemail css-at-media-prefers-color-scheme (read) | ✓ |
-| R-DRK-02 | For every element whose token colour has a different dark value: a class `e-dk-{hash}` and, in block 3, `@media (prefers-color-scheme: dark){.e-dk-…{color:{dark} !important;}}` (and `background-color` likewise). | P6 | Cerberus (read) | ✓ |
+| R-DRK-02 | For every element whose token colour has a different dark value: a class `e-dk-{hash}` and, in block 3, `@media (prefers-color-scheme: dark){.e-dk-…{color:{dark} !important;}}` (and `background-color` likewise). Only under `darkMode = designed`. `none` and `accommodate` write no dark CSS at all (no block 3, no R-DRK-03 copies, no dark classes); `accommodate` keeps R-DOC-07's metas and the inversion lint. | P6 | Cerberus (read) | ✓ |
 | R-DRK-03 | Outlook.com and the Outlook apps: the same classes get `[data-ogsc] .e-dk-…{color:{dark} !important;}` and `[data-ogsb] .e-dk-…{background-color:{dark} !important;}` in block 3, **outside** the media query. Outlook adds these attributes itself when it recolours. | P6 | caniemail note (read); Litmus dark-mode guide ◐ | ◐ to be confirmed on backend B (Outlook.com dark toggle) |
 | R-DRK-04 | Inversion simulation. Partial inversion: every background with relative luminance > 0.5 becomes its lightness-inverted colour (OKLCH L → 1 − L, chroma kept). Every text colour with luminance < 0.5 is inverted the same way. Full inversion: every colour is inverted that way. WCAG 2 contrast ≥ 4.5:1 (≥ 3:1 for text ≥ 24 px, or ≥ 18.66 px bold) is required for every text/background pair in light, dark, partial and full. | P10 | Litmus dark-mode guide (behaviours ◐); the algorithm is our model | ☐ to be settled: calibrate both models against Gmail-app (full) and Outlook.com (partial) captures, and record the calibrated formula here |
 | R-DRK-05 | The Gmail iOS blend-mode hack is **not** emitted. | — | hteumeuleu.com, "Fixing Gmail's dark mode issues with CSS blend modes" | ✓ (decision) |
@@ -522,3 +531,7 @@ unsized cells (R-TBL-01, R-TBL-05).
 - 2026-09-30: R-CSS-05 names the characters and shapes the serialiser
   rejects; R-CSS-08 hashes the variant with the declarations; R-CSS-16
   keeps a shorthand before its longhands.
+- 2026-10-01: R-CSS-16's sorting covers generated rules only, and §2
+  states that the reset is emitted verbatim in catalogue order (equal
+  specificity resolves by source order). R-DRK-02 limits dark CSS to
+  `darkMode = designed`.

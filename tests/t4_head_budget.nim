@@ -12,8 +12,9 @@
 ## hash the variant, so equal declarations under two variants never
 ## share a class; the dark block's Outlook copies split by property
 ## (R-DRK-03: `[data-ogsc]` carries `color` only, `[data-ogsb]`
-## `background-color` only); and `darkMode = dmNone` emits no dark
-## rules at all.
+## `background-color` only); and only `darkMode = dmDesigned` emits
+## dark rules — `dmNone` and the default `dmAccommodate` emit none
+## (R-DRK-02, not claimed here).
 ##
 ## Backend-independent (tree building + pure pass), so `just test` also
 ## runs it on JS.
@@ -66,8 +67,11 @@ proc msoRules(): seq[Rule] =
 suite "head budget drops lowest priority first":
   test "test_head_budget_drops_lowest_priority_first":
     # Full assembly: everything survives, in priority order, silent.
+    # Every block exists only under the designed dark strategy (the
+    # dark block needs it).
     var target = defaultTarget()
     target.headStyleBudget = 1_000_000
+    target.darkMode = dmDesigned
     let f = freshDecls()
     let full = assembleHead(f.decls, target, webfonts(), msoRules())
     check full.diagnostics.len == 0
@@ -193,6 +197,7 @@ suite "over-budget warning when protected blocks exceed the budget":
   test "test_head_over_budget_warns":
     var target = defaultTarget()
     target.headStyleBudget = 1_000_000
+    target.darkMode = dmDesigned # So the dark block exists to drop.
     let probe = assembleHead(freshDecls().decls, target)
     let protectedBytes = blockWith(probe.blocks, 1).len +
       blockWith(probe.blocks, 2).len
@@ -345,3 +350,36 @@ suite "variant rules":
     let res2 = assembleHead(g.decls, designed, webfonts(), msoRules())
     check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 0]
     check "e-" in g.dark.attrs["class"]
+
+  test "test_dark_accommodate_emits_no_dark_rules":
+    # The default strategy accommodates dark mode (colour-scheme metas,
+    # inversion lint) but has no designed dark palette, so P6 writes no
+    # dark CSS and attaches no dark class; the other blocks are as under
+    # dmDesigned, byte for byte.
+    var target = defaultTarget()
+    check target.darkMode == dmAccommodate
+    target.headStyleBudget = 1_000_000
+    let f = freshDecls()
+    let res = assembleHead(f.decls, target, webfonts(), msoRules())
+    check res.diagnostics.len == 0
+    check priorities(res.blocks) == @[1, 2, 4, 5, 0]
+    for b in res.blocks:
+      check "prefers-color-scheme" notin b.text
+      check "data-ogs" notin b.text
+    check "class" notin f.dark.attrs
+    var designed = target
+    designed.darkMode = dmDesigned
+    let g = freshDecls()
+    let res2 = assembleHead(g.decls, designed, webfonts(), msoRules())
+    check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 0]
+    for p in [1, 2, 4, 5, 0]:
+      check blockWith(res.blocks, p) == blockWith(res2.blocks, p)
+    check f.sm.attrs["class"] == g.sm.attrs["class"]
+    check f.hover.attrs["class"] == g.hover.attrs["class"]
+    # Under the default budget too: no dark block appears, so none is
+    # dropped and nothing is reported about it.
+    var tight = defaultTarget()
+    tight.headStyleBudget = 1
+    let t = assembleHead(freshDecls().decls, tight)
+    for d in t.diagnostics:
+      check "'dark'" notin d.message

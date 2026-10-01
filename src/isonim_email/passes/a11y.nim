@@ -9,7 +9,8 @@
 ##   attribute is an `E-A11Y-TABLE-CAPTION` error instead;
 ## - `aria-hidden="true"` on the preheader padding div (R-PRE-03), on VML
 ##   shapes carrying decorative markers, and on empty spacer divs
-##   (R-A11Y-05);
+##   (R-A11Y-05; its dark-swap duplicates are not handled yet, because
+##   `mailImage` `dark_src` has no lowering to produce them);
 ## - `mailDocument` `lang`/`dir` copied onto the article wrapper div when
 ##   absent (R-A11Y-01).
 ##

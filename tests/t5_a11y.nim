@@ -1,7 +1,9 @@
 ## P7 backfills accessibility attributes —
 ## `role="presentation"` on layout tables (R-A11Y-02), `aria-hidden`
 ## on the preheader padding (R-PRE-03), decorative VML and empty
-## spacers (R-A11Y-05), `mailDocument` `lang`/`dir` copied onto the
+## spacers (R-A11Y-05's parts that exist so far; the rule stays
+## pending until its dark-swap duplicates exist), `mailDocument`
+## `lang`/`dir` copied onto the
 ## article wrapper (R-A11Y-01) — and warns on skipped heading
 ## levels (R-TXT-10). Backfills only add missing attributes.
 ##
@@ -64,7 +66,9 @@ suite "P7 a11y":
     check empty.attrs["role"] == "table"
 
   test "test_a11y_aria_hidden_backfill":
-    # rule: R-A11Y-05
+    # R-A11Y-05's spacer and decorative-VML parts. Not a rule claim:
+    # the rule's dark-swap duplicates do not exist yet (mailImage
+    # dark_src has no lowering), so R-A11Y-05 stays pending.
     let r = EmailRenderer()
     let root = r.createElement("div")
     let spacer = r.createElement("div")

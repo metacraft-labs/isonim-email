@@ -5,8 +5,8 @@
 # Implemented (lint side): R-OL-10 (tests/t3_lint_flex.nim).
 # Implemented: R-CSS-03, R-CSS-04, R-CSS-05, R-CSS-09, R-CSS-16 (tests/t4_head_css.nim), R-CSS-06, R-CSS-12, R-CSS-13 (tests/t4_normalisation.nim), R-CSS-08 (tests/t4_class_names.nim).
 # Implemented: R-CSS-11 (tests/t4_styles.nim).
-# Implemented: R-DOC-01..13 (tests/t5_document_golden.nim), R-RST-01..11 (same; NOT R-RST-12, still pending), R-PRE-01, R-PRE-05 (tests/t5_preheader.nim), R-CSS-02, R-CSS-07 (tests/t5_document_golden.nim; dropping half stays in tests/t4_head_budget.nim).
-# Implemented: R-A11Y-03, R-A11Y-04 (tests/t5_validate.nim), R-A11Y-01, R-A11Y-02, R-A11Y-05, R-PRE-03 (tests/t5_a11y.nim), R-A11Y-06, R-A11Y-07 (tests/t5_lint_a11y.nim; its R-IMG-04 length half stays unclaimed).
+# Implemented: R-DOC-01..13 (tests/t5_document_golden.nim), R-RST-01..11, R-RST-13 (same; NOT R-RST-12, still pending), R-PRE-01, R-PRE-05 (tests/t5_preheader.nim), R-CSS-02, R-CSS-07 (tests/t5_document_golden.nim; dropping half stays in tests/t4_head_budget.nim).
+# Implemented: R-A11Y-03, R-A11Y-04 (tests/t5_validate.nim), R-A11Y-01, R-A11Y-02, R-PRE-03 (tests/t5_a11y.nim), R-A11Y-06, R-A11Y-07 (tests/t5_lint_a11y.nim; its R-IMG-04 length half stays unclaimed).
 # Implemented: R-A11Y-10 (tests/t2_vocabulary_compile_fail.nim for templates, tests/t5_validate.nim for hand-built trees).
 # Implemented: R-A11Y-08 (tests/t5_pass_order.nim), R-CSS-01 (tests/t5_ganga_strip.nim), R-CSS-10 (tests/t5_media_queries.nim).
 # Implemented: R-MIME-05, R-MIME-07 (tests/t6_qp.nim).
@@ -15,7 +15,9 @@
 # Implemented: R-IMG-01 (fixed-size half; fluid images are R-IMG-11), R-IMG-05, R-IMG-10 (tests/t5_lower_elements.nim).
 # Also: R-MIME-08, R-MIME-10 (tests/t6_headers.nim; fuzzed against Python's email package in tests/t6_header_fuzz.nim), R-SND-03 (the library's one-click check, tests/t6_unsubscribe.nim), R-SIZE-02 (the render's computed breakdown, tests/t6_size.nim).
 # R-CSS-14 moved BACK here 2026-09-27 (the one exception to shrink-only): emitColorDecls computes the blend-then-rgba() pair (still unit-tested, unclaimed, in tests/t4_normalisation.nim) but P5 inline carries the blend alone — no clean duplicate-prop carrier exists in the OrderedTable tree shape. Owner is the content-leaves work, as the catalogue row records.
-# R-RST-13 added 2026-09-29: a new rule (reset line 8, `a{text-decoration:none}`), not yet covered by any test. Owner is the reset-content work that owns R-RST-01..11.
+# R-RST-13 added 2026-09-29 for reset line 8 (`a{text-decoration:none}`); claimed 2026-10-01 by tests/t5_document_golden.nim.
+# R-A11Y-05 moved BACK here 2026-10-01 (the second exception to shrink-only): its dark-swap duplicates do not exist yet (mailImage dark_src reports E-LOWER-MISSING; the dark-image swap of R-IMG-06 is unbuilt), so the rule is not fully implemented. Its other three parts (spacers, preheader padding, decorative VML) stay unit-tested, unclaimed, in tests/t5_a11y.nim. Owner is the dark-mode work that builds R-IMG-06.
+R-A11Y-05
 R-A11Y-09
 R-BTN-01
 R-BTN-02
@@ -78,7 +80,6 @@ R-OL-16
 R-PRE-02
 R-PRE-04
 R-RST-12
-R-RST-13
 R-SIZE-03
 R-TBL-01
 R-TBL-02
