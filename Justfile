@@ -114,8 +114,9 @@ theme-snapshot:
 
 # Test: the full suite on the C backend, plus the backend-independent
 # passes on the JS backend, plus the capture emulation-transform tests,
-# plus the capture regression checks (Tier-1 + Tier-2, ~10-12 s).
-test: build-tailwind test-c test-js test-ts test-capture-ci
+# plus the self-hosted webmail end-to-end tests (~90 s), plus the
+# capture regression checks (Tier-1 + Tier-2, ~10-12 s).
+test: build-tailwind test-c test-js test-ts test-webmail test-capture-ci
 
 # The capture regression checks as part of the full suite. The
 # baselines (Tier-1 exact hashes above all) are pinned to the
@@ -158,8 +159,16 @@ test-js: build-tailwind
 # suites, contact-sheet and findings suites):
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
+# The self-hosted webmail end-to-end file is left to `test-webmail`.
 test-ts:
-    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" "tools/capture/providers/*.test.ts" "tools/review/*.test.ts"
+    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v '/selfhosted_webmail\.test\.ts$') "tools/review/*.test.ts"
+
+# The self-hosted webmail provider end to end: real Roundcube and
+# SnappyMail on php-fpm and caddy, Dovecot and Chromium (~90 s on a
+# loaded host, so on its own rather than inside test-ts's parallel
+# run). Needs the story driver (`just email-shots-build`).
+test-webmail: email-shots-build
+    node --test tools/capture/providers/selfhosted_webmail.test.ts
 
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only

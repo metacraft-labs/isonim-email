@@ -25,7 +25,6 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 
 import {
-  BACKEND_A_FAMILIES,
   darkNeeded,
   changedFilesSince,
   type CommandRunner,
@@ -38,6 +37,8 @@ import type {
   RunJson,
   StoryManifest,
 } from "./email-shots.ts";
+import { servedFamilies } from "./providers/harness.ts";
+import { registeredProviders } from "./providers/registry.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -204,7 +205,7 @@ describe("selection + cache wiring", () => {
       }) as string;
     const changed = changedFilesSince(run, prevTree, curTree);
     const wantFamilies = new Set(
-      familiesForChange(changed, BACKEND_A_FAMILIES),
+      familiesForChange(changed, servedFamilies(registeredProviders())),
     );
     const wantSchemes = new Set(
       darkNeeded(changed) ? ["light", "dark"] : ["light"],

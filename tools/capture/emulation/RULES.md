@@ -3,8 +3,10 @@
 Every correction learned from backends B/C/D is recorded in this file
 with its screenshot pair: the backend-A emulation
 that was wrong, the real-client capture that showed it, and the rule
-change that fixed it. Until backend B lands, the citations below
-rest on published behaviour only: the rules in
+change that fixed it. Real webmail sanitisers run locally
+(Roundcube and SnappyMail, last section) are recorded as evidence
+too. Until backend B lands, the citations below rest on published
+behaviour only: the rules in
 `docs/rendering-rules.md`, and — for the steps no rule covers — the
 publicly documented client rewrites (Gmail's `m_` class prefix and `a3s`
 body wrapper, Outlook.com's `x_` prefix and `rps_` wrapper, images-off
@@ -62,6 +64,85 @@ Lint-grade (emulation steps 1–5): reveal mso conditionals; strip
 `<style>` media queries (R-LAY-02 excludes outlookWord); stand VML
 shapes in as flat labelled rectangles (R-VML-01/02); flatten `rgba()`
 (R-CSS-14).
+
+## Real-sanitiser evidence: self-hosted webmail
+
+Roundcube 1.6.15 (Elastic skin) and SnappyMail 2.38.2 (default user
+settings), captured by the `selfhosted-webmail` provider in the pinned
+Chromium. They are verification clients, not audience families: each
+is a real, independently written sanitiser, so they show how head CSS
+and scoped classes fare outside a browser engine, and they calibrate
+the two kinds of webmail behaviour the transforms above model
+(prefix-and-scope like gmailWeb and outlookWeb, strip-everything like
+ganga). Measured 2026-10-01 on the `sanitiserProbe` capture fixture
+(a `darkMode = designed` render whose head has the reset, a
+responsive `@media` rule with its `.moz-text-html` copy, the dark
+block with its `[data-ogsc]`/`[data-ogsb]` copies, a `:hover` rule and
+the `lte mso 11` conditional block) and on the receipt story, light
+and dark, desktop and mobile. Each claim below is asserted by
+`tools/capture/providers/selfhosted_webmail.test.ts` ("records how
+Roundcube and SnappyMail sanitise head CSS", and "aborts every page
+request but the webmail and the assets service, and lists it" for the
+images), which captures the sanitised message-body DOM it inspects
+(provenance `sanitised_html`).
+
+<!-- markdownlint-disable MD013 -->
+<!-- A table row cannot wrap. -->
+
+| What                                          | Roundcube 1.6.15 (`washtml`)                                                                                                                                                        | SnappyMail 2.38.2 (in-browser cleaner)                                                                                                                                                                                                     |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<style>` blocks                              | Kept, each as its own `<style>` (all four outside conditional comments)                                                                                                             | All removed                                                                                                                                                                                                                                |
+| Selectors                                     | Every selector scoped under the body wrapper: `#message-htmlpart1 div.rcmBody …`; `html`/`body` become the wrapper                                                                  | Gone with the blocks                                                                                                                                                                                                                       |
+| Class names, ids                              | Prefixed `v1` in the attributes and in the CSS alike (`e-3sg` → `v1e-3sg`, `#outlook` → `#v1outlook`, `.moz-text-html` → `.v1moz-text-html`)                                        | Every `class` and `id` of the message removed; only the webmail's own wrappers (`b-text-part`, `mail-body`) carry classes                                                                                                                  |
+| Media queries                                 | Kept, scoped selectors inside: `@media only screen and (max-width: 479px){#message-htmlpart1 div.rcmBody .v1e-…}`                                                                   | Gone                                                                                                                                                                                                                                       |
+| Dark rules                                    | `@media (prefers-color-scheme: dark)` kept and scoped. The webmail's dark mode (Elastic follows the browser's scheme) does not recolour the message: it stays on its own background | Gone. Dark is a theme (no automatic dark mode); the message keeps its backgrounds                                                                                                                                                          |
+| `[data-ogsc]`/`[data-ogsb]` copies (R-DRK-03) | Kept but scoped under the wrapper, so they can only match inside the message: inert, harmless                                                                                       | Gone                                                                                                                                                                                                                                       |
+| `:hover`                                      | Kept, scoped                                                                                                                                                                        | Gone                                                                                                                                                                                                                                       |
+| Conditional comments                          | Removed with their content (the `lte mso 11` block is gone); the content of `<!--[if !mso]><!-->` blocks stays                                                                      | Removed, as above                                                                                                                                                                                                                          |
+| `role`, `aria-*`                              | Removed (R-DOC-10's wrapper roles, R-PRE-03's `aria-hidden`); `lang`/`dir` on the wrapper kept (R-DOC-02)                                                                           | Removed; `lang`/`dir` kept                                                                                                                                                                                                                 |
+| `<body>`                                      | Becomes `div.rcmBody#message-htmlpart1` with the body's inline style (R-DOC-09, R-DOC-13 kept). **A `class` attribute on `<body>` replaces `rcmBody`** (see below)                  | Becomes `div.mail-body` with the body's inline style                                                                                                                                                                                       |
+| Hidden elements                               | Kept (the preheader, R-PRE-01)                                                                                                                                                      | Elements hidden inline (`display:none`: the preheader and its padding) removed                                                                                                                                                             |
+| Inline styles                                 | Kept, re-spaced (`a:b;` → `a: b`)                                                                                                                                                   | Re-serialised: colours as `rgb()`, `mso-*` and `-ms-*` declarations dropped                                                                                                                                                                |
+| Images                                        | `src` kept and loaded (remote images allowed); `width` attribute kept; a 1×1 image is loaded                                                                                        | `src` kept and loaded (`view_images = always`); the `width` attribute becomes inline `width: 100%; max-width: {w}px`; `loading="lazy"` added; an image one pixel wide is hidden (`display: none`, `data-x-src-hidden`) and never requested |
+
+<!-- markdownlint-enable MD013 -->
+
+**The body class disables all head CSS in Roundcube.** The document
+skeleton (catalogue §1) puts `class="body"` on `<body>`. Roundcube
+turns `<body>` into its wrapper `div` with the class `rcmBody` and
+scopes every head selector under `div.rcmBody`, but copies the
+message's own `class` attribute over its own, so the wrapper is
+`div.v1body` and no element matches `div.rcmBody`: none of the
+scoped rules (responsive, dark, hover) can apply. Measured on the
+probe in dark mode: the dark paragraph background (`#111827`) is not
+painted; the same message with the class removed from `<body>` keeps
+`div.rcmBody` and paints it (the test's control). Recorded as a
+library issue rather than worked around here.
+
+**SnappyMail's dark themes and uncoloured text.** In the dark theme,
+text with no inline colour inherits the theme's light text colour
+while the message keeps its white background: the receipt's
+`Widget: $10.00` cell and the alert's heading and cell (no inline
+colour) compute to `#ffffff` on the message's `#ffffff` and vanish
+from the dark captures, while the inline-coloured receipt heading
+stays legible (seen in the captures and their computed styles; the
+test does not assert it). This is what R-TXT-02 (inline `color` on
+every text element) guards against.
+
+**With styles allowed.** SnappyMail has a per-user "allow styles"
+setting (off by default, with no administrator default in 2.38.2);
+its source namespaces kept selectors as `#rl-msg-{hash} .mail-body …`
+and prefixes class names with `msg-`. Not captured here: the provider
+renders the default.
+
+**What this means for the transforms.** Roundcube confirms the
+prefix-and-scope model (gmailWeb step 5, outlookWeb), with one
+difference no transform models: scoping under a wrapper class that a
+message's body class can remove. SnappyMail behaves like ganga (no
+`<style>` at all) and additionally drops every class, so classes can
+never carry layout there either: consistent with R-CSS-01 (correct
+with every `<style>` removed). No transform step is changed by this
+evidence.
 
 ## Real-client evidence (once backend B lands)
 

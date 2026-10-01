@@ -66,6 +66,10 @@ import type {
   RunJson,
   StoryManifest,
 } from "./email-shots.ts";
+import { servedFamilies } from "./providers/harness.ts";
+import { registeredProviders } from "./providers/registry.ts";
+
+const SERVED_FAMILIES = servedFamilies(registeredProviders());
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -292,7 +296,9 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     const r4 = bareRun("run4");
     assert.equal(r4.status, 0, `fallback run failed:\n${r4.stderr}`);
     assert.doesNotMatch(r4.stderr, /empty request matrix/);
-    assert.deepEqual(families(r4.dir), [...BACKEND_A_FAMILIES].sort());
+    // Every family any registered provider serves: the backend-a
+    // families and the webmail verification clients.
+    assert.deepEqual(families(r4.dir), [...SERVED_FAMILIES].sort());
     const stories = new Set(
       readJson<Entry[]>(join(r4.dir, "index.json")).map((e) => e.story),
     );

@@ -45,20 +45,24 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer, type AddressInfo } from "node:net";
 import { userInfo } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { rewriteAssetOrigin } from "./mime_rewrite.ts";
+import {
+  type OwnerRecord,
+  processAlive,
+  sweepDeadOwners,
+  thisProcess,
+  writeOwner,
+} from "./owned_state.ts";
 import { currentHost, findExecutable } from "./requirements.ts";
 import type { LocalService, ServiceRunInfo } from "./services.ts";
 import type {
@@ -159,166 +163,22 @@ function runtimeDir(env: Record<string, string | undefined>): string {
   );
 }
 
-// --- Ownership and the sweep of dead runs' state. -------------------
+// --- Ownership and the sweep of dead runs' state (owned_state.ts). ---
 
-const OWNER_FILE = "owner.json";
-
-interface ProcessId {
-  pid: number;
-  // The process start time (Linux /proc/<pid>/stat field 22), so a
-  // reused pid is not mistaken for the owner; null where unknown.
-  start: string | null;
-}
-
-interface Owner {
-  owner: ProcessId;
-  run: string;
-  stateDir: string;
-  socketDir: string;
-  dovecot: ProcessId | null;
-}
-
-function processStart(pid: number): string | null {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "latin1");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function thisProcess(pid: number): ProcessId {
-  return { pid, start: processStart(pid) };
-}
-
-export function processAlive(p: ProcessId): boolean {
-  try {
-    process.kill(p.pid, 0);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EPERM") return false;
-  }
-  return p.start === null || processStart(p.pid) === p.start;
-}
-
-function readOwner(dir: string): Owner | null {
-  try {
-    const o = JSON.parse(readFileSync(join(dir, OWNER_FILE), "utf8")) as Owner;
-    return typeof o.owner?.pid === "number" ? o : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeOwner(o: Owner): void {
-  for (const dir of [o.stateDir, o.socketDir]) {
-    const tmp = join(dir, `.${OWNER_FILE}.tmp`);
-    writeFileSync(tmp, JSON.stringify(o) + "\n", { mode: 0o600 });
-    renameSync(tmp, join(dir, OWNER_FILE));
-  }
-}
-
-async function waitDead(p: ProcessId, ms: number): Promise<boolean> {
-  const t0 = Date.now();
-  while (processAlive(p)) {
-    if (Date.now() - t0 > ms) return false;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  return true;
-}
-
-// The real path of `p` when it is a directory (not a symlink) owned by
-// this user that, with symlinks and ".." resolved, sits directly inside
-// one of `roots` (also resolved); null otherwise.
-function directChildOf(p: string, roots: string[], uid: number): string | null {
-  let real: string;
-  try {
-    const st = lstatSync(p);
-    if (!st.isDirectory() || (uid !== -1 && st.uid !== uid)) return null;
-    real = realpathSync(p);
-  } catch {
-    return null;
-  }
-  for (const r of roots) {
-    let root: string;
-    try {
-      root = realpathSync(r);
-    } catch {
-      continue;
-    }
-    if (dirname(real) === root && real !== root) return real;
-  }
-  return null;
-}
+export { processAlive };
 
 // Removes the state of every run whose owning process is gone: kills
 // its Dovecot if that still runs, and removes its state and socket
 // directories. Returns the directories removed. Never touches an entry
-// whose owner is alive or that has no owner.json, nor a path the record
-// names that does not resolve to a directory directly inside the state
-// root (state) or a socket base with the socket prefix (sockets).
-export async function sweepDeadRuns(
+// whose owner is alive or that has no owner.json, nor a directory the
+// record names that is not a real directory directly inside the state
+// root (state) or a socket base with the socket prefix (sockets), or
+// whose own owner.json does not name the same dead owner and run.
+export function sweepDeadRuns(
   stateRoot: string,
   bases: string[],
 ): Promise<string[]> {
-  const uid = process.getuid?.() ?? -1;
-  const found: { dir: string; owner: Owner }[] = [];
-  const consider = (dir: string): void => {
-    try {
-      const st = lstatSync(dir);
-      if (!st.isDirectory() || (uid !== -1 && st.uid !== uid)) return;
-    } catch {
-      return;
-    }
-    const owner = readOwner(dir);
-    if (owner !== null && !processAlive(owner.owner))
-      found.push({ dir, owner });
-  };
-  const list = (d: string): string[] => {
-    try {
-      return readdirSync(d);
-    } catch {
-      return [];
-    }
-  };
-  for (const e of list(stateRoot)) consider(join(stateRoot, e));
-  for (const base of bases)
-    for (const e of list(base))
-      if (e.startsWith(SOCKET_PREFIX)) consider(join(base, e));
-  const stateDir = (p: unknown): string | null =>
-    typeof p === "string" ? directChildOf(p, [stateRoot], uid) : null;
-  const socketDir = (p: unknown): string | null => {
-    const real = typeof p === "string" ? directChildOf(p, bases, uid) : null;
-    return real !== null && basename(real).startsWith(SOCKET_PREFIX)
-      ? real
-      : null;
-  };
-  const removed: string[] = [];
-  for (const { dir, owner } of found) {
-    if (owner.dovecot !== null && processAlive(owner.dovecot)) {
-      try {
-        process.kill(owner.dovecot.pid, "SIGKILL");
-      } catch {
-        // gone in between
-      }
-      await waitDead(owner.dovecot, 5000);
-    }
-    // The record names both directories; it is not trusted: each path
-    // is removed only where it resolves to one of the two shapes this
-    // service creates.
-    const targets = new Set<string>();
-    for (const t of [
-      stateDir(dir) ?? socketDir(dir),
-      stateDir(owner.stateDir),
-      socketDir(owner.socketDir),
-    ])
-      if (t !== null) targets.add(t);
-    for (const t of targets)
-      if (existsSync(t)) {
-        rmSync(t, { recursive: true, force: true });
-        removed.push(t);
-      }
-  }
-  return removed;
+  return sweepDeadOwners(stateRoot, bases, SOCKET_PREFIX);
 }
 
 export interface DovecotServiceOptions {
@@ -406,7 +266,7 @@ export class DovecotService implements LocalService {
     mkdirSync(stateDir, { mode: 0o700 });
     this.stateDir = stateDir;
     this.socketDir = runtimeDir(this.env);
-    const owner: Owner = {
+    const owner: OwnerRecord = {
       owner: thisProcess(process.pid),
       run: info.run,
       stateDir,

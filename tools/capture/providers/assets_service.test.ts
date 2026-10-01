@@ -130,20 +130,27 @@ describe("assets service", () => {
       ),
       200,
     );
+    // The same path asked for directly.
+    assert.equal(
+      (await fetch(`${h.baseUrl}${hashedPath("logo.png").slice(1)}`)).status,
+      200,
+    );
     assert.deepEqual(
       h
         .requests()
         .slice(before)
-        .map((r) => [r.kind, r.status, r.url]),
+        .map((r) => [r.kind, r.status, r.url, r.via]),
       [
-        ["blocked", 403, "http://example.com/a.png"],
-        ["blocked", 403, "example.com:443"],
+        ["blocked", 403, "http://example.com/a.png", "proxy"],
+        ["blocked", 403, "example.com:443", "proxy"],
         [
           "blocked",
           403,
           `http://127.0.0.1:${port + 1}${hashedPath("logo.png")}`,
+          "proxy",
         ],
-        ["asset", 200, hashedPath("logo.png")],
+        ["asset", 200, hashedPath("logo.png"), "proxy"],
+        ["asset", 200, hashedPath("logo.png"), "direct"],
       ],
     );
   });

@@ -16,6 +16,7 @@ import stories/email_stories
 import stories/seed_receipt
 import stories/seed_alert
 import stories/seed_overflow
+import stories/seed_sanitiser_probe
 
 proc splitMatrix(s: string): seq[string] =
   for part in s.split(','):
@@ -44,6 +45,8 @@ proc main(): int =
     registerOverflowStories()
     registerStoryTree("overflowFixed", overflowFixedDoc)
     registerStoryTree("overflowFluid", overflowFluidDoc)
+    registerSanitiserProbeStory()
+    registerStoryTree("sanitiserProbe", sanitiserProbeDoc)
   let families =
     if args.len > 2: splitMatrix(args[2])
     else: briefFamilies.toSeq()

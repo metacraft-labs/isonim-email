@@ -157,6 +157,10 @@ export interface AssetRequest {
   // "asset": an asset path; "blocked": a proxied request for anything
   // else, refused.
   kind: "asset" | "blocked";
+  // "proxy": the request came through the egress guard (a proxied
+  // absolute-form request or a CONNECT); "direct": an ordinary request
+  // for a path of this service.
+  via: "proxy" | "direct";
 }
 
 // The running assets service (ctx.services.assets; narrow it with

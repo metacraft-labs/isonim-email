@@ -58,6 +58,7 @@ proc main(): int =
     # variable (set by tests/e2e_dom_assertions.nim), so bare runs,
     # CI matrices and the t7 story-set pins never see them.
     registerOverflowStories()
+    registerSanitiserProbeStory()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

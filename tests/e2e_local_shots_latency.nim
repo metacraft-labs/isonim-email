@@ -101,12 +101,14 @@ suite "e2e local shots latency":
 
     let outDir = getTempDir() / "isonim-e2e-shots-" & $getCurrentProcessId()
     removeDir(outDir)
-    # No --families: the CLI's default is the full backend-A set,
-    # checked against backendAFamilies below. --full bypasses the
+    # No --families: the CLI's default is every family, and
+    # `--backends a` keeps the local browser provider's, checked
+    # against backendAFamilies below (the webmail verification
+    # clients have their own latency test). --full bypasses the
     # changed-only selection so the whole matrix always runs.
     let t0 = epochTime()
     let (output, code) = execCmdEx(
-      "node tools/capture/email-shots.ts canary --full " &
+      "node tools/capture/email-shots.ts canary --full --backends a " &
       "--viewports mobile,desktop --schemes light,dark,forced-dark " &
       "--images on --no-cache --out " & outDir, workingDir = repoRoot)
     let wallMs = int((epochTime() - t0) * 1000)

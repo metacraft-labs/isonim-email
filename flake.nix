@@ -156,6 +156,14 @@
                 # the current user on loopback (dovecot -F, doveadm save),
                 # holding the one-message mailboxes real clients open.
                 dovecot
+                # The selfhosted-webmail capture provider: Roundcube and
+                # SnappyMail (located through the two variables below)
+                # on php-fpm behind caddy, run as the current user on
+                # loopback. nixpkgs' default php carries every extension
+                # both need (pdo_sqlite, mbstring, intl, dom, curl,
+                # sodium, zip).
+                php
+                caddy
                 # fc-list for inspecting the pinned font set below
                 # (also used by tests/e2e_local_capture_deterministic.nim).
                 fontconfig
@@ -169,16 +177,25 @@
                 typescript
               ]
               # `setpriv --pdeathsig` (util-linux) starts the imap
-              # service's Dovecot so that it dies with the capture run even
-              # when the run is killed with SIGKILL. Only that one binary
-              # is put on PATH, so util-linux's other tools do not shadow
-              # the host's.
+              # service's Dovecot and the webmail's caddy so that they die
+              # with the capture run even when the run is killed with
+              # SIGKILL; `unshare --pid --kill-child` gives php-fpm a PID
+              # namespace of its own, so its forked workers die with it
+              # too. Only these two binaries are put on PATH, so
+              # util-linux's other tools do not shadow the host's.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                (pkgs.runCommand "setpriv" { } ''
+                (pkgs.runCommand "setpriv-unshare" { } ''
                   mkdir -p $out/bin
                   ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
+                  ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
                 '')
               ];
+
+            # The webmail trees the selfhosted-webmail provider serves
+            # (read-only store paths; configs and data are generated per
+            # run under build/).
+            ISONIM_EMAIL_ROUNDCUBE = "${pkgs.roundcube}";
+            ISONIM_EMAIL_SNAPPYMAIL = "${pkgs.snappymail}";
 
             # tsc's declaration tree (see tsTypes); `just lint-ts`
             # links build/ts-types to it.

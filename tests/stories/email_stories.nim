@@ -9,6 +9,7 @@ import isonim_email
 import seed_receipt
 import seed_alert
 import seed_overflow
+import seed_sanitiser_probe
 
 const receiptText = "Receipt #1234\n\nThanks for your order.\n\n" &
   "Widget: $10.00\n"
@@ -53,3 +54,10 @@ proc registerOverflowStories*() =
   registerStory(Story(name: "overflowFluid", group: "overflow",
     description: "Tier-3 fixture: fluid twin (passes).",
     render: renderOverflowFluid))
+
+proc registerSanitiserProbeStory*() =
+  ## Registers the webmail sanitiser probe (env-gated, never in bare
+  ## runs — see seed_sanitiser_probe.nim).
+  registerStory(Story(name: "sanitiserProbe", group: "sanitiserProbe",
+    description: "Capture fixture: head CSS under a webmail sanitiser.",
+    render: renderSanitiserProbe))

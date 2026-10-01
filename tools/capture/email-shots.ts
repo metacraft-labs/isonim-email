@@ -35,7 +35,9 @@ import {
   changedFilesSince,
   type CommandRunner,
   darkNeeded,
-  familiesForChange,
+  emptyMatrixReason,
+  selectRunFamilies,
+  type ServedClient,
   workingTreeHash,
 } from "./affected.ts";
 import {
@@ -60,6 +62,7 @@ import {
   servedClients,
   servedFamilies,
 } from "./providers/harness.ts";
+import { BROWSER_FAMILIES } from "./providers/browser_emulation.ts";
 import { registeredProviders } from "./providers/registry.ts";
 import { installSignalTeardown } from "./providers/services.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./providers/types.ts";
@@ -81,6 +84,13 @@ const PROVIDERS = registeredProviders();
 const FAMILIES = servedFamilies(PROVIDERS);
 const CLIENTS = servedClients(PROVIDERS);
 const BACKENDS = servedBackends(PROVIDERS);
+const SERVED: ServedClient[] = PROVIDERS.flatMap((p) =>
+  p.clients().map((c) => ({
+    backend: p.backend,
+    clientId: c.clientId,
+    family: c.family,
+  })),
+);
 
 const SCHEMES = new Set(["light", "dark", "forced-dark"]);
 
@@ -112,16 +122,25 @@ MIME changed since the previous run, the families the changed modules
 declare, and dark added when a colour, token or image changed.
 
 options:
-  --backends a           the capture providers to route to, by backend label
-                        (default: every registered provider). Today one is
-                        registered: a, the local browser engines with the
-                        client emulations; b, c and d are refused naming
+  --backends L,…         the capture providers to route to, by backend label
+                        (default: every registered provider): a, the local
+                        browser engines with the client emulations, and
+                        selfhosted-webmail, Roundcube and SnappyMail on a
+                        local mail stack; b, c and d are refused naming
                         the later backends
   --families F,…         apple,thunderbird,chromium-baseline,gmailWeb,ganga,
-                        outlookWeb,imagesOff,wordApprox (default: all, or
-                        the affected ones on an --affected run)
+                        outlookWeb,imagesOff,wordApprox, and verification
+                        (the real verification clients: roundcube,
+                        snappymail) (default: all, or the affected ones on
+                        an --affected run)
   --clients C,…          filter by client id; backend A's clients are its
-                        engines: chromium,webkit,firefox
+                        engines: chromium,webkit,firefox; the webmail
+                        clients are roundcube,snappymail. On an --affected
+                        run a named client whose families the change did
+                        not select gets all of them (so --clients
+                        roundcube captures Roundcube after any change);
+                        an explicit --backends does the same for its
+                        clients
   --viewports V,…        mobile,desktop (default) or W / W@DPR, e.g. 600,600@2x
   --schemes S,…          light,dark,forced-dark (default: light, plus dark
                         on an --affected run whose change needs it;
@@ -153,8 +172,10 @@ A provider that is unavailable (a missing tool, an unsupported host) is
 named in the run summary with its reason; a request no available
 provider serves fails with that reason.
 Captures never use the network: requests other than the story fixture
-host and data: URIs are blocked and listed in the run summary and in
+host and data: URIs (for a webmail: its own loopback origin and the
+local assets service) are blocked and listed in the run summary and in
 each capture's provenance (network.blocked).
+Review briefs are written for the backend-a families only.
 `;
 
 function failUsage(message: string): never {
@@ -170,6 +191,7 @@ function fail(message: string): never {
 interface Options {
   stories: string[];
   backends: string[];
+  backendsExplicit: boolean;
   families: string[];
   familiesExplicit: boolean;
   clients: string[] | null;
@@ -213,6 +235,7 @@ function parseArgs(argv: string[]): Options {
   const opt: Options = {
     stories,
     backends: [...BACKENDS],
+    backendsExplicit: false,
     families: [...FAMILIES],
     familiesExplicit: false,
     clients: null,
@@ -275,6 +298,7 @@ function parseArgs(argv: string[]): Options {
     switch (arg) {
       case "--backends":
         opt.backends = splitList(value);
+        opt.backendsExplicit = true;
         break;
       case "--families":
         opt.families = splitList(value);
@@ -512,11 +536,18 @@ async function main(): Promise<void> {
   }
   // Every selected story's MIME changed, so the matrix is never empty:
   // no changed file in this repository (the change came from
-  // ../isonim or the Tailwind map) selects every family.
-  const families =
-    opt.familiesExplicit || fullSelection
-      ? opt.families
-      : familiesForChange(changed, opt.families);
+  // ../isonim or the Tailwind map) selects every family. An explicit
+  // --clients/--backends adds the families the change cannot select
+  // (the verification clients'), see selectRunFamilies.
+  const { families, source: familySource } = selectRunFamilies({
+    served: SERVED,
+    families: opt.families,
+    familiesExplicit: opt.familiesExplicit,
+    full: fullSelection,
+    changedFiles: changed,
+    clients: opt.clients,
+    backends: opt.backendsExplicit ? opt.backends : null,
+  });
   const schemes =
     opt.schemesExplicit || fullSelection
       ? opt.schemes
@@ -527,16 +558,22 @@ async function main(): Promise<void> {
   // Step 1b: review briefs for the selected
   // matrix — brief-<family>-<viewport>-<scheme>.md per story dir,
   // written before any capture so reviewers start with the briefs.
+  // Briefs describe what backend a's families are expected to show;
+  // the real clients of the other providers get none (yet).
   const viewportNames = opt.viewports.map((v) => v.name).join(",");
+  const briefFamilies = families.filter((f) =>
+    Object.hasOwn(BROWSER_FAMILIES, f),
+  );
   const tBriefs = Date.now();
   for (const m of manifest.stories) {
     if (storySet !== null && !storySet.has(m.story)) continue;
+    if (briefFamilies.length === 0) break;
     const briefed = spawnSync(
       opt.briefDriver,
       [
         m.story,
         join(runDir, m.story),
-        families.join(","),
+        briefFamilies.join(","),
         viewportNames,
         schemes.join(","),
       ],
@@ -604,7 +641,15 @@ async function main(): Promise<void> {
   const plan = routeRequests(PROVIDERS, availability, spec);
   if (plan.items.length === 0) {
     await services.stopAll();
-    fail("empty request matrix (a --clients filter removed every family?)");
+    fail(
+      emptyMatrixReason(
+        SERVED,
+        families,
+        familySource,
+        opt.backends,
+        opt.clients,
+      ),
+    );
   }
 
   // Steps 2+4: every provider runs at once, in-process; one JSON line

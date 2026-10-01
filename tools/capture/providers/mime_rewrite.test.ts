@@ -798,6 +798,27 @@ describe("asset origin rewrite: character references in attribute values", () =>
     );
   });
 
+  it("the post-check finds a resource URL left in any srcset candidate, not only the first", () => {
+    const msg = htmlMessage(
+      `<img src="https://x.test/a.png" srcset="https://x.test/a.png 1x, https://x.test/b.png 2x, https://x.test/c.png 3x">`,
+    );
+    // The rewrite itself handles all three candidates.
+    assert.equal(rewriteAssetOrigin(bytes(msg), FROM, TO).count, 4);
+    // The origin put back into the second, then the third candidate:
+    // the leftover check names the srcset (the equality check, which
+    // runs after it, would only say the part differs).
+    for (const name of ["b.png", "c.png"])
+      assert.throws(
+        () =>
+          rewriteAssetOrigin(bytes(msg), FROM, TO, {
+            beforeCheck: (b) =>
+              bytes(text(b).replace(`${TO}${name}`, `${FROM}${name}`)),
+          }),
+        /a resource URL on https:\/\/x\.test\/ is left in part 1 .*<img srcset>/,
+        name,
+      );
+  });
+
   it("the post-check decodes on its own: an encoded URL left in place, a CSS-escaped URL and an image-set() string all fail the rewrite", () => {
     const encoded = htmlMessage(
       `<img src="https:&#x2F;&#x2F;x.test/a.png"><p style="background:url(&quot;https://x.test/b.png&quot;)">x</p>`,

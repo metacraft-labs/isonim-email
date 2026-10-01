@@ -42,6 +42,7 @@ import {
   processAlive,
   sweepDeadRuns,
 } from "./imap_service.ts";
+import { directChildOf } from "./owned_state.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const providersDir = resolve(scriptDir);
@@ -494,6 +495,156 @@ describe(
         existsSync(join(base, "ie-imap-up")),
         "an unowned socket directory is kept",
       );
+    });
+
+    it("never removes a directory a dead record names unless that directory's own record names the same dead run", async () => {
+      const { state, base } = sweepScratch();
+      const dead = { pid: deadPid(), start: "1" };
+      const live = { pid: process.pid, start: procStat(process.pid)!.start };
+      // A live run's state directory, an ownerless socket directory,
+      // and the socket directory of another live run.
+      const liveDir = join(state, "run-live");
+      record(liveDir, {
+        owner: live,
+        run: "live",
+        stateDir: liveDir,
+        socketDir: join(base, "ie-imap-live"),
+        dovecot: null,
+      });
+      const unowned = join(base, "ie-imap-unowned");
+      mkdirSync(unowned);
+      const otherRun = join(base, "ie-imap-other");
+      record(otherRun, {
+        owner: { pid: process.pid, start: live.start },
+        run: "other",
+        stateDir: join(state, "run-other"),
+        socketDir: otherRun,
+        dovecot: null,
+      });
+      // Dead records naming them as their partners.
+      const d1 = join(state, "run-d1");
+      record(d1, {
+        owner: dead,
+        run: "d1",
+        stateDir: d1,
+        socketDir: unowned,
+        dovecot: null,
+      });
+      const d2 = join(base, "ie-imap-d2");
+      record(d2, {
+        owner: dead,
+        run: "d2",
+        stateDir: liveDir,
+        socketDir: d2,
+        dovecot: null,
+      });
+      const d3 = join(state, "run-d3");
+      record(d3, {
+        owner: dead,
+        run: "d3",
+        stateDir: d3,
+        socketDir: otherRun,
+        dovecot: null,
+      });
+      // The control: a partner whose own record names the same dead
+      // owner and run goes with it.
+      const d4 = join(state, "run-d4");
+      const d4s = join(base, "ie-imap-d4");
+      for (const dir of [d4, d4s])
+        record(dir, {
+          owner: dead,
+          run: "d4",
+          stateDir: d4,
+          socketDir: d4s,
+          dovecot: null,
+        });
+      const removed = await sweepDeadRuns(state, [base]);
+      assert.deepEqual([...removed].sort(), [d1, d2, d3, d4, d4s].sort());
+      assert.ok(
+        existsSync(join(liveDir, "owner.json")),
+        "the live run's directory is kept",
+      );
+      assert.ok(existsSync(unowned), "the ownerless directory is kept");
+      assert.ok(
+        existsSync(join(otherRun, "owner.json")),
+        "another live run's socket directory is kept",
+      );
+    });
+
+    it("a dead record whose owner pid was reused never takes the directory of the live run now holding that pid", async () => {
+      const { state, base } = sweepScratch();
+      const other = spawn("sleep", ["60"], { stdio: "ignore" });
+      spawned.push(other.pid!);
+      try {
+        await waitFor(() => procStat(other.pid!) !== null, 5000);
+        const real = procStat(other.pid!)!.start;
+        const holder = { pid: other.pid!, start: real };
+        const reused = { pid: other.pid!, start: String(Number(real) + 1) };
+        assert.equal(processAlive(holder), true);
+        assert.equal(processAlive(reused), false);
+        // The live run holding the pid now, with the same run name the
+        // dead record carries: only the start time tells them apart.
+        const liveSock = join(base, "ie-imap-holder");
+        const liveState = join(state, "run-holder");
+        for (const dir of [liveState, liveSock])
+          record(dir, {
+            owner: holder,
+            run: "r",
+            stateDir: liveState,
+            socketDir: liveSock,
+            dovecot: null,
+          });
+        // The dead run: its pid is alive again (as `holder`), with
+        // another start time, so it is dead; it names the live run's
+        // directories as its partners.
+        const deadState = join(state, "run-reused");
+        const deadSock = join(base, "ie-imap-reused");
+        record(deadState, {
+          owner: reused,
+          run: "r",
+          stateDir: deadState,
+          socketDir: liveSock,
+          dovecot: null,
+        });
+        record(deadSock, {
+          owner: reused,
+          run: "r",
+          stateDir: liveState,
+          socketDir: deadSock,
+          dovecot: null,
+        });
+        const removed = await sweepDeadRuns(state, [base]);
+        assert.deepEqual([...removed].sort(), [deadSock, deadState].sort());
+        assert.ok(
+          existsSync(join(liveState, "owner.json")),
+          "the live run's state directory is kept",
+        );
+        assert.ok(
+          existsSync(join(liveSock, "owner.json")),
+          "the live run's socket directory is kept",
+        );
+        assert.equal(other.exitCode, null);
+        assert.equal(procStat(other.pid!)?.start, real);
+      } finally {
+        other.kill("SIGKILL");
+      }
+    });
+
+    it("refuses a symlink even when its target is a direct child of the root", () => {
+      const { state, base } = sweepScratch();
+      const uid = process.getuid!();
+      const target = join(state, "real");
+      mkdirSync(target);
+      symlinkSync(target, join(state, "link"));
+      symlinkSync(join(base, "ie-imap-t"), join(base, "ie-imap-l"));
+      mkdirSync(join(base, "ie-imap-t"));
+      assert.equal(directChildOf(target, [state], uid), target);
+      assert.equal(directChildOf(join(state, "link"), [state], uid), null);
+      assert.equal(
+        directChildOf(join(base, "ie-imap-t"), [base], uid),
+        join(base, "ie-imap-t"),
+      );
+      assert.equal(directChildOf(join(base, "ie-imap-l"), [base], uid), null);
     });
   },
 );

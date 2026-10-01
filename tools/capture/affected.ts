@@ -161,6 +161,127 @@ export function familiesForChange(
   return selected.length > 0 ? selected : [...all];
 }
 
+// One client a registered capture provider serves, as far as family
+// selection needs to know it.
+export interface ServedClient {
+  backend: string;
+  clientId: string;
+  family: string;
+}
+
+export interface RunSelection {
+  // Every client the registered providers serve.
+  served: ServedClient[];
+  // The --families value, or every served family when it was not given.
+  families: string[];
+  familiesExplicit: boolean;
+  // --full, or no previous run to diff against (or the diff failed).
+  full: boolean;
+  // The files changed since the previous run (when not full).
+  changedFiles: string[];
+  // An explicit --clients / --backends, or null when not given.
+  clients: string[] | null;
+  backends: string[] | null;
+}
+
+// Where a run's families came from, for the messages that explain an
+// empty request matrix: "change+named" is the change's selection with
+// the families of an explicit --clients/--backends added to it.
+export type FamilySource = "--families" | "full" | "change" | "change+named";
+
+// The families a run captures.
+//
+// --families wins as given, and --full (or a run with nothing to diff
+// against) takes every served family. Otherwise the change decides: the
+// module declarations name audience families, which select backend A's
+// stand-ins only (familiesForChange), so a family no declaration can
+// name (the verification clients' `verification`) is not selected by a
+// change. An explicitly named client or backend is never selected away
+// by that: when the change selects none of the families an explicit
+// client serves, or none of those the clients of an explicit backend
+// serve, all of them are added. A bare run is therefore exactly the
+// change's selection, and `--clients roundcube` or `--backends
+// selfhosted-webmail` captures the verification clients after any
+// change. A named client whose families the change already selects
+// keeps the change's narrowing (`--clients chromium` after a Word-only
+// edit is wordApprox only).
+export function selectRunFamilies(
+  sel: RunSelection,
+  repoRoot: string = defaultRepoRoot,
+): { families: string[]; source: FamilySource } {
+  if (sel.familiesExplicit)
+    return { families: [...sel.families], source: "--families" };
+  if (sel.full) return { families: [...sel.families], source: "full" };
+  const chosen = new Set(
+    familiesForChange(sel.changedFiles, sel.families, repoRoot),
+  );
+  let added = false;
+  const ensure = (served: ServedClient[]): void => {
+    const fams = served
+      .map((c) => c.family)
+      .filter((f) => sel.families.includes(f));
+    if (!fams.some((f) => chosen.has(f)))
+      for (const f of fams) {
+        chosen.add(f);
+        added = true;
+      }
+  };
+  for (const id of sel.clients ?? [])
+    ensure(sel.served.filter((c) => c.clientId === id));
+  for (const b of sel.backends ?? [])
+    ensure(sel.served.filter((c) => c.backend === b));
+  return {
+    families: sel.families.filter((f) => chosen.has(f)),
+    source: added ? "change+named" : "change",
+  };
+}
+
+// Why no served client matches the selected families, backends and
+// clients together: the message for an empty request matrix.
+export function emptyMatrixReason(
+  served: ServedClient[],
+  families: string[],
+  source: FamilySource,
+  backends: string[],
+  clients: string[] | null,
+): string {
+  const fromWhere =
+    source === "--families"
+      ? "given by --families"
+      : source === "full"
+        ? "every served family"
+        : source === "change+named"
+          ? "selected by the change since the previous run, plus those of the named clients and backends"
+          : "selected by the change since the previous run";
+  const parts = [`families [${families.join(", ")}] (${fromWhere})`];
+  parts.push(`backends [${backends.join(", ")}]`);
+  if (clients !== null) parts.push(`clients [${clients.join(", ")}]`);
+  const why: string[] = [];
+  for (const id of clients ?? []) {
+    const mine = served.filter((c) => c.clientId === id);
+    const onBackend = mine.filter((c) => backends.includes(c.backend));
+    if (onBackend.length === 0)
+      why.push(
+        `client '${id}' is served by backend ${[...new Set(mine.map((c) => c.backend))].join(", ")}, which --backends leaves out`,
+      );
+    else if (!onBackend.some((c) => families.includes(c.family)))
+      why.push(
+        `client '${id}' serves ${[...new Set(onBackend.map((c) => c.family))].join(", ")}, none of the selected families`,
+      );
+  }
+  if (clients === null)
+    for (const b of backends) {
+      const fams = [
+        ...new Set(served.filter((c) => c.backend === b).map((c) => c.family)),
+      ];
+      if (!fams.some((f) => families.includes(f)))
+        why.push(
+          `backend '${b}' serves ${fams.join(", ")}, none of the selected families`,
+        );
+    }
+  return `empty request matrix: no served client matches ${parts.join(", ")}${why.length > 0 ? `: ${why.join("; ")}` : ""}`;
+}
+
 // Hash of the working tree INCLUDING uncommitted and untracked changes
 // (ignored files excluded): `git add -A` into a temporary index seeded
 // from HEAD, then `git write-tree`. The real index is never touched.
