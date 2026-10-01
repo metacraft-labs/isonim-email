@@ -235,6 +235,35 @@ proc profileWeight*(profile: AudienceProfile;
   for f in families:
     result += profile.weights[f]
 
+proc harmfulDisplayDiagnostic*(tag, keyword: string;
+                               profile: AudienceProfile;
+                               origin: SourceSpan;
+                               removed: bool): EmailDiagnostic =
+  ## R-OL-10's one severity rule, shared by lint and the inline style
+  ## pass (which removes the declaration on every element): an error on a
+  ## layout container while the profile gives Word-engine Outlook weight,
+  ## where flex/grid collapses the layout; otherwise the removal warning —
+  ## off a container nothing collapses, and with no Word-engine weight
+  ## nobody opens the mail where it would. `removed` picks the tense of
+  ## the warning ("was removed" from the pass, "will be" from lint).
+  let fams = {cfOutlookWord}
+  let w = profileWeight(profile, fams)
+  if isLayoutContainer(tag) and w > 0.0:
+    EmailDiagnostic(
+      severity: sevError, code: codeCssHarmful,
+      message: "display:" & keyword & " on <" & tag &
+        "> collapses in Word-engine Outlook; use mailColumns or " &
+        "mailStack instead",
+      origin: origin, families: fams, weight: w, rules: @["R-OL-10"])
+  else:
+    EmailDiagnostic(
+      severity: sevWarning, code: codeSupportUnsupported,
+      message: "display:" & keyword & " on <" & tag &
+        "> is not supported in email and " &
+        (if removed: "was removed" else: "will be removed") &
+        "; restructure to avoid it",
+      origin: origin, families: fams, weight: w, rules: @["R-OL-10"])
+
 proc formatPercent*(w: float): string =
   let rounded = round(w * 100.0, 1)
   let s = $rounded
@@ -591,27 +620,8 @@ proc lintStyles*(tag: string;
     # Harmful values apply to inline declarations only: Word ignores head
     # rules entirely, so a variant (head-bound) flex cannot collapse it.
     if variant.len == 0 and isHarmfulDeclaration(base, value):
-      let keyword = harmfulDisplayValue(value)
-      let harmfulFams = {cfOutlookWord}
-      let w = profileWeight(profile, harmfulFams)
-      if isLayoutContainer(tag):
-        result.add(EmailDiagnostic(
-          severity: sevError, code: codeCssHarmful,
-          message: "display:" & keyword & " on <" & tag &
-            "> collapses in Word-engine Outlook; use mailColumns or " &
-            "mailStack instead",
-          origin: origin, families: harmfulFams, weight: w,
-          rules: @["R-OL-10"],
-        ))
-      else:
-        result.add(EmailDiagnostic(
-          severity: sevWarning, code: codeSupportUnsupported,
-          message: "display:" & keyword & " on <" & tag &
-            "> is not supported in email and will be removed; " &
-            "restructure to avoid it",
-          origin: origin, families: harmfulFams, weight: w,
-          rules: @["R-OL-10"],
-        ))
+      result.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(value),
+        profile, origin, removed = false))
       continue
     let vs = valueSlug(base, value)
     if vs.len > 0:

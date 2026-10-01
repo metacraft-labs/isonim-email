@@ -216,7 +216,7 @@ describe("selection + cache wiring", () => {
   });
 
   it("mso-only change selects wordApprox; --families smoke", () => {
-    assert.deepEqual(selectFamilies(["src/isonim_email/mso/cond.nim"]), [
+    assert.deepEqual(selectFamilies(["src/isonim_email/mso/document.nim"]), [
       "wordApprox",
     ]);
     const out = runDir(3);

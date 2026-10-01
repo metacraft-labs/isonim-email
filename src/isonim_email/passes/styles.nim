@@ -12,9 +12,10 @@
 ## Pass discipline: children are never reordered (the walk only
 ## touches `styles`/`attrs`, never the `children` seq); unsupported
 ## properties are kept verbatim for P10, and only three things are ever
-## removed — harmful `display:flex`/`grid` (with `E-CSS-HARMFUL`, the same
-## code as lint's R-OL-10), `var()`/`--x` (with `E-VOCAB-BAD-VALUE`:
-## R-CSS-11's "never emitted" overrides never-drop, since a custom
+## removed — harmful `display:flex`/`grid` (with lint's R-OL-10
+## diagnostic: `E-CSS-HARMFUL` on a layout container while Word-engine
+## Outlook has weight, the removal warning otherwise), `var()`/`--x`
+## (with `E-VOCAB-BAD-VALUE`: R-CSS-11's "never emitted" overrides never-drop, since a custom
 ## property is unresolvable in email, not merely unsupported), and margins
 ## that moved to cell padding (with `W-LAYOUT-MARGIN-CONVERTED`). Every
 ## other failure keeps the raw declaration beside its error diagnostic.
@@ -444,7 +445,7 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
   @[(prop, val.strip())]
 
 proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
-                  head: var seq[HeadDecl];
+                  profile: AudienceProfile; head: var seq[HeadDecl];
                   diags: var seq[EmailDiagnostic]) =
   let tag = node.tag.toLowerAscii()
   var entries: seq[(string, string)] = @[]
@@ -512,22 +513,12 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       res[prop] = raw
       continue
     if isHarmfulDeclaration(prop, val):
-      # P5 is the remover lint warns about: the declaration goes, with an
-      # error, on every element — not just layout containers.
-      let keyword = harmfulDisplayValue(val)
-      let w = if isLayoutContainer(node.tag):
-        "display:" & keyword & " on <" & tag &
-          "> collapses in Word-engine Outlook; use mailColumns or " &
-          "mailStack instead"
-      else:
-        "display:" & keyword & " on <" & tag &
-          "> is not supported in email and was removed; restructure to " &
-          "avoid it"
-      diags.add(EmailDiagnostic(
-        severity: sevError, code: codeCssHarmful, message: w,
-        origin: node.origin, families: {cfOutlookWord}, weight: 0.0,
-        rules: @["R-OL-10"],
-      ))
+      # P5 is the remover lint warns about: the declaration goes on every
+      # element, with lint's R-OL-10 severity — an error on a layout
+      # container while the profile gives Word-engine Outlook weight, the
+      # removal warning otherwise.
+      diags.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(val),
+        profile, node.origin, removed = true))
       continue
     for (p, v) in normaliseDecl(node, tag, prop, val, fromToken, tkey,
         theme, target, fontSizePx, true, diags):
@@ -604,23 +595,26 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
   node.styles = res
 
 proc applyStylesImpl(node: EmailNode; theme: EmailTheme;
-                     target: EmailTarget; head: var seq[HeadDecl];
+                     target: EmailTarget; profile: AudienceProfile;
+                     head: var seq[HeadDecl];
                      diags: var seq[EmailDiagnostic]) =
   if node == nil:
     return
   if node.kind == enElement:
-    styleElement(node, theme, target, head, diags)
+    styleElement(node, theme, target, profile, head, diags)
   # Pre-order: parents resolve before children (margin conversion merges
   # into already-final cell padding), and the seq itself is never touched.
   for child in node.children:
-    applyStylesImpl(child, theme, target, head, diags)
+    applyStylesImpl(child, theme, target, profile, head, diags)
 
-proc applyStyles*(root: EmailNode; theme: EmailTheme; target: EmailTarget):
+proc applyStyles*(root: EmailNode; theme: EmailTheme; target: EmailTarget;
+                  profile = consumer):
     tuple[head: seq[HeadDecl]; diagnostics: seq[EmailDiagnostic]] =
   ## P5 over one tree: final inline styles plus the variant declarations
   ## split out for P6 and every diagnostic, in tree order. Pure (no IO)
-  ## and backend-independent.
+  ## and backend-independent. `profile` weighs only the harmful-display
+  ## removal (see `harmfulDisplayDiagnostic`).
   var head: seq[HeadDecl] = @[]
   var diags: seq[EmailDiagnostic] = @[]
-  applyStylesImpl(root, theme, target, head, diags)
+  applyStylesImpl(root, theme, target, profile, head, diags)
   (head, diags)

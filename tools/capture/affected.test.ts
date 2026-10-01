@@ -96,11 +96,13 @@ describe("the modules' own declarations", () => {
     }
   });
 
-  it("the narrow declarations: mso/ is Word-only, head CSS spares ganga, transports and briefs affect no capture", () => {
+  it("the narrow declarations: mso/document is Word-only, head CSS spares ganga, transports and briefs affect no capture", () => {
     const read = (m: string): string[] | null =>
       parseAffects(readFileSync(join(repoRoot, MODULE_ROOT, m), "utf8"));
-    for (const m of ["mso/cond.nim", "mso/document.nim"])
-      assert.deepEqual(read(m), ["outlookWord"], m);
+    assert.deepEqual(read("mso/document.nim"), ["outlookWord"]);
+    // mso/cond.nim also builds the [if !mso] wrapper, which every family
+    // but Word renders.
+    assert.deepEqual(read("mso/cond.nim"), CLIENT_FAMILIES);
     for (const m of ["passes/head.nim", "style/css.nim", "style/classes.nim"])
       assert.deepEqual(
         read(m),
@@ -114,6 +116,64 @@ describe("the modules' own declarations", () => {
       "review/brief.nim",
     ])
       assert.deepEqual(read(m), [], m);
+  });
+});
+
+// Code lines only: a module that merely mentions the wrapper in a
+// comment does not emit it.
+function codeOf(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("#"))
+    .join("\n");
+}
+
+// Builds or writes `<!--[if !mso]><!-->…` content: defines or calls the
+// IR constructor or the wrapper over it, or writes the literal opener.
+const EMITS_NOT_MSO = /\b(newNotMso|notMsoWrap)\*?\s*\(|"[^"\n]*\[if !mso\]/;
+
+describe("modules that emit [if !mso] content", () => {
+  it("declare every family but Word, whatever directory they live in", () => {
+    const mods = modules(join(repoRoot, MODULE_ROOT));
+    const emitters = mods.filter((m) =>
+      EMITS_NOT_MSO.test(codeOf(readFileSync(join(repoRoot, m), "utf8"))),
+    );
+    // The detector must see the known emitters, or it is blind: the IR
+    // constructor, the wrapper, the serialiser's literal, and the
+    // document lowering that calls the wrapper.
+    for (const m of [
+      "ir.nim",
+      "mso/cond.nim",
+      "serialize.nim",
+      "lower/document.nim",
+    ])
+      assert.ok(emitters.includes(`${MODULE_ROOT}${m}`), `${m} not detected`);
+    const nonWord = CLIENT_FAMILIES.filter((f) => f !== "outlookWord");
+    for (const m of emitters) {
+      const set = parseAffects(readFileSync(join(repoRoot, m), "utf8")) ?? [];
+      for (const f of nonWord)
+        assert.ok(
+          set.includes(f),
+          `${m} emits [if !mso] content, which ${f} renders, but its affects omits ${f}`,
+        );
+    }
+  });
+
+  it("the detector ignores comments and Word-only wrappers", () => {
+    assert.equal(
+      EMITS_NOT_MSO.test(codeOf("## calls `newNotMso(` in prose\n")),
+      false,
+    );
+    assert.equal(EMITS_NOT_MSO.test(codeOf('newMsoIf("mso", @c)\n')), false);
+    assert.equal(EMITS_NOT_MSO.test(codeOf("  notMsoWrap(b)\n")), true);
+    assert.equal(
+      EMITS_NOT_MSO.test(codeOf("proc newNotMso*(c: seq[EmailNode])\n")),
+      true,
+    );
+    assert.equal(
+      EMITS_NOT_MSO.test(codeOf('  sink.put("<!--[if !mso]><!-->")\n')),
+      true,
+    );
   });
 });
 
@@ -184,10 +244,14 @@ describe("selection reads the declaration, not the path", () => {
 });
 
 describe("selectFamilies", () => {
-  it("mso/ edit → wordApprox only", () => {
-    assert.deepEqual(selectFamilies(["src/isonim_email/mso/cond.nim"]), [
+  it("Word-only mso/ edit → wordApprox only", () => {
+    assert.deepEqual(selectFamilies(["src/isonim_email/mso/document.nim"]), [
       "wordApprox",
     ]);
+  });
+
+  it("mso/cond.nim edit → all 8 (its [if !mso] wrapper reaches every other family)", () => {
+    assert.deepEqual(selectFamilies(["src/isonim_email/mso/cond.nim"]), ALL8);
   });
 
   it("passes/head.nim edit → all except ganga", () => {
@@ -211,14 +275,14 @@ describe("selectFamilies", () => {
   it("unions across files and keeps BACKEND_A_FAMILIES order", () => {
     assert.deepEqual(
       selectFamilies([
-        "src/isonim_email/mso/cond.nim",
+        "src/isonim_email/mso/document.nim",
         "src/isonim_email/passes/head.nim",
       ]),
       NO_GANGA,
     );
     assert.deepEqual(
       selectFamilies([
-        "src/isonim_email/mso/cond.nim",
+        "src/isonim_email/mso/document.nim",
         "src/isonim_email/passes/styles.nim",
       ]),
       ALL8,
@@ -261,7 +325,7 @@ describe("familiesForChange", () => {
   const all = ["apple", "thunderbird", "wordApprox"];
   it("selects from the changed files when there are any", () => {
     assert.deepEqual(
-      familiesForChange(["src/isonim_email/mso/cond.nim"], all),
+      familiesForChange(["src/isonim_email/mso/document.nim"], all),
       ["wordApprox"],
     );
   });

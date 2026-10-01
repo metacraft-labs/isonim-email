@@ -11,7 +11,11 @@ import ../target
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
-const affects*: set[ClientFamily] = {cfOutlookWord}
+## Every family, not just Word: `msoWrap` content reaches only Word, but
+## `notMsoWrap` content (`<!--[if !mso]>`) reaches every family EXCEPT
+## Word — the document's non-mso head style blocks and meta tag go
+## through it — so an edit here can change what any family renders.
+const affects*: set[ClientFamily] = allFamilies
 
 export ir
 

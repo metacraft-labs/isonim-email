@@ -251,7 +251,7 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
   var diags = validate(doc)
-  let styled = applyStyles(doc, theme, target)
+  let styled = applyStyles(doc, theme, target, profile)
   diags.add(styled.diagnostics)
   let headRes = assembleHead(styled.head, target)
   diags.add(headRes.diagnostics)

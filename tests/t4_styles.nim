@@ -264,7 +264,7 @@ suite "attributes mirror CSS both ways":
     discard applyStyles(wrap, defaultTheme(), defaultTarget())
     check "width" notin wrap.attrs
 
-suite "harmful display is removed with an error":
+suite "harmful display is removed with its R-OL-10 severity":
   test "test_harmful_display_removed_with_error":
     # rule: R-OL-10
     let tree = renderAuthoringTree(flexDivTpl, 0)
@@ -279,15 +279,19 @@ suite "harmful display is removed with an error":
     check diags[0].rules == @["R-OL-10"]
     check "display:flex" in diags[0].message
     check hasErrors(diags)
-    # Grid, and non-containers too: P5 removes everywhere (lint only
-    # warns off-container, but the removal itself always errors).
+    # Non-containers too: P5 removes everywhere, but off a layout
+    # container nothing collapses, so the removal is a warning (catalogue
+    # R-OL-10, the same severity lint gives it).
     let grid = renderAuthoringTree(gridParaTpl, 0)
     let (_, gridDiags) = applyStyles(grid, defaultTheme(), defaultTarget())
     check "display" notin findTag(grid, "p").styles
     check gridDiags.len == 1
-    check gridDiags[0].severity == sevError
-    check gridDiags[0].code == codeCssHarmful
+    check gridDiags[0].severity == sevWarning
+    check gridDiags[0].code == codeSupportUnsupported
+    check gridDiags[0].rules == @["R-OL-10"]
     check "display:grid" in gridDiags[0].message
+    check "was removed" in gridDiags[0].message
+    check not hasErrors(gridDiags)
 
 suite "custom properties never reach output":
   test "test_no_var_anywhere":

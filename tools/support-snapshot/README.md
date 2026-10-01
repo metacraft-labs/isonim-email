@@ -11,7 +11,14 @@ Pins the caniemail client-support data and generates
   date, payload date and apiVersion, sha256, licence.
 - `LICENSE-caniemail` — the payload's MIT licence text.
 - `snapshot.nim` — the generator: pure `generateSupportModule` plus a
-  CLI. Reduction: latest test result per (feature, family/platform) key.
+  CLI. Reduction: the worst test result over the versions each
+  (feature, family/platform) key spans, with the note ids of the results
+  carrying that value. `spanRules` in the generator names every key's
+  span with a one-line rationale: the latest result for a webmail or
+  store app (it auto-updates), every result labelled with a version
+  still in use for an OS-bundled or installed client (Apple Mail on iOS
+  and macOS, Outlook for Windows and Mac, Thunderbird), falling back to
+  the latest result when none is. A key with no rule fails generation.
 
 Regenerate (verifies the sha256, then rewrites the table):
 
@@ -26,7 +33,10 @@ Re-running on the pinned inputs is a byte-identical no-op, asserted by
    (`git ls-remote https://github.com/hteumeuleu/caniemail.git HEAD`).
 2. Replace `caniemail-data.json`, update the pin (commit, dates,
    apiVersion, sha256).
-3. Run `just support-snapshot` and review the diff: it shows which
+3. Review `spanRules` (in-use floors move as versions leave use; its
+   `spanRulesAsOf` date says when they were last judged) and give any
+   new client key a rule.
+4. Run `just support-snapshot` and review the diff: it shows which
    support values changed. Lint behaviour and test expectations may need
    updating alongside.
 

@@ -71,7 +71,7 @@ const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
 const driver = join(repoRoot, "build", "capture", "build-stories");
 const briefDriver = join(repoRoot, "build", "review", "brief-driver");
-const edited = "src/isonim_email/mso/cond.nim";
+const edited = "src/isonim_email/mso/document.nim";
 
 let clone = "";
 
