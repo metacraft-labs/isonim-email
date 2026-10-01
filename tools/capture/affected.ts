@@ -62,8 +62,8 @@ const DECL_RE =
 // declaration the client would misread must fail loudly).
 export function parseAffects(source: string): string[] | null {
   const m = DECL_RE.exec(source);
-  if (m === null) return null;
-  const expr = m[1];
+  const expr = m?.[1];
+  if (expr === undefined) return null;
   const tokens = expr.match(/allFamilies|\{[^{}]*\}|[+-]|\S+/g) ?? [];
   const term = (tok: string | undefined): Set<string> => {
     if (tok === "allFamilies") return new Set(CLIENT_FAMILIES);
@@ -73,7 +73,8 @@ export function parseAffects(source: string): string[] | null {
         const name = raw.trim();
         if (name === "") continue;
         const id = /^cf([A-Z]\w*)$/.exec(name);
-        const fam = id === null ? "" : id[1][0].toLowerCase() + id[1].slice(1);
+        const cf = id?.[1] ?? "";
+        const fam = cf.charAt(0).toLowerCase() + cf.slice(1);
         if (!CLIENT_FAMILIES.includes(fam))
           throw new Error(`affects: unknown family '${name}' in '${expr}'`);
         out.add(fam);
@@ -186,9 +187,12 @@ export function workingTreeHash(repoDir: string): string {
 
 // Changed files between two recorded tree hashes (the previous run's
 // and this run's), non-empty trimmed lines. The command runner is
-// injected so tests can stub it.
+// injected so tests can stub it; the command is never empty, so the
+// runner may take its first element as the executable.
+export type CommandRunner = (cmd: [string, ...string[]]) => string;
+
 export function changedFilesSince(
-  run: (cmd: string[]) => string,
+  run: CommandRunner,
   prevTree: string,
   curTree: string,
 ): string[] {

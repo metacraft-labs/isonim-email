@@ -74,16 +74,19 @@ export function cachePaths(
   };
 }
 
-// Any error (missing files, corrupt JSON, …) → null. Never throws.
+// Any error (missing files, corrupt JSON, a capture.json that is not
+// a JSON object, …) → null. Never throws.
 export function readCache(
   cacheRoot: string,
   key: string,
-): { png: Buffer; meta: any } | null {
+): { png: Buffer; meta: Record<string, unknown> } | null {
   try {
     const paths = cachePaths(cacheRoot, key);
     const png = readFileSync(paths.png);
-    const meta = JSON.parse(readFileSync(paths.meta, "utf8"));
-    return { png, meta };
+    const meta: unknown = JSON.parse(readFileSync(paths.meta, "utf8"));
+    if (typeof meta !== "object" || meta === null || Array.isArray(meta))
+      return null;
+    return { png, meta: Object.fromEntries(Object.entries(meta)) };
   } catch {
     return null;
   }

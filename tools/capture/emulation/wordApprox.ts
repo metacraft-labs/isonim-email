@@ -194,8 +194,8 @@ function vmlAttr(tag: string, name: string): string | null {
     `\\b${name}\\s*=\\s*("[^"]*"|'[^']*'|[^\\s>]+)`,
     "i",
   ).exec(tag);
-  if (!m) return null;
-  const raw = m[1];
+  const raw = m?.[1];
+  if (raw === undefined) return null;
   return raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw;
 }
 
@@ -204,11 +204,11 @@ function vmlAttr(tag: string, name: string): string | null {
 // is unknown (no guess — the div keeps its auto size).
 function vmlPx(value: string | null): string | null {
   if (value === null) return null;
-  const m = /^\s*([\d.]+)\s*(px|pt)?\s*$/i.exec(value);
-  if (!m) return null;
-  if ((m[2] ?? "px").toLowerCase() === "pt")
-    return `${Math.round((parseFloat(m[1]) * 96) / 72)}px`;
-  return `${m[1]}px`;
+  const [, num, unit] = /^\s*([\d.]+)\s*(px|pt)?\s*$/i.exec(value) ?? [];
+  if (num === undefined) return null;
+  if ((unit ?? "px").toLowerCase() === "pt")
+    return `${Math.round((parseFloat(num) * 96) / 72)}px`;
+  return `${num}px`;
 }
 
 function vmlSize(attrs: string): {

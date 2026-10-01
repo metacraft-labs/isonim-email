@@ -32,9 +32,16 @@ export interface Transform {
   apply: (html: string, scheme: string) => string;
 }
 
+// A transform registry: family name → its transform. imagesOff is
+// always present (images=off layers it on every family).
+export interface TransformRegistry {
+  readonly [family: string]: Transform | undefined;
+  readonly imagesOff: Transform;
+}
+
 // The registry. Tests may pass their own (a bumped version, say) to
 // the functions below; the CLI always uses this one.
-export const TRANSFORMS: Record<string, Transform> = {
+export const TRANSFORMS = {
   gmailWeb: {
     name: "gmailWeb",
     version: GMAIL_WEB_TRANSFORM_VERSION,
@@ -60,17 +67,20 @@ export const TRANSFORMS: Record<string, Transform> = {
     version: WORD_APPROX_TRANSFORM_VERSION,
     apply: (html) => wordApprox(html),
   },
-};
+} satisfies TransformRegistry;
 
 // The transforms one capture applies, in order: the family's own (if
 // any), then imagesOff for images=off unless the family already is it.
 export function transformChain(
   family: string,
   images: string,
-  registry: Record<string, Transform> = TRANSFORMS,
+  registry: TransformRegistry = TRANSFORMS,
 ): Transform[] {
   const chain: Transform[] = [];
-  if (family in registry) chain.push(registry[family]);
+  // Own keys only: a family named like an Object.prototype member
+  // ("toString", "constructor") has no transform.
+  const own = Object.hasOwn(registry, family) ? registry[family] : undefined;
+  if (own !== undefined) chain.push(own);
   if (images === "off" && family !== "imagesOff")
     chain.push(registry.imagesOff);
   return chain;

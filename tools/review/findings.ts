@@ -8,6 +8,10 @@
 // carries a `reason` (wontfix needs a reason — enforced on append
 // and on parse),
 // `degradation` requires a non-empty `rules` (enforced both ways).
+// The entry format is closed: a reader returns exactly those fields
+// (plus a string `reason`), and a key outside the format is ignored on
+// read — not rejected, and never removed from the file, which this
+// tool only appends to.
 // `rateFinding` is the brief's mechanical rating rule (methodology:
 // anything missing means a rating ≤ 4).
 
@@ -59,6 +63,10 @@ function fail(message: string): never {
   throw new Error(`findings: ${message}`);
 }
 
+function isStatus(value: string): value is FindingStatus {
+  return STATUSES.has(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -74,44 +82,58 @@ export function parseFindingLine(line: string): Finding {
     fail(`not JSON: ${line.slice(0, 80)}`);
   }
   if (!isRecord(raw)) fail("entry is not an object");
-  const get = (key: string): unknown => (raw as Record<string, unknown>)[key];
-  for (const key of [
-    "id",
-    "story",
-    "family",
-    "backend",
-    "viewport",
-    "severity",
-    "finding",
-    "capture",
-    "status",
-  ]) {
-    const value = get(key);
+  const fields: Record<string, unknown> = raw;
+  const text = (key: string): string => {
+    const value = fields[key];
     if (typeof value !== "string" || value.length === 0)
       fail(`entry needs a non-empty string '${key}'`);
-  }
-  const rules = get("rules");
+    return value;
+  };
+  const id = text("id");
+  const story = text("story");
+  const family = text("family");
+  const backend = text("backend");
+  const viewport = text("viewport");
+  const severity = text("severity");
+  const finding = text("finding");
+  const capture = text("capture");
+  const status = text("status");
+  const rules: unknown = fields.rules;
   if (
     !Array.isArray(rules) ||
     !rules.every((r) => typeof r === "string" && r.length > 0)
   )
     fail("entry needs 'rules' as an array of non-empty strings");
-  const fixedInRun = get("fixed_in_run");
+  const ruleList = rules.filter((r): r is string => typeof r === "string");
+  const fixedInRun = fields.fixed_in_run;
   if (fixedInRun !== null && typeof fixedInRun !== "string")
     fail("entry needs 'fixed_in_run' as a string or null");
-  const status = get("status") as string;
-  if (!STATUSES.has(status))
+  if (!isStatus(status))
     fail(`bad status '${status}' (want open|fixed|wontfix|degradation)`);
-  if (!SEVERITIES.has(get("severity") as string))
-    fail(`bad severity '${String(get("severity"))}' (want P1–P4)`);
-  if (status === "wontfix") {
-    const reason = get("reason");
-    if (typeof reason !== "string" || reason.length === 0)
-      fail("a wontfix entry needs a non-empty 'reason'");
-  }
-  if (status === "degradation" && (rules as string[]).length === 0)
+  if (!SEVERITIES.has(severity))
+    fail(`bad severity '${severity}' (want P1–P4)`);
+  const reason = fields.reason;
+  if (
+    status === "wontfix" &&
+    (typeof reason !== "string" || reason.length === 0)
+  )
+    fail("a wontfix entry needs a non-empty 'reason'");
+  if (status === "degradation" && ruleList.length === 0)
     fail("a degradation entry needs at least one 'rules' entry");
-  const entry = raw as unknown as Finding;
+  const entry: Finding = {
+    id,
+    story,
+    family,
+    backend,
+    viewport,
+    severity,
+    finding,
+    capture,
+    rules: ruleList,
+    status,
+    fixed_in_run: fixedInRun,
+  };
+  if (typeof reason === "string") entry.reason = reason;
   return entry;
 }
 
@@ -152,8 +174,8 @@ function nextId(path: string): string {
   // a missing or empty file starts at F1.
   let max = 0;
   for (const f of readFindings(path)) {
-    const m = /^F(\d+)$/.exec(f.id);
-    if (m !== null) max = Math.max(max, parseInt(m[1], 10));
+    const k = /^F(\d+)$/.exec(f.id)?.[1];
+    if (k !== undefined) max = Math.max(max, parseInt(k, 10));
   }
   return `F${max + 1}`;
 }

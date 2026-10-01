@@ -215,12 +215,27 @@ export function tier2Check(runDir: string, baselinesDir: string): string[] {
   return failures;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// A capture's recorded assertions. Absent or null means none were
+// recorded (the run predates Tier-3 for it, or the capture failed
+// before the checks — email-shots writes null then) and yields [];
+// any other non-array value is not a list of results, and yields null
+// so the caller reports it instead of passing it as empty.
+function recordedAssertions(cap: Record<string, unknown>): unknown[] | null {
+  const value = cap.assertions;
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : null;
+}
+
 // Tier-3 (--assert only): every story's assertions.json (written
 // by email-shots for every story in the index, even when its
 // captures failed) must record no failed DOM assertion. pass:null
 // (axe, unpinned — see email-shots.ts) never fails. Returns one
-// message per failing assertion (empty = pass); throws when the run
-// holds no stories at all.
+// message per failing assertion or unreadable record (empty = pass);
+// throws when the run holds no stories at all.
 export function tier3Check(runDir: string): string[] {
   const index = readIndex(runDir);
   const stories = [...new Set(index.map((e) => e.story))].sort();
@@ -237,7 +252,7 @@ export function tier3Check(runDir: string): string[] {
       );
       continue;
     }
-    let file: { captures?: any[] };
+    let file: unknown;
     try {
       file = JSON.parse(readFileSync(path, "utf8"));
     } catch (err) {
@@ -246,11 +261,54 @@ export function tier3Check(runDir: string): string[] {
       );
       continue;
     }
-    for (const cap of file.captures ?? []) {
-      for (const a of cap?.assertions ?? []) {
-        if (a !== null && a !== undefined && a.pass === false)
+    if (!isRecord(file) || !Array.isArray(file.captures)) {
+      failures.push(
+        `capture-ci: Tier-3 ${story}/assertions.json has no captures array — nothing was recorded to check`,
+      );
+      continue;
+    }
+    // email-shots records one entry per capture of the story in the
+    // index, so a story in the index always has at least one: an
+    // empty list checked nothing and is not a pass.
+    if (file.captures.length === 0) {
+      failures.push(
+        `capture-ci: Tier-3 ${story}/assertions.json records no captures — nothing was recorded to check`,
+      );
+      continue;
+    }
+    for (const [i, cap] of (file.captures as unknown[]).entries()) {
+      // A captures entry that is not an object records nothing
+      // checkable: a named failure, never read as "none recorded".
+      if (!isRecord(cap)) {
+        failures.push(
+          `capture-ci: Tier-3 ${story}/assertions.json captures[${i}] is not a capture record — its results cannot be checked`,
+        );
+        continue;
+      }
+      const capture = String(cap.capture);
+      const assertions = recordedAssertions(cap);
+      if (assertions === null) {
+        failures.push(
+          `capture-ci: Tier-3 ${story}/assertions.json capture ${capture} has an assertions field that is not a list — its results cannot be checked`,
+        );
+        continue;
+      }
+      for (const [j, a] of assertions.entries()) {
+        // A result is an object whose pass is true, false or null
+        // (null: recorded as not run, e.g. axe); anything else is not
+        // a result, and is reported rather than skipped as a pass.
+        if (
+          !isRecord(a) ||
+          (a.pass !== true && a.pass !== false && a.pass !== null)
+        ) {
           failures.push(
-            `capture-ci: Tier-3 ${a.check} failed for ${story}/${cap.capture}: ${a.detail}`,
+            `capture-ci: Tier-3 ${story}/assertions.json capture ${capture} assertions[${j}] is not a result with a pass of true, false or null — it cannot be checked`,
+          );
+          continue;
+        }
+        if (a.pass === false)
+          failures.push(
+            `capture-ci: Tier-3 ${String(a.check)} failed for ${story}/${capture}: ${String(a.detail)}`,
           );
       }
     }
@@ -353,8 +411,9 @@ function main(): void {
   let requireApproved = false;
   let approve: string[] = [];
   let baselinesDir = join(repoRoot, "tests", "baselines");
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  // One iterator: a flag's value is the element after it.
+  const args = argv.values();
+  for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -372,14 +431,14 @@ function main(): void {
       continue;
     }
     if (arg === "--approve") {
-      const value = argv[++i];
+      const value = args.next().value;
       if (value === undefined)
         fail(`capture-ci: flag '--approve' needs a value\n${USAGE}`);
       approve = value.split(",").filter((v) => v.length > 0);
       continue;
     }
     if (arg === "--baselines") {
-      const value = argv[++i];
+      const value = args.next().value;
       if (value === undefined)
         fail(`capture-ci: flag '--baselines' needs a value\n${USAGE}`);
       baselinesDir = resolve(repoRoot, value);

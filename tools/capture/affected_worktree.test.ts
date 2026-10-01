@@ -57,8 +57,15 @@ import { dirname, join, resolve } from "node:path";
 import {
   BACKEND_A_FAMILIES,
   changedFilesSince,
+  type CommandRunner,
   workingTreeHash,
 } from "./affected.ts";
+import type {
+  Entry,
+  Provenance,
+  RunJson,
+  StoryManifest,
+} from "./email-shots.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -135,15 +142,16 @@ function bareRun(
   };
 }
 
-function readJson(path: string): any {
-  return JSON.parse(readFileSync(path, "utf8"));
+// The run files are the CLI's own output; T names the shape it writes.
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
 // The simulated MIME change (see the header): the canary's recorded
 // MIME in the previous run no longer matches.
 function forgetCanaryMime(runDir: string): void {
   const path = join(runDir, "manifest.json");
-  const manifest = readJson(path);
+  const manifest = readJson<StoryManifest>(path);
   let hit = 0;
   for (const s of manifest.stories)
     if (s.story === "canary") {
@@ -157,7 +165,7 @@ function forgetCanaryMime(runDir: string): void {
 function families(runDir: string): string[] {
   return [
     ...new Set(
-      readJson(join(runDir, "index.json")).map((e: any) => e.family as string),
+      readJson<Entry[]>(join(runDir, "index.json")).map((e) => e.family),
     ),
   ].sort();
 }
@@ -206,7 +214,7 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     const dirty = workingTreeHash(clone);
     assert.notEqual(dirty, clean);
     // The tree diff names exactly the edited file, both ways.
-    const run = (cmd: string[]): string =>
+    const run: CommandRunner = (cmd) =>
       execFileSync(cmd[0], cmd.slice(1), { cwd: clone, encoding: "utf8" });
     assert.deepEqual(changedFilesSince(run, clean, dirty), [edited]);
     assert.deepEqual(changedFilesSince(run, dirty, clean), [edited]);
@@ -248,7 +256,7 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     );
     assert.equal(seed.status, 0, `seed run failed:\n${seed.stderr}`);
     const run1 = join(clone, "build", "email-shots", "run1");
-    const cleanTree = readJson(join(run1, "run.json")).tree_hash;
+    const cleanTree = readJson<RunJson>(join(run1, "run.json")).tree_hash;
 
     // Edit: the tree differs, and the Word-only module selects Word.
     const original = readFileSync(join(clone, edited));
@@ -256,7 +264,7 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     forgetCanaryMime(run1);
     const r2 = bareRun("run2");
     assert.equal(r2.status, 0, `edit run failed:\n${r2.stderr}`);
-    const editedTree = readJson(join(r2.dir, "run.json")).tree_hash;
+    const editedTree = readJson<RunJson>(join(r2.dir, "run.json")).tree_hash;
     assert.notEqual(editedTree, cleanTree);
     assert.deepEqual(families(r2.dir), ["wordApprox"]);
 
@@ -268,9 +276,12 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     const r3 = bareRun("run3");
     assert.equal(r3.status, 0, `revert run failed:\n${r3.stderr}`);
     assert.doesNotMatch(r3.stderr, /empty request matrix/);
-    assert.equal(readJson(join(r3.dir, "run.json")).tree_hash, cleanTree);
+    assert.equal(
+      readJson<RunJson>(join(r3.dir, "run.json")).tree_hash,
+      cleanTree,
+    );
     assert.deepEqual(families(r3.dir), ["wordApprox"]);
-    for (const e of readJson(join(r3.dir, "index.json")))
+    for (const e of readJson<Entry[]>(join(r3.dir, "index.json")))
       assert.equal(e.status, "done", JSON.stringify(e));
   });
 
@@ -283,7 +294,7 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     assert.doesNotMatch(r4.stderr, /empty request matrix/);
     assert.deepEqual(families(r4.dir), [...BACKEND_A_FAMILIES].sort());
     const stories = new Set(
-      readJson(join(r4.dir, "index.json")).map((e: any) => e.story),
+      readJson<Entry[]>(join(r4.dir, "index.json")).map((e) => e.story),
     );
     assert.deepEqual([...stories], ["canary"]);
   });
@@ -362,9 +373,10 @@ describe("the result cache over a transform change (same scratch clone)", () => 
       },
     );
     assert.equal(r.status, 0, `${name} failed:\n${r.stderr}`);
-    const index = readJson(join(dir, "index.json"));
-    assert.equal(index.length, 1);
-    const meta = readJson(join(dir, index[0].meta));
+    const [entry, ...rest] = readJson<Entry[]>(join(dir, "index.json"));
+    assert.ok(entry !== undefined && rest.length === 0, "want one capture");
+    assert.ok(entry.meta !== null, "capture has no provenance");
+    const meta = readJson<Provenance>(join(dir, entry.meta));
     return `${meta.cache} ${meta.transform_version}`;
   }
 

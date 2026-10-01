@@ -23,7 +23,7 @@ import {
   TRANSFORMS,
   transformChain,
   transformVersion,
-  type Transform,
+  type TransformRegistry,
 } from "./transforms.ts";
 
 function parts(): CacheKeyParts {
@@ -81,11 +81,11 @@ describe("cacheKey", () => {
 describe("the transform version in the key", () => {
   // A registry identical to the real one except for one transform's
   // version: what a transform change looks like to the cache.
-  function bumped(name: string): Record<string, Transform> {
-    return {
-      ...TRANSFORMS,
-      [name]: { ...TRANSFORMS[name], version: TRANSFORMS[name].version + 1 },
-    };
+  function bumped(name: string): TransformRegistry {
+    const registry: TransformRegistry = TRANSFORMS;
+    const t = registry[name];
+    if (t === undefined) throw new Error(`no transform named ${name}`);
+    return { ...TRANSFORMS, [name]: { ...t, version: t.version + 1 } };
   }
 
   it("names the chain: family transform, then imagesOff for images=off", () => {
@@ -104,7 +104,7 @@ describe("the transform version in the key", () => {
 
   it("a bumped transform misses; an unchanged one hits", () => {
     const root = mkdtempSync(join(tmpdir(), "cache-test-"));
-    for (const [family, images, transform] of [
+    const cases: [family: string, images: string, transform: string][] = [
       ["gmailWeb", "on", "gmailWeb"],
       ["ganga", "on", "ganga"],
       ["outlookWeb", "on", "outlookWeb"],
@@ -113,8 +113,9 @@ describe("the transform version in the key", () => {
       // images=off layers imagesOff on any family, raw ones included.
       ["apple", "off", "imagesOff"],
       ["gmailWeb", "off", "imagesOff"],
-    ]) {
-      const key = (registry: Record<string, Transform> = TRANSFORMS): string =>
+    ];
+    for (const [family, images, transform] of cases) {
+      const key = (registry: TransformRegistry = TRANSFORMS): string =>
         cacheKey({
           ...parts(),
           family,
@@ -137,10 +138,21 @@ describe("the transform version in the key", () => {
   });
 
   it("a raw capture with images on does not depend on any transform version", () => {
-    const raw = (registry: Record<string, Transform>): string =>
+    const raw = (registry: TransformRegistry): string =>
       transformVersion(transformChain("apple", "on", registry));
     assert.equal(raw(bumped("gmailWeb")), raw(TRANSFORMS));
     assert.equal(raw(bumped("imagesOff")), raw(TRANSFORMS));
+  });
+
+  it("a family named like an Object.prototype member has no transform", () => {
+    for (const family of ["toString", "constructor", "hasOwnProperty"]) {
+      assert.deepEqual(transformChain(family, "on"), [], family);
+      assert.deepEqual(
+        transformChain(family, "off").map((t) => t.name),
+        ["imagesOff"],
+        family,
+      );
+    }
   });
 });
 
@@ -170,5 +182,17 @@ describe("readCache/writeCache", () => {
     writeFileSync(paths.png, Buffer.from([0x89, 0x50]));
     writeFileSync(paths.meta, "{ not valid json");
     assert.equal(readCache(root, key), null);
+  });
+
+  it("valid JSON that is not an object → null", () => {
+    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const key = cacheKey(parts());
+    const paths = cachePaths(root, key);
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.png, Buffer.from([0x89, 0x50]));
+    for (const body of ["null", "[]", "42", '"meta"']) {
+      writeFileSync(paths.meta, body);
+      assert.equal(readCache(root, key), null, body);
+    }
   });
 });

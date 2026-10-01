@@ -232,13 +232,20 @@ lint-nim:
       nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} $t 2>&1 | tee -a test-logs/lint-nim.log; \
     done
 
-# Syntax gate for the capture CLI: --help parses the whole file
-# (`node --check` cannot parse .ts type syntax on this Node), and
+# Type-check every tools/**/*.ts (tests included) with tsc under the
+# strict tsconfig.json at the repo root, then the runtime gate: --help
+# parses the whole capture CLI under Node's type stripping, and
 # importing each emulation module plus the contact-sheet,
 # dom-assertions, perceptual, capture-ci, latency, launch, fixture-host
 # and findings
 # modules parses those too (cache/affected ride along transitively).
+# The declarations tsc reads (@types/node, playwright-core's own) come
+# from the dev shell's ISONIM_EMAIL_TS_TYPES, a Nix-pinned tree linked
+# into build/ts-types (see flake.nix); nothing is installed from npm.
 lint-ts:
+    @if [ -z "${ISONIM_EMAIL_TS_TYPES:-}" ]; then echo "lint-ts: ISONIM_EMAIL_TS_TYPES is unset (run inside nix develop)" >&2; exit 1; fi
+    @mkdir -p build && ln -sfn "$ISONIM_EMAIL_TS_TYPES" build/ts-types
+    tsc -p tsconfig.json
     node tools/capture/email-shots.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"

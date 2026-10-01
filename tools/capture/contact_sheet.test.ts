@@ -51,9 +51,10 @@ function solidRgba(
   return { width: w, height: h, data };
 }
 
-function pixel(img: RgbImage, x: number, y: number): [number, number, number] {
+// [r, g, b]; shorter when (x, y) lies outside the image.
+function pixel(img: RgbImage, x: number, y: number): number[] {
   const d = (y * img.width + x) * 3;
-  return [img.data[d], img.data[d + 1], img.data[d + 2]];
+  return [...img.data.subarray(d, d + 3)];
 }
 
 // A hand-rolled PNG (zero CRCs — the reader skips them) for filter
@@ -130,6 +131,19 @@ describe("PNG codec", () => {
     const bad = Uint8Array.from(good);
     bad[28] = 1; // IHDR interlace byte
     assert.throws(() => readPng(bad));
+  });
+
+  it("rejects an IHDR whose length is not 13", () => {
+    // The PNG spec fixes IHDR at 13 data bytes. A 14-byte IHDR (the
+    // 13 good bytes plus one extra) is refused by name, not decoded.
+    const good = writePng(solidRgb(2, 2, [0, 0, 0]));
+    const ihdrEnd = 8 + 8 + 13; // signature, length+type, data
+    const bad = new Uint8Array(good.length + 1);
+    bad.set(good.subarray(0, ihdrEnd), 0);
+    bad[ihdrEnd] = 0; // the 14th IHDR byte
+    bad.set(good.subarray(ihdrEnd), ihdrEnd + 1);
+    new DataView(bad.buffer).setUint32(8, 14);
+    assert.throws(() => readPng(bad), /bad PNG \(IHDR length 14 \(want 13\)\)/);
   });
 });
 
@@ -229,6 +243,21 @@ describe("scale and compose", () => {
     assert.equal(tall.height, 1);
   });
 
+  it("keeps the bottom row the source colour when the last source box rounds past the image", () => {
+    // 1125x962 to 360 wide: 308 rows of 962/308 source rows each, and
+    // 308 * (962/308) is 962.0000000000001 in floating point — the last
+    // box reaches a hair past row 961. A uniform source must scale to
+    // that same colour everywhere, bottom row included (unclamped, the
+    // read past the image made the bottom row black).
+    const colour: [number, number, number] = [30, 120, 200];
+    const out = scaleToWidth(solidRgba(1125, 962, [...colour, 255]), 360);
+    assert.equal(out.width, 360);
+    assert.equal(out.height, 308);
+    for (const y of [0, out.height - 1])
+      for (let x = 0; x < out.width; x++)
+        assert.deepEqual(pixel(out, x, y), colour, `pixel (${x}, ${y})`);
+  });
+
   function cell(
     family: string,
     color: [number, number, number],
@@ -248,8 +277,8 @@ describe("scale and compose", () => {
       [cell("apple", [255, 0, 0], 100), cell("ganga", [0, 0, 255], 40)],
       360,
     );
-    assert.equal(pages.length, 1);
-    const page = pages[0];
+    const [page, ...more] = pages;
+    assert.ok(page !== undefined && more.length === 0, "want one page");
     assert.equal(page.width, 6 * (360 + 8) + 8);
     assert.equal(page.height, 8 + (16 + 100) + 8);
     // Bar is dark slate left of the text (text starts at x+4).
@@ -268,6 +297,7 @@ describe("scale and compose", () => {
       360,
     );
     const page = pages[0];
+    assert.ok(page !== undefined, "no page");
     // Approx top-left corner: ((0+0)>>2)%2==0 → amber.
     assert.deepEqual(pixel(page, 8, 8), [255, 180, 0]);
     const ax = 8 + (360 + 8);
@@ -354,8 +384,9 @@ describe("composeStorySheets", () => {
   it("composes one ordered sheet per group from a run dir", () => {
     const run = fakeRun();
     const written = composeStorySheets(run, "canary");
-    assert.deepEqual(written, [join("canary", "contact-mobile-light.png")]);
-    const sheet = readPng(readFileSync(join(run, written[0])));
+    const sheetRel = join("canary", "contact-mobile-light.png");
+    assert.deepEqual(written, [sheetRel]);
+    const sheet = readPng(readFileSync(join(run, sheetRel)));
     // 120x60 → 360x180 cells; one row of two.
     assert.equal(sheet.width, 6 * (360 + 8) + 8);
     assert.equal(sheet.height, 8 + (16 + 180) + 8);
@@ -365,20 +396,17 @@ describe("composeStorySheets", () => {
       height: sheet.height,
       data: new Uint8Array(sheet.width * sheet.height * 3),
     };
-    for (let i = 0; i < sheet.width * sheet.height; i++) {
-      flat.data[i * 3] = sheet.data[i * 4];
-      flat.data[i * 3 + 1] = sheet.data[i * 4 + 1];
-      flat.data[i * 3 + 2] = sheet.data[i * 4 + 2];
-    }
+    for (let i = 0; i < sheet.width * sheet.height; i++)
+      flat.data.set(sheet.data.subarray(i * 4, i * 4 + 3), i * 3);
     assert.deepEqual(pixel(flat, 8 + 180, 8 + 16 + 90), [0, 255, 0]);
     assert.deepEqual(
       pixel(flat, 8 + (360 + 8) + 180, 8 + 16 + 90),
       [255, 0, 0],
     );
     // Deterministic: a second compose overwrites byte-identically.
-    const before = readFileSync(join(run, written[0]));
+    const before = readFileSync(join(run, sheetRel));
     composeStorySheets(run, "canary");
-    assert.deepEqual(readFileSync(join(run, written[0])), before);
+    assert.deepEqual(readFileSync(join(run, sheetRel)), before);
   });
 
   it("fails loudly without an index.json", () => {

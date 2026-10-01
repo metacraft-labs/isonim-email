@@ -55,7 +55,11 @@ export function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const s = [...values].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  const hi = s[mid];
+  const lo = s[mid - 1];
+  // hi exists whenever s is non-empty; lo whenever the length is even.
+  if (hi === undefined) return null;
+  return s.length % 2 === 1 || lo === undefined ? hi : (lo + hi) / 2;
 }
 
 /** Runs are only comparable when they captured the same matrix the

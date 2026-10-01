@@ -27,8 +27,15 @@ export function diffPng(a: Buffer, b: Buffer): PngDiff {
     );
   const totalPixels = imgA.width * imgA.height;
   let diffPixels = 0;
+  // Equal dimensions, so readPng gave both the same width*height*4
+  // buffer and every index below is in range for both; a missing
+  // channel would be a codec bug, and it throws rather than compare.
   for (let i = 0; i < imgA.data.length; i++) {
-    if (Math.abs(imgA.data[i] - imgB.data[i]) > CHANNEL_TOLERANCE) {
+    const ca = imgA.data[i];
+    const cb = imgB.data[i];
+    if (ca === undefined || cb === undefined)
+      throw new Error(`perceptual: internal read at ${i} out of range`);
+    if (Math.abs(ca - cb) > CHANNEL_TOLERANCE) {
       diffPixels++;
       // Skip the pixel's remaining channels: one over-tolerance
       // channel already marks the whole pixel as different.

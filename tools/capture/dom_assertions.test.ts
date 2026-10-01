@@ -162,6 +162,13 @@ function byCheck(results: DomAssertion[]): Map<string, DomAssertion> {
   return new Map(results.map((r) => [r.check, r]));
 }
 
+// The one result for `check`, failing the test when it is missing.
+function resultOf(results: DomAssertion[], check: string): DomAssertion {
+  const r = byCheck(results).get(check);
+  assert.ok(r !== undefined, `no ${check} result`);
+  return r;
+}
+
 describe("Tier-3 DOM assertions snippet", () => {
   it("returns exactly the six Tier-3 checks, in order", () => {
     const { doc, innerWidth } = passingPage();
@@ -199,7 +206,7 @@ describe("Tier-3 DOM assertions snippet", () => {
       rect: { width: 700, height: 100, right: 700 },
     });
     doc.all.push(table);
-    const r = byCheck(run(doc, innerWidth)).get("overflow")!;
+    const r = resultOf(run(doc, innerWidth), "overflow");
     assert.equal(r.pass, false);
     assert.match(r.detail, /700/);
     assert.match(r.detail, /320/);
@@ -226,7 +233,7 @@ describe("Tier-3 DOM assertions snippet", () => {
     });
     doc.taps.push(small, hidden);
     doc.all.push(small, hidden);
-    const r = byCheck(run(doc, innerWidth)).get("touch")!;
+    const r = resultOf(run(doc, innerWidth), "touch");
     assert.equal(r.pass, false);
     assert.match(r.detail, /100x20/);
     assert.match(r.detail, /44px/);
@@ -235,7 +242,7 @@ describe("Tier-3 DOM assertions snippet", () => {
   it("12px body text fails bodyfont", () => {
     const { doc, innerWidth } = passingPage();
     doc.body.style.fontSize = "12px";
-    const r = byCheck(run(doc, innerWidth)).get("bodyfont")!;
+    const r = resultOf(run(doc, innerWidth), "bodyfont");
     assert.equal(r.pass, false);
     assert.match(r.detail, /12px/);
   });
@@ -252,7 +259,7 @@ describe("Tier-3 DOM assertions snippet", () => {
         },
       }),
     );
-    const r = byCheck(run(doc, innerWidth)).get("contrast")!;
+    const r = resultOf(run(doc, innerWidth), "contrast");
     assert.equal(r.pass, false);
     assert.match(r.detail, /4\.48:1/);
   });
@@ -279,7 +286,7 @@ describe("Tier-3 DOM assertions snippet", () => {
       texts: [body, h1],
       links: [],
     });
-    const r = byCheck(run(doc, 320)).get("contrast")!;
+    const r = resultOf(run(doc, 320), "contrast");
     assert.equal(r.pass, true);
     assert.match(r.detail, /21:1/);
   });
@@ -290,7 +297,7 @@ describe("Tier-3 DOM assertions snippet", () => {
     doc.links.length = 0;
     doc.taps.length = 0;
     for (let i = doc.texts.length - 1; i >= 0; i--)
-      if (doc.texts[i].tagName === "A") doc.texts.splice(i, 1);
+      if (doc.texts[i]?.tagName === "A") doc.texts.splice(i, 1);
     // A display:none unsubscribe link is not a visible one.
     doc.links.push(
       mkEl("a", {
@@ -300,7 +307,7 @@ describe("Tier-3 DOM assertions snippet", () => {
         href: "https://x.test/unsub",
       }),
     );
-    const r = byCheck(run(doc, innerWidth)).get("unsubscribe")!;
+    const r = resultOf(run(doc, innerWidth), "unsubscribe");
     assert.equal(r.pass, false);
     assert.match(r.detail, /0 visible link/);
   });
@@ -308,16 +315,17 @@ describe("Tier-3 DOM assertions snippet", () => {
   it("unsubscribe matches href or text, case-insensitively", () => {
     const { doc, innerWidth } = passingPage();
     const link = doc.links[0];
+    assert.ok(link !== undefined, "the passing page has an unsubscribe link");
     link.href = "https://x.test/preferences";
     link.textContent = "Click here to UNSUBSCRIBE";
-    const r = byCheck(run(doc, innerWidth)).get("unsubscribe")!;
+    const r = resultOf(run(doc, innerWidth), "unsubscribe");
     assert.equal(r.pass, true);
   });
 
   it("a '[Message clipped]' marker fails clipped", () => {
     const { doc, innerWidth } = passingPage();
     doc.body.innerText += " [Message clipped] View entire message";
-    const r = byCheck(run(doc, innerWidth)).get("clipped")!;
+    const r = resultOf(run(doc, innerWidth), "clipped");
     assert.equal(r.pass, false);
     assert.match(r.detail, /Message clipped/);
   });

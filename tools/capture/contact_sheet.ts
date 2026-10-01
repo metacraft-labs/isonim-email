@@ -40,8 +40,31 @@ export interface RgbImage {
 
 const PNG_SIG = [137, 80, 78, 71, 13, 10, 26, 10];
 
+// Checked element read. Every read in this codec and in the raster
+// code below is in range by construction: the chunk-length, IHDR-length
+// and row-length checks bound the decoder, the CRC table has 256
+// entries, every glyph has 7 rows, and scaleToWidth clamps its source
+// coordinates to the image. An out-of-range index is therefore a bug
+// in this file, and it throws instead of reading as some value (an
+// unchecked read would give undefined, which arithmetic turns into
+// NaN and a Uint8Array store into 0 — a silently black pixel).
+function at<T>(arr: ArrayLike<T>, i: number): T {
+  const v = arr[i];
+  if (v === undefined)
+    throw new RangeError(
+      `contact-sheet: internal read at ${i} outside [0, ${arr.length})`,
+    );
+  return v;
+}
+
 function readU32BE(b: Uint8Array, o: number): number {
-  return (b[o] * 2 ** 24 + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3]) >>> 0;
+  return (
+    (at(b, o) * 2 ** 24 +
+      (at(b, o + 1) << 16) +
+      (at(b, o + 2) << 8) +
+      at(b, o + 3)) >>>
+    0
+  );
 }
 
 function paeth(a: number, b: number, c: number): number {
@@ -68,21 +91,18 @@ export function readPng(buf: Uint8Array): RgbaImage {
   let seenIhdr = false;
   while (pos + 8 <= buf.length) {
     const len = readU32BE(buf, pos);
-    const type =
-      String.fromCharCode(buf[pos + 4]) +
-      String.fromCharCode(buf[pos + 5]) +
-      String.fromCharCode(buf[pos + 6]) +
-      String.fromCharCode(buf[pos + 7]);
+    const type = String.fromCharCode(...buf.subarray(pos + 4, pos + 8));
     const data = buf.subarray(pos + 8, pos + 8 + len);
     if (data.length < len || pos + 8 + len + 4 > buf.length)
       failPng(`truncated ${type} chunk`);
     if (type === "IHDR") {
       if (seenIhdr || pos !== 8) failPng("IHDR must be the first chunk");
+      if (len !== 13) failPng(`IHDR length ${len} (want 13)`);
       seenIhdr = true;
       width = readU32BE(data, 0);
       height = readU32BE(data, 4);
       if (data[8] !== 8) failPng(`bit depth ${data[8]} (want 8)`);
-      colorType = data[9];
+      colorType = at(data, 9);
       if (colorType !== 0 && colorType !== 2 && colorType !== 6)
         failPng(`colour type ${colorType} (want 0, 2 or 6)`);
       if (data[10] !== 0 || data[11] !== 0)
@@ -124,13 +144,13 @@ export function readPng(buf: Uint8Array): RgbaImage {
   const cur = new Uint8Array(stride);
   let p = 0;
   for (let y = 0; y < height; y++) {
-    const filter = raw[p++];
+    const filter = at(raw, p++);
     if (filter > 4) failPng(`row ${y} has filter ${filter}`);
     for (let i = 0; i < stride; i++) {
-      const v = raw[p++];
-      const a = i >= channels ? cur[i - channels] : 0;
-      const b = prev[i];
-      const c = i >= channels ? prev[i - channels] : 0;
+      const v = at(raw, p++);
+      const a = i >= channels ? at(cur, i - channels) : 0;
+      const b = at(prev, i);
+      const c = i >= channels ? at(prev, i - channels) : 0;
       cur[i] =
         filter === 0
           ? v
@@ -145,19 +165,15 @@ export function readPng(buf: Uint8Array): RgbaImage {
     for (let x = 0; x < width; x++) {
       const d = (y * width + x) * 4;
       if (channels === 4) {
-        out[d] = cur[x * 4];
-        out[d + 1] = cur[x * 4 + 1];
-        out[d + 2] = cur[x * 4 + 2];
-        out[d + 3] = cur[x * 4 + 3];
+        out.set(cur.subarray(x * 4, x * 4 + 4), d);
       } else if (channels === 3) {
-        out[d] = cur[x * 3];
-        out[d + 1] = cur[x * 3 + 1];
-        out[d + 2] = cur[x * 3 + 2];
+        out.set(cur.subarray(x * 3, x * 3 + 3), d);
         out[d + 3] = 255;
       } else {
-        out[d] = cur[x];
-        out[d + 1] = cur[x];
-        out[d + 2] = cur[x];
+        const gray = at(cur, x);
+        out[d] = gray;
+        out[d + 1] = gray;
+        out[d + 2] = gray;
         out[d + 3] = 255;
       }
     }
@@ -179,7 +195,7 @@ const CRC_TABLE: Uint32Array = (() => {
 function crc32(b: Uint8Array): number {
   let c = 0xffffffff;
   for (let i = 0; i < b.length; i++)
-    c = CRC_TABLE[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+    c = at(CRC_TABLE, (c ^ at(b, i)) & 0xff) ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
 
@@ -371,7 +387,7 @@ export function renderFontProof(): string {
     for (let r = 0; r < 7; r++) {
       let row = "";
       for (let g = start; g < Math.min(start + 16, FONT.length); g++) {
-        const bits = FONT[g][r];
+        const bits = at(at(FONT, g), r);
         for (let c = 4; c >= 0; c--) row += bits & (1 << c) ? "#" : "·";
         row += " ";
       }
@@ -450,6 +466,13 @@ export function columnsForWidth(cellW: number): number {
 // Box-filter (area-average) scale to `dstW`, aspect-preserving, with
 // alpha flattened onto white (the sheet is a review surface, and the
 // email canvas is white).
+//
+// The source box of the last row/column is clamped to the image:
+// (dstH * sy) can round to a hair above src.height (1125x962 scaled to
+// 360 wide gives 962.0000000000001), which without the clamp reads a
+// nonexistent row past the bottom, turns the sum into NaN and paints
+// the whole bottom output row black. Clamped, every source pixel read
+// lies in [0, width-1] x [0, height-1].
 export function scaleToWidth(src: RgbaImage, dstW: number): RgbImage {
   const dstH = Math.max(1, Math.round((src.height * dstW) / src.width));
   const out = new Uint8Array(dstW * dstH * 3);
@@ -457,10 +480,10 @@ export function scaleToWidth(src: RgbaImage, dstW: number): RgbImage {
   const sy = src.height / dstH;
   for (let dy = 0; dy < dstH; dy++) {
     const y0 = dy * sy;
-    const y1 = (dy + 1) * sy;
+    const y1 = Math.min((dy + 1) * sy, src.height);
     for (let dx = 0; dx < dstW; dx++) {
       const x0 = dx * sx;
-      const x1 = (dx + 1) * sx;
+      const x1 = Math.min((dx + 1) * sx, src.width);
       let r = 0;
       let g = 0;
       let b = 0;
@@ -473,10 +496,10 @@ export function scaleToWidth(src: RgbaImage, dstW: number): RgbImage {
           if (wx <= 0) continue;
           const w = wx * wy;
           const s = (py * src.width + px) * 4;
-          const a = src.data[s + 3] / 255;
-          r += w * (src.data[s] * a + 255 * (1 - a));
-          g += w * (src.data[s + 1] * a + 255 * (1 - a));
-          b += w * (src.data[s + 2] * a + 255 * (1 - a));
+          const a = at(src.data, s + 3) / 255;
+          r += w * (at(src.data, s) * a + 255 * (1 - a));
+          g += w * (at(src.data, s + 1) * a + 255 * (1 - a));
+          b += w * (at(src.data, s + 2) * a + 255 * (1 - a));
           area += w;
         }
       }
@@ -531,11 +554,11 @@ function drawText(
   atY: number,
   c: [number, number, number],
 ): void {
-  for (let i = 0; i < text.length; i++) {
-    const glyph = FONT[fontIndex(text[i])];
-    for (let r = 0; r < 7; r++) {
+  for (const [i, ch] of text.split("").entries()) {
+    const glyph = at(FONT, fontIndex(ch));
+    for (const [r, bits] of glyph.entries()) {
       for (let col = 0; col < 5; col++) {
-        if (glyph[r] & (1 << (4 - col))) {
+        if (bits & (1 << (4 - col))) {
           const d = ((atY + r) * canvasW + atX + i * 6 + col) * 3;
           canvas[d] = c[0];
           canvas[d + 1] = c[1];
@@ -582,18 +605,17 @@ export function paginateCells(
   const rows: SheetCell[][] = [];
   for (let i = 0; i < cells.length; i += columns)
     rows.push(cells.slice(i, i + columns));
-  const pages: SheetCell[][][] = [[]];
+  let page: SheetCell[][] = [];
+  const pages: SheetCell[][][] = [page];
   let used = GUTTER;
   for (const row of rows) {
     const rowH = Math.max(...row.map((c) => BAR_H + c.img.height));
-    if (
-      pages[pages.length - 1].length > 0 &&
-      used + rowH + GUTTER > MAX_PAGE_H
-    ) {
-      pages.push([]);
+    if (page.length > 0 && used + rowH + GUTTER > MAX_PAGE_H) {
+      page = [];
+      pages.push(page);
       used = GUTTER;
     }
-    pages[pages.length - 1].push(row);
+    page.push(row);
     used += rowH + GUTTER;
   }
   return pages;
@@ -602,16 +624,17 @@ export function paginateCells(
 export function renderPage(rows: SheetCell[][], cellW: number): RgbImage {
   const columns = columnsForWidth(cellW);
   const width = columns * (cellW + GUTTER) + GUTTER;
-  const rowHs = rows.map((row) =>
-    Math.max(...row.map((c) => BAR_H + c.img.height)),
-  );
-  const height = GUTTER + rowHs.reduce((sum, h) => sum + h + GUTTER, 0);
+  const laidOut = rows.map((row) => ({
+    row,
+    rowH: Math.max(...row.map((c) => BAR_H + c.img.height)),
+  }));
+  const height = GUTTER + laidOut.reduce((sum, r) => sum + r.rowH + GUTTER, 0);
   const canvas = new Uint8Array(width * height * 3);
   fillRect(canvas, width, 0, 0, width, height, BG);
   let y = GUTTER;
-  for (let r = 0; r < rows.length; r++) {
+  for (const { row, rowH } of laidOut) {
     let x = GUTTER;
-    for (const cell of rows[r]) {
+    for (const cell of row) {
       fillRect(canvas, width, x, y, cellW, BAR_H, BAR);
       drawText(canvas, width, fitLabel(cell.label, cellW), x + 4, y + 4, INK);
       blit(canvas, width, cell.img, x, y + BAR_H);
@@ -673,7 +696,7 @@ export function renderPage(rows: SheetCell[][], cellW: number): RgbImage {
       }
       x += cellW + GUTTER;
     }
-    y += rowHs[r] + GUTTER;
+    y += rowH + GUTTER;
   }
   return { width, height, data: canvas };
 }
@@ -698,6 +721,15 @@ interface IndexEntry {
   status: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// A done index entry: it has a PNG.
+interface CapturedEntry extends IndexEntry {
+  png: string;
+}
+
 function readMeta(
   runDir: string,
   metaRel: string,
@@ -706,18 +738,19 @@ function readMeta(
   backend: string;
   approx: boolean;
 } {
-  let meta: any;
+  let parsed: unknown;
   try {
-    meta = JSON.parse(readFileSync(join(runDir, metaRel), "utf8"));
+    parsed = JSON.parse(readFileSync(join(runDir, metaRel), "utf8"));
   } catch (err) {
     throw new Error(
       `contact-sheet: cannot read provenance ${metaRel} (${String(err)})`,
     );
   }
-  const build =
-    typeof meta?.client?.build === "string" ? meta.client.build : "";
-  const backend = typeof meta?.backend === "string" ? meta.backend : "?";
-  return { build, backend, approx: meta?.approximation === true };
+  const meta = isRecord(parsed) ? parsed : {};
+  const client = isRecord(meta.client) ? meta.client : {};
+  const build = typeof client.build === "string" ? client.build : "";
+  const backend = typeof meta.backend === "string" ? meta.backend : "?";
+  return { build, backend, approx: meta.approximation === true };
 }
 
 export function sheetFileName(
@@ -739,40 +772,54 @@ export function sheetFileName(
 export function composeStorySheets(runDir: string, story: string): string[] {
   let index: IndexEntry[];
   try {
-    index = JSON.parse(readFileSync(join(runDir, "index.json"), "utf8"));
+    index = JSON.parse(
+      readFileSync(join(runDir, "index.json"), "utf8"),
+    ) as IndexEntry[];
   } catch (err) {
     throw new Error(
       `contact-sheet: cannot read ${join(runDir, "index.json")} (${String(err)})`,
     );
   }
-  const groups = new Map<string, IndexEntry[]>();
+  const groups = new Map<
+    string,
+    { viewport: string; scheme: string; entries: CapturedEntry[] }
+  >();
   for (const e of index) {
-    if (e.story !== story || e.status !== "done" || e.png === null) continue;
+    const png = e.png;
+    if (e.story !== story || e.status !== "done" || png === null) continue;
     const key = e.viewport + "\n" + e.scheme;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(e);
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = { viewport: e.viewport, scheme: e.scheme, entries: [] };
+      groups.set(key, group);
+    }
+    group.entries.push({ ...e, png });
   }
   const written: string[] = [];
   const storyDir = join(runDir, story);
-  for (const [, entries] of [...groups.entries()].sort()) {
-    const viewport = entries[0].viewport;
-    const scheme = entries[0].scheme;
-    const byFamily = new Map<string, IndexEntry[]>();
+  const byKey = (a: [string, unknown], b: [string, unknown]): number =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  for (const [, { viewport, scheme, entries }] of [...groups.entries()].sort(
+    byKey,
+  )) {
+    const byFamily = new Map<string, CapturedEntry[]>();
     for (const e of entries) {
-      if (!byFamily.has(e.family)) byFamily.set(e.family, []);
-      byFamily.get(e.family)!.push(e);
+      const cands = byFamily.get(e.family);
+      if (cands === undefined) byFamily.set(e.family, [e]);
+      else cands.push(e);
     }
     // One capture per family: images=on wins, then the first path
     // (deterministic — the same run always picks the same PNG).
-    const picked = [...byFamily.entries()].map(([family, cands]) => {
-      cands.sort((a, b) => {
-        const ai = a.images === "on" ? 0 : 1;
-        const bi = b.images === "on" ? 0 : 1;
-        if (ai !== bi) return ai - bi;
-        return a.png! < b.png! ? -1 : a.png! > b.png! ? 1 : 0;
-      });
-      return { family, entry: cands[0] };
-    });
+    const before = (a: CapturedEntry, b: CapturedEntry): boolean => {
+      const ai = a.images === "on" ? 0 : 1;
+      const bi = b.images === "on" ? 0 : 1;
+      return ai !== bi ? ai < bi : a.png < b.png;
+    };
+    const picked = [...byFamily.entries()].map(([family, cands]) => ({
+      family,
+      // Every family list holds at least the entry that created it.
+      entry: cands.reduce((best, e) => (before(e, best) ? e : best)),
+    }));
     const order = orderFamilies(picked.map((p) => p.family));
     picked.sort((a, b) => order.indexOf(a.family) - order.indexOf(b.family));
     const cellW = cellWidthForViewport(viewport);
@@ -782,7 +829,7 @@ export function composeStorySheets(runDir: string, story: string): string[] {
           `contact-sheet: ${entry.png} has no provenance (contact sheets label from meta)`,
         );
       const meta = readMeta(runDir, entry.meta);
-      const src = readPng(readFileSync(join(runDir, entry.png!)));
+      const src = readPng(readFileSync(join(runDir, entry.png)));
       return {
         family,
         label: labelForCell(family, meta.build, meta.backend, meta.approx),

@@ -1,0 +1,39 @@
+{
+  // Type-check only (`just lint-ts` runs `tsc -p tsconfig.json`). The
+  // tools run straight from source under Node 22's type stripping, so
+  // nothing is emitted and only erasable syntax is allowed.
+  //
+  // Declarations are not installed from npm: build/ts-types is a link
+  // (made by `just lint-ts`) to the dev shell's $ISONIM_EMAIL_TS_TYPES,
+  // a Nix-pinned tree holding @types/node and the playwright-core that
+  // the captures actually drive (see flake.nix).
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    // Only third-party .d.ts are skipped (this repo has none of its own).
+    "skipLibCheck": true,
+
+    "typeRoots": ["./build/ts-types/node_modules/@types"],
+    "types": ["node"],
+    "paths": {
+      "playwright-core": [
+        "./build/ts-types/node_modules/playwright-core/index.d.ts"
+      ]
+    }
+  },
+  "include": ["tools/**/*.ts"],
+  "exclude": ["build", "node_modules", "**/node_modules"]
+}

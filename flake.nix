@@ -44,6 +44,32 @@
 
       perSystem =
         { pkgs, config, ... }:
+        let
+          # Type definitions for `just lint-ts` (tsc over tools/**/*.ts),
+          # assembled as a node_modules tree without any npm install:
+          # the Node API declarations are fixed-output fetches of the
+          # registry tarballs, pinned by the registry's own sha512
+          # integrity, and Playwright's declarations are the ones
+          # shipped inside the very playwright-driver the captures run
+          # (so the checked API is the driven API). The Justfile links
+          # build/ts-types to this path; tsconfig.json resolves from
+          # there. @types/node tracks the dev shell's Node 22 line.
+          nodeTypes = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/@types/node/-/node-22.20.4.tgz";
+            hash = "sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==";
+          };
+          # @types/node's one dependency (the fetch/undici declarations).
+          undiciTypes = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz";
+            hash = "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==";
+          };
+          tsTypes = pkgs.runCommand "isonim-email-ts-types" { } ''
+            mkdir -p $out/node_modules/@types/node $out/node_modules/undici-types
+            tar -xzf ${nodeTypes} -C $out/node_modules/@types/node --strip-components=1
+            tar -xzf ${undiciTypes} -C $out/node_modules/undici-types --strip-components=1
+            ln -s ${pkgs.playwright-driver} $out/node_modules/playwright-core
+          '';
+        in
         {
           # The mcl-standard-hooks set (large-file ban, .ct ban, hygiene)
           # is installed by the imported git-hooks module, adopted BY NAME
@@ -132,7 +158,14 @@
               # The independent RFC 2047 / MIME oracle for the header
               # fuzz test (Python's `email` package, stdlib only).
               python3
+              # The type checker for tools/**/*.ts (`just lint-ts`);
+              # its declarations come from tsTypes above.
+              typescript
             ];
+
+            # tsc's declaration tree (see tsTypes); `just lint-ts`
+            # links build/ts-types to it.
+            ISONIM_EMAIL_TS_TYPES = "${tsTypes}";
 
             # Playwright must use the Nix-provided browsers, never download.
             PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";

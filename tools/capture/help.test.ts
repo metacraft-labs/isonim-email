@@ -60,7 +60,8 @@ describe("email-shots --help", () => {
     assert.ok(named.length >= 15, `only ${named.length} flags named`);
     for (const flag of named) {
       if (flag === "--help") continue;
-      const args = flag in VALUES ? [flag, VALUES[flag]] : [flag];
+      const value = Object.hasOwn(VALUES, flag) ? VALUES[flag] : undefined;
+      const args = value === undefined ? [flag] : [flag, value];
       const r = run([...args, "--driver", missing]);
       assert.doesNotMatch(r.err, /unknown flag/, `${flag}: ${r.err}`);
       if (REFUSED.has(flag)) {
@@ -78,6 +79,20 @@ describe("email-shots --help", () => {
     for (const lit of known) {
       const flag = lit.slice(1, -1);
       assert.ok(help.out.includes(flag), `${flag} is parsed but not in --help`);
+    }
+  });
+
+  it("refuses Object.prototype member names as families and viewports", () => {
+    // Validation looks at the CLI's own tables only: an inherited
+    // member ("constructor", "toString") is not a family or a named
+    // viewport, and is refused before any work starts.
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      const fam = run(["--families", name, "--driver", missing]);
+      assert.equal(fam.status, 2, `--families ${name}: ${fam.err}`);
+      assert.match(fam.err, /is not a backend-A family/, fam.err);
+      const vp = run(["--viewports", name, "--driver", missing]);
+      assert.equal(vp.status, 2, `--viewports ${name}: ${vp.err}`);
+      assert.match(vp.err, /bad viewport/, vp.err);
     }
   });
 

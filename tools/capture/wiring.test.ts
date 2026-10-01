@@ -28,9 +28,16 @@ import {
   BACKEND_A_FAMILIES,
   darkNeeded,
   changedFilesSince,
+  type CommandRunner,
   familiesForChange,
   selectFamilies,
 } from "./affected.ts";
+import type {
+  Entry,
+  Provenance,
+  RunJson,
+  StoryManifest,
+} from "./email-shots.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -58,8 +65,15 @@ function runCli(args: string[]): {
   };
 }
 
-function readJson(path: string): any {
-  return JSON.parse(readFileSync(path, "utf8"));
+// The run files are the CLI's own output; T names the shape it writes.
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+// The provenance of one index row (every finished capture has one).
+function metaOf(runDir: string, e: Entry): Provenance {
+  assert.ok(e.meta !== null, `no provenance for ${JSON.stringify(e)}`);
+  return readJson<Provenance>(join(runDir, e.meta));
 }
 
 function gitIsDirty(): boolean {
@@ -85,7 +99,7 @@ function discoverPrev(excludeDir: string): string | null {
     cands.push({ dir, mtime: statSync(join(dir, "run.json")).mtimeMs });
   }
   cands.sort((a, b) => b.mtime - a.mtime);
-  return cands.length === 0 ? null : cands[0].dir;
+  return cands[0]?.dir ?? null;
 }
 
 describe("selection + cache wiring", () => {
@@ -114,19 +128,21 @@ describe("selection + cache wiring", () => {
     assert.equal(r.status, 0, `run1 failed:\n${r.stderr}`);
     // --out is repoRoot-anchored; the CLI resolves it the same way.
     assert.ok(existsSync(out), "run1 dir missing");
-    const manifest = readJson(join(out, "manifest.json"));
+    const manifest = readJson<StoryManifest>(join(out, "manifest.json"));
     assert.equal(manifest.stories.length, 1);
-    assert.match(manifest.stories[0].mime_sha256, /^[0-9a-f]{64}$/);
-    const runJson = readJson(join(out, "run.json"));
+    assert.match(manifest.stories[0]?.mime_sha256 ?? "", /^[0-9a-f]{64}$/);
+    const runJson = readJson<RunJson>(join(out, "run.json"));
     for (const k of ["tree_hash", "commit", "dirty", "date"])
       assert.ok(k in runJson, `run.json missing ${k}`);
-    const index = readJson(join(out, "index.json"));
+    const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty run1 index");
     for (const e of index) {
       assert.equal(e.status, "done", JSON.stringify(e));
-      const meta = readJson(join(out, e.meta));
-      assert.equal(meta.cache, "miss", e.meta);
-      assert.ok(existsSync(join(out, e.png)), `missing png for ${e.meta}`);
+      assert.equal(metaOf(out, e).cache, "miss", e.meta ?? "");
+      assert.ok(
+        e.png !== null && existsSync(join(out, e.png)),
+        `missing png for ${e.meta}`,
+      );
     }
   });
 
@@ -136,7 +152,8 @@ describe("selection + cache wiring", () => {
     // skips. The filter is read back from run1's own index, so the
     // requested captures are exactly the ones run1 just cached
     // (same story, same MIME, same defaults).
-    const first = readJson(join(runDir(1), "index.json"))[0];
+    const first = readJson<Entry[]>(join(runDir(1), "index.json"))[0];
+    assert.ok(first !== undefined, "empty run1 index");
     const out = runDir(6);
     const r = runCli([
       "canary",
@@ -150,12 +167,11 @@ describe("selection + cache wiring", () => {
       relative(repoRoot, out),
     ]);
     assert.equal(r.status, 0, `hit-path rerun failed:\n${r.stderr}`);
-    const index = readJson(join(out, "index.json"));
+    const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty hit-path index");
     for (const e of index) {
       assert.equal(e.status, "done", JSON.stringify(e));
-      const meta = readJson(join(out, e.meta));
-      assert.equal(meta.cache, "hit", e.meta);
+      assert.equal(metaOf(out, e).cache, "hit", e.meta ?? "");
     }
   });
 
@@ -167,22 +183,21 @@ describe("selection + cache wiring", () => {
     const out = runDir(2);
     const r = runCli(["canary", "--out", relative(repoRoot, runDir(2))]);
     assert.equal(r.status, 0, `run2 failed:\n${r.stderr}`);
-    const index = readJson(join(out, "index.json"));
+    const index = readJson<Entry[]>(join(out, "index.json"));
     assert.ok(index.length > 0, "empty run2 index");
     // Whatever the affected set selected, every request was captured
     // by run1's full matrix, so every entry must be a cache hit.
     for (const e of index) {
       assert.equal(e.status, "done", JSON.stringify(e));
-      const meta = readJson(join(out, e.meta));
-      assert.equal(meta.cache, "hit", e.meta);
+      assert.equal(metaOf(out, e).cache, "hit", e.meta ?? "");
     }
     // And the selected families/schemes match the affected module's
     // answer for the real change set against the discovered run.
     const prevDir = discoverPrev(out);
     assert.ok(prevDir !== null, "no previous run discovered");
-    const prevTree = readJson(join(prevDir as string, "run.json")).tree_hash;
-    const curTree = readJson(join(out, "run.json")).tree_hash;
-    const run = (cmd: string[]): string =>
+    const prevTree = readJson<RunJson>(join(prevDir, "run.json")).tree_hash;
+    const curTree = readJson<RunJson>(join(out, "run.json")).tree_hash;
+    const run: CommandRunner = (cmd) =>
       execFileSync(cmd[0], cmd.slice(1), {
         cwd: repoRoot,
         encoding: "utf8",
@@ -194,8 +209,8 @@ describe("selection + cache wiring", () => {
     const wantSchemes = new Set(
       darkNeeded(changed) ? ["light", "dark"] : ["light"],
     );
-    const gotFamilies = new Set(index.map((e: any) => e.family));
-    const gotSchemes = new Set(index.map((e: any) => e.scheme));
+    const gotFamilies = new Set(index.map((e) => e.family));
+    const gotSchemes = new Set(index.map((e) => e.scheme));
     assert.deepEqual(gotFamilies, wantFamilies);
     assert.deepEqual(gotSchemes, wantSchemes);
   });
@@ -218,12 +233,11 @@ describe("selection + cache wiring", () => {
       relative(repoRoot, runDir(3)),
     ]);
     assert.equal(r.status, 0, `run3 failed:\n${r.stderr}`);
-    const index = readJson(join(out, "index.json"));
-    assert.equal(index.length, 1);
-    assert.equal(index[0].status, "done");
-    assert.equal(index[0].family, "wordApprox");
-    const meta = readJson(join(out, index[0].meta));
-    assert.equal(meta.cache, "uncached");
+    const [only, ...rest] = readJson<Entry[]>(join(out, "index.json"));
+    assert.ok(only !== undefined && rest.length === 0, "want one capture");
+    assert.equal(only.status, "done");
+    assert.equal(only.family, "wordApprox");
+    assert.equal(metaOf(out, only).cache, "uncached");
   });
 
   it("--images off captures every family with its images blocked", () => {
@@ -246,25 +260,33 @@ describe("selection + cache wiring", () => {
       relative(repoRoot, out),
     ]);
     assert.equal(r.status, 0, `images run failed:\n${r.stderr}`);
-    const index = readJson(join(out, "index.json"));
+    const index = readJson<Entry[]>(join(out, "index.json"));
     assert.equal(index.length, 8);
-    const byKey = new Map<string, any>();
+    const byKey = new Map<string, Entry>();
     for (const e of index) {
       assert.equal(e.status, "done", JSON.stringify(e));
-      assert.ok(e.png !== null && existsSync(join(out, e.png)), e.meta);
+      assert.ok(e.png !== null && existsSync(join(out, e.png)), e.meta ?? "");
       byKey.set(`${e.family}/${e.images}`, e);
     }
+    const entry = (family: string, images: string): Entry => {
+      const e = byKey.get(`${family}/${images}`);
+      assert.ok(e !== undefined, `no ${family}/${images} capture`);
+      return e;
+    };
     const chain = (family: string, images: string): string[] => {
-      const meta = readJson(join(out, byKey.get(`${family}/${images}`).meta));
-      return (meta.emulation?.chain ?? []).map((t: any) => t.transform);
+      const meta = metaOf(out, entry(family, images));
+      return (meta.emulation?.chain ?? []).map((t) => t.transform);
     };
     assert.deepEqual(chain("apple", "on"), []);
     assert.deepEqual(chain("apple", "off"), ["imagesOff"]);
     assert.deepEqual(chain("gmailWeb", "off"), ["gmailWeb", "imagesOff"]);
     assert.deepEqual(chain("wordApprox", "off"), ["wordApprox", "imagesOff"]);
     assert.deepEqual(chain("imagesOff", "off"), ["imagesOff"]);
-    const png = (family: string, images: string): Buffer =>
-      readFileSync(join(out, byKey.get(`${family}/${images}`).png));
+    const png = (family: string, images: string): Buffer => {
+      const file = entry(family, images).png;
+      assert.ok(file !== null, `no PNG for ${family}/${images}`);
+      return readFileSync(join(out, file));
+    };
     // The receipt's logo is gone with images off: the pictures differ…
     for (const family of ["apple", "gmailWeb", "wordApprox"])
       assert.notDeepEqual(png(family, "off"), png(family, "on"), family);
@@ -272,9 +294,10 @@ describe("selection + cache wiring", () => {
     assert.deepEqual(png("imagesOff", "off"), png("imagesOff", "on"));
     // No image request left the page with images off.
     for (const family of ["apple", "gmailWeb", "wordApprox"]) {
-      const meta = readJson(join(out, byKey.get(`${family}/off`).meta));
+      const { network } = metaOf(out, entry(family, "off"));
+      assert.ok(network !== undefined, `${family}/off: no network record`);
       assert.deepEqual(
-        meta.network.blocked.filter((b: any) => b.reason === "network"),
+        network.blocked.filter((b) => b.reason === "network"),
         [],
       );
     }

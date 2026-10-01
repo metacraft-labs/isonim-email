@@ -23,6 +23,7 @@ import {
   CLIENT_FAMILIES,
   backendAFamilies,
   changedFilesSince,
+  type CommandRunner,
   darkNeeded,
   familiesForChange,
   MODULE_ROOT,
@@ -242,7 +243,7 @@ describe("darkNeeded", () => {
 describe("changedFilesSince", () => {
   it("diffs the previous run's tree against this run's; runner stubbed", () => {
     const calls: string[][] = [];
-    const run = (cmd: string[]): string => {
+    const run: CommandRunner = (cmd) => {
       calls.push(cmd);
       return "src/isonim_email/mso/cond.nim\n  \nsrc/isonim_email/style/tokens.nim\n";
     };

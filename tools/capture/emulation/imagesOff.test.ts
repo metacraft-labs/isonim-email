@@ -11,9 +11,11 @@ import { imagesOff } from "./imagesOff.ts";
 // The style attribute of the first <TAG …> in `html`, read the way an
 // HTML parser reads a double-quoted value: up to the next raw `"`.
 function styleOf(html: string, tag: string): string {
-  const m = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(html);
-  assert.ok(m !== null, `no <${tag} style="…"> in:\n${html}`);
-  return m[1];
+  const style = new RegExp(`<${tag}\\b[^>]*?\\sstyle="([^"]*)"`).exec(
+    html,
+  )?.[1];
+  assert.ok(style !== undefined, `no <${tag} style="…"> in:\n${html}`);
+  return style;
 }
 
 function doc(head: string, body: string): string {

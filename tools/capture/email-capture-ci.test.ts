@@ -100,13 +100,14 @@ function baselinesCopy(pending: string[] = []): string {
 function flipPixels(path: string): void {
   const img = readPng(readFileSync(path));
   const rgb = new Uint8Array(img.width * img.height * 3);
-  for (let p = 0; p < img.width * img.height; p++) {
-    rgb[p * 3] = img.data[p * 4];
-    rgb[p * 3 + 1] = img.data[p * 4 + 1];
-    rgb[p * 3 + 2] = img.data[p * 4 + 2];
-  }
+  for (let p = 0; p < img.width * img.height; p++)
+    rgb.set(img.data.subarray(p * 4, p * 4 + 3), p * 3);
   const flipped = Math.ceil(img.width * img.height * 0.02);
-  for (let p = 0; p < flipped; p++) rgb[p * 3] = (rgb[p * 3] + 128) & 0xff;
+  for (let p = 0; p < flipped; p++) {
+    const red = rgb[p * 3];
+    assert.ok(red !== undefined, `pixel ${p} outside the image`);
+    rgb[p * 3] = (red + 128) & 0xff;
+  }
   writeFileSync(
     path,
     writePng({ width: img.width, height: img.height, data: rgb }),
@@ -114,9 +115,21 @@ function flipPixels(path: string): void {
 }
 
 function firstPng(dir: string): string {
-  return readdirSync(dir)
+  const [first] = readdirSync(dir)
     .filter((f) => f.endsWith(".png"))
-    .sort()[0];
+    .sort();
+  assert.ok(first !== undefined, `no PNG in ${dir}`);
+  return first;
+}
+
+// The one element of `items`, failing unless there is exactly one.
+function only<T>(items: T[]): T {
+  const [first, ...rest] = items;
+  assert.ok(
+    first !== undefined && rest.length === 0,
+    `want exactly one, got ${JSON.stringify(items)}`,
+  );
+  return first;
 }
 
 describe("capture-ci Tier-1", () => {
@@ -128,20 +141,17 @@ describe("capture-ci Tier-1", () => {
   it("fails naming the variant on a 1-byte-mutated copy in tmp", () => {
     const runDir = fakeRunFromBaselines();
     const canaryDir = join(runDir, "canary");
-    const victim = readdirSync(canaryDir)
-      .filter((f) => f.endsWith(".png"))
-      .sort()[0];
+    const victim = firstPng(canaryDir);
     const path = join(canaryDir, victim);
     const bytes = Buffer.from(readFileSync(path));
-    bytes[bytes.length - 5] ^= 1; // IEND CRC: hash flips, PNG stays valid
+    // IEND CRC: hash flips, PNG stays valid.
+    const at = bytes.length - 5;
+    bytes.writeUInt8(bytes.readUInt8(at) ^ 1, at);
     writeFileSync(path, bytes);
     const failures = tier1Check(runDir, baselinesDir);
-    assert.equal(failures.length, 1);
-    assert.match(failures[0], /Tier-1 hash mismatch/);
-    assert.match(
-      failures[0],
-      new RegExp(`canary/${victim.replace(/\.png$/, "")}`),
-    );
+    const failure = only(failures);
+    assert.match(failure, /Tier-1 hash mismatch/);
+    assert.match(failure, new RegExp(`canary/${victim.replace(/\.png$/, "")}`));
   });
 });
 
@@ -165,9 +175,9 @@ describe("capture-ci Tier-2", () => {
     flipPixels(join(runDir, story, victim));
     assert.deepEqual(tier1Check(runDir, approved), []);
     const failures = tier2Check(runDir, approved);
-    assert.equal(failures.length, 1);
-    assert.match(failures[0], /Tier-2 diff/);
-    assert.match(failures[0], new RegExp(variant));
+    const failure = only(failures);
+    assert.match(failure, /Tier-2 diff/);
+    assert.match(failure, new RegExp(variant));
     const r = spawnSync(
       process.execPath,
       [join(scriptDir, "email-capture-ci.ts"), runDir, "--baselines", approved],
@@ -192,9 +202,9 @@ describe("capture-ci baselines awaiting re-approval", () => {
     flipPixels(join(runDir, "alert", firstPng(join(runDir, "alert"))));
     assert.deepEqual(tier2Check(runDir, pendingDir), []);
     const lines = tier2Pending(runDir, pendingDir);
-    assert.equal(lines.length, 1);
+    const line = only(lines);
     assert.match(
-      lines[0],
+      line,
       /Tier-2 alert awaiting re-approval — 6 capture\(s\) not compared \(test: out of date\)/,
     );
     const r = spawnSync(
@@ -374,10 +384,10 @@ describe("capture-ci Tier-3", () => {
         : a,
     );
     const failures = tier3Check(fakeTier3Run(failing));
-    assert.equal(failures.length, 1);
-    assert.match(failures[0], /Tier-3 overflow failed/);
+    const failure = only(failures);
+    assert.match(failure, /Tier-3 overflow failed/);
     assert.match(
-      failures[0],
+      failure,
       /canary\/a-chromium-baseline-chromium-mobile-light-on/,
     );
   });
@@ -392,8 +402,145 @@ describe("capture-ci Tier-3", () => {
       ]),
     );
     const failures = tier3Check(runDir);
-    assert.equal(failures.length, 1);
-    assert.match(failures[0], /no assertions\.json for canary/);
+    const failure = only(failures);
+    assert.match(failure, /no assertions\.json for canary/);
+  });
+
+  it("fails a story whose assertions.json records no captures array", () => {
+    // An assertions.json that is not an object with a captures list
+    // recorded nothing: that is a failure, never a vacuous pass.
+    for (const body of ["null", "{}", '{"captures": {}}']) {
+      const runDir = tmp("capture-ci-tier3-");
+      mkdirSync(join(runDir, "canary"), { recursive: true });
+      writeFileSync(
+        join(runDir, "index.json"),
+        JSON.stringify([
+          { story: "canary", status: "done", png: "canary/x.png" },
+        ]),
+      );
+      writeFileSync(join(runDir, "canary", "assertions.json"), body);
+      const failure = only(tier3Check(runDir));
+      assert.match(
+        failure,
+        /canary\/assertions\.json has no captures array/,
+        body,
+      );
+    }
+  });
+
+  it("fails a capture whose assertions field is not a list", () => {
+    // A present, non-null assertions value that is not an array is not
+    // a record of results: a named failure, never read as "none
+    // recorded" (that is only absent or null, which pass).
+    for (const assertions of [{}, { pass: false }, 5, "overflow", true]) {
+      const runDir = tmp("capture-ci-tier3-");
+      mkdirSync(join(runDir, "canary"), { recursive: true });
+      writeFileSync(
+        join(runDir, "index.json"),
+        JSON.stringify([
+          { story: "canary", status: "done", png: "canary/x.png" },
+        ]),
+      );
+      writeFileSync(
+        join(runDir, "canary", "assertions.json"),
+        JSON.stringify({ captures: [{ capture: "x", assertions }] }),
+      );
+      const failure = only(tier3Check(runDir));
+      assert.match(
+        failure,
+        /Tier-3 canary\/assertions\.json capture x has an assertions field that is not a list/,
+        JSON.stringify(assertions),
+      );
+    }
+    for (const assertions of [null, undefined]) {
+      const runDir = tmp("capture-ci-tier3-");
+      mkdirSync(join(runDir, "canary"), { recursive: true });
+      writeFileSync(
+        join(runDir, "index.json"),
+        JSON.stringify([
+          { story: "canary", status: "done", png: "canary/x.png" },
+        ]),
+      );
+      writeFileSync(
+        join(runDir, "canary", "assertions.json"),
+        JSON.stringify({ captures: [{ capture: "x", assertions }] }),
+      );
+      assert.deepEqual(tier3Check(runDir), [], String(assertions));
+    }
+  });
+
+  // A run dir whose canary assertions.json holds `captures` verbatim.
+  function tier3RunWith(captures: unknown[]): string {
+    const runDir = tmp("capture-ci-tier3-");
+    mkdirSync(join(runDir, "canary"), { recursive: true });
+    writeFileSync(
+      join(runDir, "index.json"),
+      JSON.stringify([
+        { story: "canary", status: "done", png: "canary/x.png" },
+      ]),
+    );
+    writeFileSync(
+      join(runDir, "canary", "assertions.json"),
+      JSON.stringify({ captures }),
+    );
+    return runDir;
+  }
+
+  it("fails a story whose captures list is empty", () => {
+    // The story is in the index, so email-shots recorded at least one
+    // capture for it: an empty list checked nothing.
+    const failure = only(tier3Check(tier3RunWith([])));
+    assert.match(
+      failure,
+      /Tier-3 canary\/assertions\.json records no captures/,
+    );
+  });
+
+  it("fails a captures entry that is not a capture record", () => {
+    // A captures entry that is not an object records nothing that can
+    // be checked: a named failure, never read as "none recorded".
+    for (const cap of [null, 5, "x", true, []]) {
+      const failure = only(tier3Check(tier3RunWith([cap])));
+      assert.match(
+        failure,
+        /Tier-3 canary\/assertions\.json captures\[0\] is not a capture record/,
+        JSON.stringify(cap),
+      );
+    }
+  });
+
+  it("fails an assertion entry that is not a result with a boolean or null pass", () => {
+    // Each recorded result must say pass true, false or null (null:
+    // not run, e.g. axe). A non-object entry, or one whose pass is
+    // missing or of another type, is reported instead of skipped.
+    for (const a of [
+      null,
+      7,
+      "failed",
+      [],
+      { check: "overflow", detail: "no pass field" },
+      { check: "overflow", pass: "false", detail: "string pass" },
+      { check: "overflow", pass: 0, detail: "numeric pass" },
+    ]) {
+      const failure = only(
+        tier3Check(tier3RunWith([{ capture: "x", assertions: [a] }])),
+      );
+      assert.match(
+        failure,
+        /Tier-3 canary\/assertions\.json capture x assertions\[0\] is not a result with a pass of true, false or null/,
+        JSON.stringify(a),
+      );
+    }
+    for (const pass of [true, null])
+      assert.deepEqual(
+        tier3Check(
+          tier3RunWith([
+            { capture: "x", assertions: [{ check: "c", pass, detail: "d" }] },
+          ]),
+        ),
+        [],
+        String(pass),
+      );
   });
 
   it("refuses a vacuous pass on a story-less run", () => {

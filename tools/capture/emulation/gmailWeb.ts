@@ -264,9 +264,9 @@ function stripNonWidthMedia(css: string): string {
   return joinChunks(
     splitTopLevel(css)
       .map((c) => {
-        const m = /^\s*@media\b([\s\S]*)$/i.exec(c.head);
-        if (m === null || c.body === null) return c;
-        if (!isWidthOnlyQuery(m[1])) return null;
+        const query = /^\s*@media\b([\s\S]*)$/i.exec(c.head)?.[1];
+        if (query === undefined || c.body === null) return c;
+        if (!isWidthOnlyQuery(query)) return null;
         return { head: c.head, body: stripAttributeRules(c.body) };
       })
       .filter((c) => c !== null),
@@ -423,7 +423,7 @@ export function clipLongHtml(html: string): string {
   let end = CLIP_THRESHOLD;
   // A UTF-8 continuation byte (10xxxxxx) at the cut means the cut
   // splits a character: back up to its lead byte.
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   let cut = bytes.subarray(0, end).toString("utf8");
   const lastComment = cut.lastIndexOf("<!--");
   const lastLt = cut.lastIndexOf("<");

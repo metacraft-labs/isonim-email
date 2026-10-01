@@ -72,7 +72,7 @@ function prefixCssHead(head: string): string {
     }
     if ((c === "." || c === "#") && identStart.test(head[i + 1] ?? "")) {
       let j = i + 1;
-      while (j < head.length && identRest.test(head[j])) j++;
+      while (j < head.length && identRest.test(head[j] ?? "")) j++;
       const name = head.slice(i + 1, j);
       out += name.startsWith("x_") ? c + name : `${c}x_${name}`;
       i = j;
@@ -148,20 +148,20 @@ function relativeLuminance(r: number, g: number, b: number): number {
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(
+  const digits = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(
     hex
       .trim()
       .replace(/\s*!important\s*$/i, "")
       .trim(),
-  );
-  if (!m) return null;
+  )?.[1];
+  if (digits === undefined) return null;
   const h =
-    m[1].length === 3
-      ? m[1]
+    digits.length === 3
+      ? digits
           .split("")
           .map((c) => c + c)
           .join("")
-      : m[1];
+      : digits;
   return [
     parseInt(h.slice(0, 2), 16),
     parseInt(h.slice(2, 4), 16),
@@ -245,14 +245,19 @@ function recolourDecls(css: string): {
       if (prop !== "color" && prop !== "background-color") return decl;
       const value = decl.slice(colon + 1);
       const rgb = hexToRgb(value);
-      if (!rgb) return decl;
+      // hexToRgb accepted the value, so it is one 3/6-digit hex colour
+      // (plus an optional !important) and this match always succeeds.
+      // Were it ever to fail, the declaration is left as written and
+      // not counted as recoloured — the same as any value hexToRgb
+      // rejects.
+      const hex = /#[0-9a-f]{3,6}/i.exec(value)?.[0];
+      if (!rgb || hex === undefined) return decl;
       const lum = relativeLuminance(rgb[0], rgb[1], rgb[2]);
       const inverts = prop === "color" ? lum < 0.5 : lum > 0.5;
       if (!inverts) return decl;
       if (prop === "color") text = true;
       else bg = true;
       const important = /!\s*important\s*$/i.test(value) ? " !important" : "";
-      const hex = /#[0-9a-f]{3,6}/i.exec(value)![0];
       return `${decl.slice(0, colon + 1)}${invertLightness(hex)}${important}`;
     })
     .join(";");
@@ -287,8 +292,9 @@ function recolourDark(html: string): string {
     out = out.replace(
       /(?<![-\w])bgcolor\s*=\s*(["']?)(#[0-9a-f]{3}(?:[0-9a-f]{3})?)\1/i,
       (m: string, q: string, hex: string): string => {
-        const rgb = hexToRgb(hex)!;
-        if (relativeLuminance(rgb[0], rgb[1], rgb[2]) <= 0.5) return m;
+        // The pattern admits only 3/6-digit hex, which hexToRgb reads.
+        const rgb = hexToRgb(hex);
+        if (rgb === null || relativeLuminance(...rgb) <= 0.5) return m;
         bg = true;
         return `bgcolor=${q}${invertLightness(hex)}${q}`;
       },

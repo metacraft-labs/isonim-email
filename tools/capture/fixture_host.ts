@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { BrowserContext } from "playwright-core";
 
 export const FIXTURE_HOST = "https://x.test";
 
@@ -54,10 +55,10 @@ export function resolveFixture(
   } catch {
     return notFound(`unparseable URL: ${url}`);
   }
-  const m = /^\/([0-9a-f]{16})\/([A-Za-z0-9._@-]+)$/.exec(path);
-  if (m === null || m[2].startsWith("."))
+  const [, prefix, name] =
+    /^\/([0-9a-f]{16})\/([A-Za-z0-9._@-]+)$/.exec(path) ?? [];
+  if (prefix === undefined || name === undefined || name.startsWith("."))
     return notFound(`not a hashed asset path: ${path}`);
-  const [, prefix, name] = m;
   const file = join(assetsDir, name);
   if (!existsSync(file) || !statSync(file).isFile())
     return notFound(`no fixture named ${name}`);
@@ -110,14 +111,14 @@ export interface BlockedRequest {
 // routeDecision. Returns the list the blocked requests are appended to
 // as they happen.
 export async function installCapturePolicy(
-  context: any,
+  context: BrowserContext,
   assetsDir: string,
   images: string,
 ): Promise<BlockedRequest[]> {
   const blocked: BlockedRequest[] = [];
-  await context.route("**/*", async (route: any) => {
+  await context.route("**/*", async (route) => {
     const request = route.request();
-    const url: string = request.url();
+    const url = request.url();
     const decision = routeDecision(url, request.resourceType(), images);
     if (decision.action === "allow") {
       await route.continue();

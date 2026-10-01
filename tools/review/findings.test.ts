@@ -67,6 +67,28 @@ describe("findings entry shape", () => {
     ]);
   });
 
+  it("reads only the entry format's fields: unknown keys are dropped", () => {
+    // The entry format is closed — exactly the example's fields plus a
+    // wontfix reason. A reader returns that shape and nothing else; a
+    // key outside it is ignored on read (not rejected), and the line in
+    // the file is left as written (the tool only ever appends).
+    const extra = {
+      id: "F3",
+      ...fields(),
+      fixed_in_run: null,
+      note: "not a field of the format",
+      reason: 7, // not a string: not a reason
+    };
+    const f = parseFindingLine(JSON.stringify(extra));
+    assert.deepEqual(f, { ...fields(), id: "F3", fixed_in_run: null });
+    assert.ok(!("note" in f) && !("reason" in f));
+    const kept = parseFindingLine(
+      JSON.stringify({ ...extra, reason: "kept: a string reason" }),
+    );
+    assert.equal(kept.reason, "kept: a string reason");
+    assert.ok(!("note" in kept));
+  });
+
   it("rejects a bad status and a bad severity", () => {
     const path = tmpFile();
     assert.throws(() =>
@@ -136,8 +158,14 @@ describe("findings file", () => {
     assert.equal(b.id, "F2");
     assert.equal(readFindings(path).length, 2);
     assert.equal(listFindings(path, { status: "open" }).length, 1);
-    assert.equal(listFindings(path, { story: "receipt" })[0].id, "F2");
-    assert.equal(listFindings(path, { severity: "P2" })[0].id, "F1");
+    assert.deepEqual(
+      listFindings(path, { story: "receipt" }).map((f) => f.id),
+      ["F2"],
+    );
+    assert.deepEqual(
+      listFindings(path, { severity: "P2" }).map((f) => f.id),
+      ["F1"],
+    );
     assert.equal(listFindings(path, { family: "outlookWord" }).length, 2);
     assert.equal(listFindings(path, { family: "gmailWeb" }).length, 0);
   });

@@ -28,6 +28,7 @@ import { createHash } from "node:crypto";
 import { cpus } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { Browser, BrowserType, Page } from "playwright-core";
 import { applyChain, transformChain, transformVersion } from "./transforms.ts";
 import {
   ADAPTER_VERSION,
@@ -41,12 +42,13 @@ import { composeStorySheets } from "./contact_sheet.ts";
 import { domAssertionsScript } from "./dom_assertions.ts";
 import {
   changedFilesSince,
+  type CommandRunner,
   darkNeeded,
   familiesForChange,
   workingTreeHash,
 } from "./affected.ts";
 import { launchOptions } from "./launch.ts";
-import { installCapturePolicy } from "./fixture_host.ts";
+import { installCapturePolicy, type BlockedRequest } from "./fixture_host.ts";
 import {
   appendHistory,
   latencyVerdict,
@@ -73,7 +75,7 @@ interface FamilyDef {
   approximation: boolean;
 }
 
-const FAMILIES: Record<string, FamilyDef> = {
+const FAMILIES: Readonly<Record<string, FamilyDef>> = {
   apple: { engine: "webkit", approximation: false },
   thunderbird: { engine: "firefox", approximation: true },
   "chromium-baseline": { engine: "chromium", approximation: true },
@@ -84,6 +86,19 @@ const FAMILIES: Record<string, FamilyDef> = {
   wordApprox: { engine: "chromium", approximation: true },
 };
 
+// Own keys only: `in` would also accept Object.prototype members
+// ("toString", "constructor") as family names.
+function familyDef(family: string): FamilyDef | undefined {
+  return Object.hasOwn(FAMILIES, family) ? FAMILIES[family] : undefined;
+}
+
+// A family already validated by parseArgs.
+function knownFamily(family: string): FamilyDef {
+  const def = familyDef(family);
+  if (def === undefined) throw new Error(`unknown family '${family}'`);
+  return def;
+}
+
 const ENGINES = new Set(["chromium", "webkit", "firefox"]);
 const SCHEMES = new Set(["light", "dark", "forced-dark"]);
 
@@ -93,10 +108,12 @@ interface Viewport {
   dpr: number;
 }
 
-const NAMED_VIEWPORTS: Record<string, Viewport> = {
-  mobile: { name: "mobile", width: 375, dpr: 3 },
-  desktop: { name: "desktop", width: 800, dpr: 1 },
-};
+const MOBILE: Viewport = { name: "mobile", width: 375, dpr: 3 };
+const DESKTOP: Viewport = { name: "desktop", width: 800, dpr: 1 };
+const NAMED_VIEWPORTS = new Map<string, Viewport>([
+  ["mobile", MOBILE],
+  ["desktop", DESKTOP],
+]);
 
 // ---------------------------------------------------------------------------
 // CLI parsing
@@ -178,15 +195,17 @@ function splitList(value: string): string[] {
 }
 
 function parseViewport(token: string): Viewport {
-  if (token in NAMED_VIEWPORTS) return NAMED_VIEWPORTS[token];
-  const m = /^(\d+)@([\d.]+)x?$/.exec(token) ?? /^(\d+)$/.exec(token);
-  if (!m)
+  const named = NAMED_VIEWPORTS.get(token);
+  if (named !== undefined) return named;
+  const [, widthText, dprText] =
+    /^(\d+)@([\d.]+)x?$/.exec(token) ?? /^(\d+)$/.exec(token) ?? [];
+  if (widthText === undefined)
     failUsage(`bad viewport '${token}' (want mobile, desktop, W or W@DPR)`);
-  const width = parseInt(m[1], 10);
-  const dpr = m[2] === undefined ? 1 : parseFloat(m[2]);
+  const width = parseInt(widthText, 10);
+  const dpr = dprText === undefined ? 1 : parseFloat(dprText);
   if (!(width > 0) || !(dpr > 0))
     failUsage(`bad viewport '${token}' (width and DPR must be positive)`);
-  return { name: `${width}@${m[2] === undefined ? "1" : m[2]}x`, width, dpr };
+  return { name: `${width}@${dprText ?? "1"}x`, width, dpr };
 }
 
 function parseArgs(argv: string[]): Options {
@@ -197,7 +216,7 @@ function parseArgs(argv: string[]): Options {
     families: Object.keys(FAMILIES),
     familiesExplicit: false,
     clients: null,
-    viewports: [NAMED_VIEWPORTS.mobile, NAMED_VIEWPORTS.desktop],
+    viewports: [MOBILE, DESKTOP],
     schemes: ["light"],
     schemesExplicit: false,
     images: ["on"],
@@ -220,8 +239,9 @@ function parseArgs(argv: string[]): Options {
     "--driver",
     "--brief-driver",
   ]);
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  // One iterator: a flag's value is the element after it.
+  const args = argv.values();
+  for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -247,7 +267,7 @@ function parseArgs(argv: string[]): Options {
       continue;
     }
     if (!takesValue.has(arg)) failUsage(`unknown flag '${arg}'`);
-    const value = argv[++i];
+    const value = args.next().value;
     if (value === undefined) failUsage(`flag '${arg}' needs a value`);
     switch (arg) {
       case "--backends":
@@ -303,7 +323,7 @@ function parseArgs(argv: string[]): Options {
     failUsage(`unknown backend '${b}' (want a, b, c or d)`);
   }
   for (const f of opt.families) {
-    if (f in FAMILIES) continue;
+    if (familyDef(f) !== undefined) continue;
     failUsage(
       `family '${f}' is not a backend-A family (backend-A families: ${Object.keys(FAMILIES).join(", ")}; other families arrive with backends B/C/D later)`,
     );
@@ -340,12 +360,34 @@ function candidateDriverPaths(): string[] {
   return paths;
 }
 
-async function loadPlaywright(): Promise<any> {
+// The playwright-core module's API, as its own declarations describe it.
+type Playwright = typeof import("playwright-core");
+
+// The browsers.json each playwright-core ships (the parts read here).
+interface BrowsersJson {
+  browsers: { name: string; revision: string }[];
+}
+
+function browserType(pw: Playwright, engine: string): BrowserType {
+  switch (engine) {
+    case "chromium":
+      return pw.chromium;
+    case "firefox":
+      return pw.firefox;
+    case "webkit":
+      return pw.webkit;
+  }
+  throw new Error(`unknown engine '${engine}'`);
+}
+
+async function loadPlaywright(): Promise<Playwright> {
   for (const dir of candidateDriverPaths()) {
     const entry = join(dir, "index.mjs");
     const pkgFile = join(dir, "package.json");
     if (!existsSync(entry) || !existsSync(pkgFile)) continue;
-    const pkg = JSON.parse(readFileSync(pkgFile, "utf8"));
+    const pkg = JSON.parse(readFileSync(pkgFile, "utf8")) as {
+      version: string;
+    };
     const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
     if (!browsersPath || !existsSync(browsersPath))
       fail(
@@ -353,11 +395,9 @@ async function loadPlaywright(): Promise<any> {
       );
     const browsersJson = JSON.parse(
       readFileSync(join(dir, "browsers.json"), "utf8"),
-    );
+    ) as BrowsersJson;
     for (const want of ["chromium", "firefox", "webkit"]) {
-      const found = (browsersJson.browsers as any[]).find(
-        (b) => b.name === want,
-      );
+      const found = browsersJson.browsers.find((b) => b.name === want);
       if (!found) continue;
       // Note: headless-shell shares the chromium revision; only the
       // full chromium, firefox and webkit trees are checked here.
@@ -369,7 +409,10 @@ async function loadPlaywright(): Promise<any> {
     process.stderr.write(
       `email-shots: playwright-core ${pkg.version} from ${dir}\n`,
     );
-    return await import(pathToFileURL(entry).href);
+    // A runtime-resolved specifier types as `any`; the module is the
+    // playwright-core whose declarations the type-check reads.
+    const pw: Playwright = await import(pathToFileURL(entry).href);
+    return pw;
   }
   fail(
     `no playwright-core found (tried ${candidateDriverPaths().join(", ")}) — run under \`nix develop\` in isonim-email`,
@@ -425,7 +468,8 @@ interface Request {
   baseName: string;
 }
 
-interface Entry {
+// One index.json row.
+export interface Entry {
   story: string;
   backend: string;
   family: string;
@@ -441,22 +485,60 @@ interface Entry {
 // One recorded Tier-3 assertion. pass: null is "not run" (the axe
 // entry until axe-core is pinned) — it never gates, with or without
 // --assert.
-interface AssertionResult {
+export interface AssertionResult {
   check: string;
   pass: boolean | null;
   detail: string;
 }
 
-// URLs the network policy refused for a capture (from its provenance).
-function blockedUrls(meta: Record<string, unknown>): string[] {
-  const blocked = (meta.network as any)?.blocked;
-  if (!Array.isArray(blocked)) return [];
-  return blocked
-    .filter((b: any) => b !== null && b.reason === "network")
-    .map((b: any) => String(b.url));
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function imagesComplete(page: any, timeoutMs: number): Promise<boolean> {
+// A capture's provenance JSON (<story>/<baseName>.json), as far as
+// readers of a finished run rely on it; baseMeta() below writes it.
+export interface Provenance {
+  story: string;
+  status: string;
+  cache: string;
+  transform_version: string;
+  emulation: {
+    transform: string;
+    chain: { transform: string; version: number }[];
+    version: number | null;
+  } | null;
+  network?: { policy: string; blocked: BlockedRequest[] };
+  assertions?: AssertionResult[];
+  fail_reason?: string;
+}
+
+// URLs the network policy refused for a capture (from its provenance).
+function blockedUrls(meta: Record<string, unknown>): string[] {
+  const network = meta.network;
+  const blocked = isRecord(network) ? network.blocked : undefined;
+  if (!Array.isArray(blocked)) return [];
+  const urls: string[] = [];
+  for (const b of blocked as unknown[])
+    if (isRecord(b) && b.reason === "network") urls.push(String(b.url));
+  return urls;
+}
+
+// The Tier-3 assertions a provenance recorded; [] when it has none.
+function recordedAssertions(meta: Record<string, unknown>): AssertionResult[] {
+  const recorded = meta.assertions;
+  if (!Array.isArray(recorded)) return [];
+  const out: AssertionResult[] = [];
+  for (const a of recorded as unknown[])
+    if (isRecord(a))
+      out.push({
+        check: String(a.check),
+        pass: typeof a.pass === "boolean" ? a.pass : null,
+        detail: String(a.detail),
+      });
+  return out;
+}
+
+async function imagesComplete(page: Page, timeoutMs: number): Promise<boolean> {
   // Node-side polling: the page clock is fixed, so in-page
   // timers and Date.now() are frozen and the wait must live here.
   const start = Date.now();
@@ -471,8 +553,7 @@ async function imagesComplete(page: any, timeoutMs: number): Promise<boolean> {
 }
 
 async function captureOne(
-  pw: any,
-  browsers: Map<string, any>,
+  browsers: Map<string, Browser>,
   req: Request,
   runDir: string,
   run: string,
@@ -539,7 +620,7 @@ async function captureOne(
     timing_ms: { total: 0, capture: 0 },
     captured_at: new Date().toISOString(),
     cache: "uncached",
-    approximation: FAMILIES[req.family].approximation,
+    approximation: knownFamily(req.family).approximation,
     // The transforms applied, in order: the family's own emulation,
     // then imagesOff for images=off (transforms.ts). null for a raw
     // capture with images on.
@@ -552,7 +633,7 @@ async function captureOne(
               transform: t.name,
               version: t.version,
             })),
-            version: chain.length === 1 ? chain[0].version : null,
+            version: (chain.length === 1 ? chain[0]?.version : null) ?? null,
           },
     transform_version: transformVersion(chain),
     status: "",
@@ -603,15 +684,11 @@ async function captureOne(
       // assertion outcomes — is identical to a fresh capture.
       // Entries written before Tier-3 carry no assertions and cannot
       // gate; they pass through as done.
-      if (
-        gateAssertions &&
-        Array.isArray((hit.meta as any).assertions) &&
-        ((hit.meta as any).assertions as AssertionResult[]).some(
-          (a) => a !== null && a.pass === false,
-        )
-      ) {
-        const fails = ((hit.meta as any).assertions as AssertionResult[])
-          .filter((a) => a !== null && a.pass === false)
+      const recordedFailures = recordedAssertions(hit.meta).filter(
+        (a) => a.pass === false,
+      );
+      if (gateAssertions && recordedFailures.length > 0) {
+        const fails = recordedFailures
           .map((a) => `${a.check}: ${a.detail}`)
           .join("; ");
         const meta = {
@@ -772,11 +849,11 @@ async function captureOne(
 // Previous-run discovery (affected selection)
 // ---------------------------------------------------------------------------
 
-interface StoryManifest {
+export interface StoryManifest {
   stories: { story: string; eml: string; html: string; mime_sha256?: string }[];
 }
 
-interface RunJson {
+export interface RunJson {
   tree_hash: string;
   commit: string;
   dirty: boolean;
@@ -809,14 +886,15 @@ function discoverPreviousRun(
       cands.push({ dir, mtime });
     }
     cands.sort((a, b) => b.mtime - a.mtime);
-    if (cands.length === 0) return null;
+    const newest = cands[0];
+    if (newest === undefined) return null;
     const manifest = JSON.parse(
-      readFileSync(join(cands[0].dir, "manifest.json"), "utf8"),
+      readFileSync(join(newest.dir, "manifest.json"), "utf8"),
     ) as StoryManifest;
     const runJson = JSON.parse(
-      readFileSync(join(cands[0].dir, "run.json"), "utf8"),
+      readFileSync(join(newest.dir, "run.json"), "utf8"),
     ) as RunJson;
-    return { dir: cands[0].dir, manifest, runJson };
+    return { dir: newest.dir, manifest, runJson };
   } catch {
     return null;
   }
@@ -878,7 +956,7 @@ async function main(): Promise<void> {
     fullSelection = true;
   } else {
     try {
-      const run = (cmd: string[]): string => {
+      const run: CommandRunner = (cmd) => {
         const r = spawnSync(cmd[0], cmd.slice(1), {
           cwd: repoRoot,
           encoding: "utf8",
@@ -955,7 +1033,7 @@ async function main(): Promise<void> {
   for (const m of manifest.stories) {
     if (storySet !== null && !storySet.has(m.story)) continue;
     for (const family of families) {
-      const engine = FAMILIES[family].engine;
+      const engine = knownFamily(family).engine;
       if (opt.clients !== null && !opt.clients.includes(engine)) continue;
       for (const viewport of opt.viewports) {
         for (const scheme of schemes) {
@@ -996,28 +1074,32 @@ async function main(): Promise<void> {
   // front — never lazily from the workers, where the check-then-set
   // races and leaks duplicate browsers (whose open pipes keep node
   // alive after the last capture).
-  const browsers = new Map<string, any>();
-  const keys = new Set<string>();
+  const browsers = new Map<string, Browser>();
+  const keys = new Map<string, { engine: string; forced: boolean }>();
   for (const r of requests) {
     // Mirror the skip gate in captureOne: only requests that never
     // reach setContent are excluded from the launch set.
     if (r.scheme === "forced-dark" && r.engine !== "chromium") continue;
-    keys.add(`${r.engine}|${r.scheme === "forced-dark" ? "forced" : "plain"}`);
+    const forced = r.scheme === "forced-dark";
+    keys.set(`${r.engine}|${forced ? "forced" : "plain"}`, {
+      engine: r.engine,
+      forced,
+    });
   }
   // Launch options per engine and host: tools/capture/launch.ts
   // (Linux keeps Playwright's defaults; macOS daemon sessions need a
   // keychain-free, GPU-free Firefox profile).
   const tLaunch = Date.now();
-  for (const key of keys) {
-    const [engine, mode] = key.split("|");
+  for (const [key, { engine, forced }] of keys) {
+    const mode = forced ? "forced" : "plain";
     const launchOpts = launchOptions(
       engine,
-      mode === "forced",
+      forced,
       process.platform,
       process.env,
     );
     try {
-      browsers.set(key, await pw[engine].launch(launchOpts));
+      browsers.set(key, await browserType(pw, engine).launch(launchOpts));
     } catch (err) {
       for (const b of browsers.values()) await b.close().catch(() => {});
       fail(
@@ -1055,12 +1137,11 @@ async function main(): Promise<void> {
   let cursor = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
-      const i = cursor++;
-      if (i >= requests.length) return;
+      const req = requests[cursor++];
+      if (req === undefined) return;
       const { entry, line } = await captureOne(
-        pw,
         browsers,
-        requests[i],
+        req,
         runDir,
         run,
         lib,
@@ -1100,8 +1181,11 @@ async function main(): Promise<void> {
         let assertions: unknown = null;
         if (e.meta !== null) {
           try {
-            const m = JSON.parse(readFileSync(join(runDir, e.meta), "utf8"));
-            assertions = Array.isArray(m.assertions) ? m.assertions : null;
+            const m: unknown = JSON.parse(
+              readFileSync(join(runDir, e.meta), "utf8"),
+            );
+            assertions =
+              isRecord(m) && Array.isArray(m.assertions) ? m.assertions : null;
           } catch {
             assertions = null;
           }
