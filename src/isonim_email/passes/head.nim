@@ -76,7 +76,9 @@ const affects*: set[ClientFamily] = allFamilies - {cfGanga}
 const
   resetPriority = 1
   responsivePriority = 2
-  darkPriority = 3
+  darkPriority* = 3
+    ## Exported: the renderer checks the dark scheme only when this
+    ## block survived the budget.
   fontsPriority* = 4
     ## Exported: the document shell wraps this block in `NotMso`.
   decorativePriority = 5

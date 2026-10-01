@@ -10,9 +10,17 @@
 ## (comma-separated; an absent matrix axis means the full backend-A
 ## default — the `briefFamilies`/`briefViewports`/`briefSchemes`
 ## mirror of the email-shots.ts matrix).
+##
+## A real client's captures get their own briefs:
+## brief_driver --client <backend> <family> <client> <story> <outDir>
+##   <viewports> <schemes>
+## writes `brief-<backend>-<family>-<client>-<viewport>-<scheme>.md`
+## for each combination; a client the generator does not know, or
+## knows under another backend or family, fails (exit 1).
 import std/[os, sequtils, strutils]
 import isonim_email
 import stories/email_stories
+import stories/seed_broken
 import stories/seed_receipt
 import stories/seed_alert
 import stories/seed_overflow
@@ -28,13 +36,7 @@ proc defaultViewports(): seq[string] =
   for (name, _) in briefViewports:
     result.add(name)
 
-proc main(): int =
-  let args = commandLineParams()
-  if args.len < 2 or args.len > 5:
-    stderr.writeLine(
-      "usage: brief_driver <story> <outDir> [families] [viewports] " &
-      "[schemes]")
-    return 2
+proc registerAll() =
   registerSeedStories()
   registerStoryTree("canary", canaryDoc)
   registerStoryTree("receipt", proc(): EmailNode = seedReceipt())
@@ -47,6 +49,51 @@ proc main(): int =
     registerStoryTree("overflowFluid", overflowFluidDoc)
     registerSanitiserProbeStory()
     registerStoryTree("sanitiserProbe", sanitiserProbeDoc)
+    # The broken receipt's brief is the intact receipt's: the break is
+    # in the output only.
+    registerBrokenStories()
+    registerStoryTree("receiptB",
+      proc(): EmailNode = seedReceipt())
+
+proc clientMain(args: seq[string]): int =
+  ## `--client <backend> <family> <client> <story> <outDir> <viewports>
+  ## <schemes>`.
+  if args.len != 8:
+    stderr.writeLine("usage: brief_driver --client <backend> <family> " &
+      "<client> <story> <outDir> <viewports> <schemes>")
+    return 2
+  let (backend, family, client) = (args[1], args[2], args[3])
+  registerAll()
+  try:
+    let mismatch = briefClientMismatch(backend, family, client)
+    if mismatch.len > 0:
+      stderr.writeLine("brief_driver: " & mismatch)
+      return 1
+    let story = getStory(args[4])
+    createDir(args[5])
+    for viewport in splitMatrix(args[6]):
+      for scheme in splitMatrix(args[7]):
+        writeFile(args[5] / clientBriefName(backend, family, client,
+          viewport, scheme),
+          clientExpectedBlock(story, client, viewport, scheme))
+  except StoryError as e:
+    stderr.writeLine("brief_driver: " & e.msg)
+    return 1
+  except BriefError as e:
+    stderr.writeLine("brief_driver: " & e.msg)
+    return 1
+  0
+
+proc main(): int =
+  let args = commandLineParams()
+  if args.len > 0 and args[0] == "--client":
+    return clientMain(args)
+  if args.len < 2 or args.len > 5:
+    stderr.writeLine(
+      "usage: brief_driver <story> <outDir> [families] [viewports] " &
+      "[schemes]")
+    return 2
+  registerAll()
   let families =
     if args.len > 2: splitMatrix(args[2])
     else: briefFamilies.toSeq()

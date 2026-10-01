@@ -14,6 +14,7 @@ import isonim_email
 import stories/email_stories
 import stories/seed_receipt
 import stories/seed_alert
+import stories/seed_broken
 
 registerSeedStories()
 registerStoryTree("canary", canaryDoc)
@@ -95,6 +96,11 @@ suite "review brief":
     check "Heading \"Receipt #1234\" (largest text)." in receipt
     check "\"Acme logo\"" in receipt
     check "Footer: none (no links, no unsubscribe)." in receipt
+    # A table names its rows' text, and an image without an `align` of
+    # its own is centred by the skeleton's content cell.
+    check "Table: 1 row: \"Widget: $10.00\"." in receipt
+    check "Logo image \"Acme logo\", ~120 px wide, centred, on " &
+      "#ffffff." in receipt
     check "- (none)" in receipt
     check "Not expected here: dark colours (Gmail web does not " &
       "apply dark mode to the body)." in receipt
@@ -142,6 +148,26 @@ suite "review brief":
     check "Not expected here: hero images (shown as alt text: " &
       "\"Acme logo\")." in off
 
+  test "test_brief_direction_and_family_dark_note":
+    # A right-to-left story says so (its text runs from the right); a
+    # left-to-right one says nothing about direction.
+    let rtl = expectedBlock(getStory("alert"), "chromium-baseline",
+      "desktop", "light")
+    check "Direction: right to left (`dir=\"rtl\"`, lang `ar`)" in rtl
+    check "Direction:" notin expectedBlock(getStory("receipt"),
+      "chromium-baseline", "desktop", "light")
+    check "Direction: right to left" in clientExpectedBlock(
+      getStory("alert"), "kmail", "desktop", "light")
+    # Outlook web recolours the message itself in dark; the baseline
+    # engine does not, and nothing is said in light.
+    let owaDark = expectedBlock(getStory("receipt"), "outlookWeb",
+      "desktop", "dark")
+    check "Outlook web also recolours the message itself" in owaDark
+    check "recolours the message itself" notin expectedBlock(
+      getStory("receipt"), "chromium-baseline", "desktop", "dark")
+    check "recolours the message itself" notin expectedBlock(
+      getStory("receipt"), "outlookWeb", "desktop", "light")
+
   test "test_brief_unknown_family_fails_loudly":
     var raised = false
     try:
@@ -151,3 +177,101 @@ suite "review brief":
       raised = true
       check "nope" in e.msg
     check raised
+
+suite "real-client briefs":
+  test "test_client_brief_verification_client_stands_in_for_none":
+    # A webmail verification client: the elements from the tree, the
+    # stand-in statement, the sanitiser, and the dark statements only
+    # in the dark scheme.
+    let light = clientExpectedBlock(getStory("receipt"), "roundcube",
+      "desktop", "light")
+    check "### Expected: receipt — roundcube (verification) — " &
+      "desktop 800 — light — selfhosted-webmail (real client)" in light
+    check "This client stands in for no audience family" in light
+    check "Heading \"Receipt #1234\" (largest text)." in light
+    check "\"Acme logo\"" in light
+    check "scopes every selector under its message wrapper" in light
+    check "Elastic skin turns" notin light
+    check "Dark palette" notin light
+    let dark = clientExpectedBlock(getStory("receipt"), "roundcube",
+      "desktop", "dark")
+    check "Elastic skin turns its own chrome dark" in dark
+    check "defect (R-TXT-02)" in dark
+    check "Dark palette (dark): no @dark overrides — same as light." in dark
+    # SnappyMail strips the head: its dark palette line says so, and
+    # its degradations name the missing head CSS.
+    let sm = clientExpectedBlock(getStory("alert"), "snappymail",
+      "mobile", "dark")
+    check "mobile 375 — dark — selfhosted-webmail" in sm
+    check "the message's own dark rules do not apply" in sm
+    check "- no head CSS (no responsive, dark or hover rules)" in sm
+    check "Heading \"تنبيه أمني\" (largest text)." in sm
+    # A desktop verification client.
+    let kmail = clientExpectedBlock(getStory("alert"), "kmail",
+      "desktop", "light")
+    check "This client stands in for no audience family" in kmail
+    check "KMail draws its own header block" in kmail
+    check "linux-desktop (real client)" in kmail
+
+  test "test_client_brief_thunderbird_is_the_audience_family":
+    let tb = clientExpectedBlock(getStory("alert"), "thunderbird",
+      "desktop", "dark")
+    check "This is the real client of the `thunderbird` audience " &
+      "family, not an emulation." in tb
+    check "stands in for no audience family" notin tb
+    check "never stretched to the column width" in tb
+    check "dark adaptation of messages" in tb
+    check "### Expected: alert — thunderbird (thunderbird) — desktop " &
+      "800 — dark — linux-desktop (real client)" in tb
+
+  test "test_client_brief_unknown_or_drifted_client_fails":
+    var raised = false
+    try:
+      discard clientExpectedBlock(getStory("receipt"), "mutt",
+        "desktop", "light")
+    except BriefError as e:
+      raised = true
+      check "mutt" in e.msg
+    check raised
+    # Claws Mail's missing bidi reordering is expected for a
+    # right-to-left story only.
+    check "no bidirectional reordering" in clientExpectedBlock(
+      getStory("alert"), "claws-mail", "desktop", "light")
+    check "no bidirectional reordering" notin clientExpectedBlock(
+      getStory("receipt"), "claws-mail", "desktop", "light")
+    check "no bidirectional reordering" notin clientExpectedBlock(
+      getStory("alert"), "kmail", "desktop", "light")
+    check briefClientMismatch("selfhosted-webmail", "verification",
+      "roundcube") == ""
+    check "linux-desktop/verification" in briefClientMismatch(
+      "selfhosted-webmail", "verification", "kmail")
+    check briefClientMismatch("linux-desktop", "verification",
+      "thunderbird").len > 0
+    check clientBriefName("linux-desktop", "verification", "claws-mail",
+      "desktop", "light") ==
+      "brief-linux-desktop-verification-claws-mail-desktop-light.md"
+
+suite "the broken-story fixture (methodology checklist item 7)":
+  test "test_broken_receipt_loses_its_logo_but_not_its_expectation":
+    registerBrokenStories()
+    registerStoryTree("receiptB",
+      proc(): EmailNode = seedReceipt())
+    let intact = getStory("receipt").render().html
+    let broken = getStory("receiptB").render().html
+    check "<img " in intact
+    check "<img " notin broken
+    # Only the image went: the rest of the output is byte-identical.
+    check dropFirstImage(intact) == broken
+    check broken.len < intact.len
+    # The brief still expects the logo, as the intact receipt's does.
+    let brief = expectedBlock(getStory("receiptB"),
+      "chromium-baseline", "desktop", "light")
+    check "Logo image \"Acme logo\", ~120 px wide, centred" in brief
+    # The fixture refuses HTML it cannot break exactly once.
+    for bad in ["<p>no image</p>", "<img src=a><img src=b>"]:
+      var raised = false
+      try:
+        discard dropFirstImage(bad)
+      except StoryError:
+        raised = true
+      check raised

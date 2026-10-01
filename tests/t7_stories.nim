@@ -85,9 +85,9 @@ suite "story registry":
     check "Thanks for your order." in receiptHtml
     check "Receipt #1234" in receiptText
     let (alertHtml, alertText) = getStory("alert").render()
-    check "<title>Security alert</title>" in alertHtml
-    check "New sign-in detected." in alertHtml
-    check "Security alert" in alertText
+    check "<title>تنبيه أمني</title>" in alertHtml
+    check "تم رصد تسجيل دخول جديد." in alertHtml
+    check "تنبيه أمني" in alertText
 
   test "story registers a template with its data; stories iterates":
     # Registered here, after the set pins above ran.

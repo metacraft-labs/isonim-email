@@ -282,7 +282,8 @@ proc buttonLine(node: EmailNode): string =
     parts.add("full-width")
   "Button " & title & ": " & parts.join(", ") & "."
 
-proc imageLine(node: EmailNode; bg: string): tuple[line, alt: string] =
+proc imageLine(node: EmailNode; bg, inherited: string):
+    tuple[line, alt: string] =
   let alt = attrValue(node, "alt")
   let shown = if alt.len > 0: alt else: "(no alt)"
   var role = "Image"
@@ -304,6 +305,8 @@ proc imageLine(node: EmailNode; bg: string): tuple[line, alt: string] =
   let align = attrValue(node, "align")
   if align.len > 0:
     parts.add(align & "-aligned")
+  elif inherited == "center":
+    parts.add("centred")
   parts.add("on " & bg)
   (role & " \"" & shown & "\", " & parts.join(", ") & ".", alt)
 
@@ -315,6 +318,16 @@ proc countTag(node: EmailNode; tag: string): int =
   for c in node.children:
     result += countTag(c, tag)
 
+proc rowTexts(node: EmailNode; acc: var seq[string]) =
+  ## The text of every `tr` under `node`, in document order.
+  if node == nil:
+    return
+  if tagLower(node) == "tr":
+    acc.add(collectText(node).strip())
+    return
+  for c in node.children:
+    rowTexts(c, acc)
+
 proc tableLine(node: EmailNode; width, breakpoint: int): string =
   let rows = countTag(node, "tr")
   var title = "Table"
@@ -322,7 +335,19 @@ proc tableLine(node: EmailNode; width, breakpoint: int): string =
   if caption.len > 0:
     title &= " \"" & caption & "\""
   result = title & ": " & $rows &
-    (if rows == 1: " row." else: " rows.")
+    (if rows == 1: " row" else: " rows")
+  # The rows' text, so a reviewer can check each is on screen (up to
+  # five; longer tables name the first five).
+  var texts: seq[string] = @[]
+  rowTexts(node, texts)
+  var shown: seq[string] = @[]
+  for t in texts:
+    if t.len > 0 and shown.len < 5:
+      shown.add("\"" & t & "\"")
+  if shown.len > 0:
+    result &= ": " & shown.join(", ") &
+      (if texts.len > shown.len: ", …" else: "")
+  result &= "."
   if tagLower(node) == "mailtable":
     case attrValue(node, "mobile").toLowerAscii()
     of "stack":
@@ -359,20 +384,30 @@ proc columnsLine(node: EmailNode; width, breakpoint: int): string =
 
 proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
                items: var seq[string]; images: var seq[string];
-               firstH1: var bool) =
+               firstH1: var bool; align = "center") =
   ## Present-list lines plus image alts, in document order. Containers
   ## recurse silently; only `mailColumns` (and multi-column
-  ## `mailSection`) add an arrangement line of their own.
+  ## `mailSection`) add an arrangement line of their own. `align` is
+  ## the horizontal alignment content inherits: the document skeleton
+  ## centres its content cell, and a container's own `align` attribute
+  ## or `text-align` style replaces it.
   if node == nil:
     return
   if node.kind != enElement:
     for c in node.children:
-      walkItems(c, bg, width, breakpoint, items, images, firstH1)
+      walkItems(c, bg, width, breakpoint, items, images, firstH1, align)
     return
   var curBg = bg
   let nodeBg = styleValue(node, "background-color")
   if nodeBg.len > 0:
     curBg = nodeBg
+  var curAlign = align
+  let ownAlign = attrValue(node, "align")
+  let ownText = styleValue(node, "text-align")
+  if ownAlign.len > 0:
+    curAlign = ownAlign.toLowerAscii()
+  elif ownText.len > 0:
+    curAlign = ownText.toLowerAscii()
   case tagLower(node)
   of "h1", "h2", "h3", "h4", "h5", "h6":
     items.add(headingLine(node, firstH1))
@@ -381,7 +416,7 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
   of "mailbutton", "button":
     items.add(buttonLine(node))
   of "mailimage", "img":
-    let (line, alt) = imageLine(node, curBg)
+    let (line, alt) = imageLine(node, curBg, align)
     items.add(line)
     images.add(alt)
   of "mailtable", "table":
@@ -389,7 +424,8 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
   of "mailcolumns":
     items.add(columnsLine(node, width, breakpoint))
     for c in node.children:
-      walkItems(c, curBg, width, breakpoint, items, images, firstH1)
+      walkItems(c, curBg, width, breakpoint, items, images, firstH1,
+        curAlign)
   of "mailsection":
     var cols = 0
     for c in node.children:
@@ -398,10 +434,12 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     if cols >= 2:
       items.add(columnsLine(node, width, breakpoint))
     for c in node.children:
-      walkItems(c, curBg, width, breakpoint, items, images, firstH1)
+      walkItems(c, curBg, width, breakpoint, items, images, firstH1,
+        curAlign)
   else:
     for c in node.children:
-      walkItems(c, curBg, width, breakpoint, items, images, firstH1)
+      walkItems(c, curBg, width, breakpoint, items, images, firstH1,
+        curAlign)
 
 proc linksUnder(node: EmailNode; acc: var seq[tuple[text, href: string]]) =
   ## (text, href) of every `a`/`mailNavLink` in document order.
@@ -458,6 +496,27 @@ proc darkOverrides(doc: EmailNode): tuple[bg, fg: seq[string]] =
     for v in sub.fg:
       if v notin result.fg:
         result.fg.add(v)
+
+proc directionLine(doc: EmailNode): string =
+  ## "" for a left-to-right document; for a right-to-left one, the line
+  ## that tells a reviewer what to expect of it.
+  if attrValue(doc, "dir").toLowerAscii() != "rtl":
+    return ""
+  let lang = attrValue(doc, "lang")
+  "Direction: right to left (`dir=\"rtl\"`" &
+    (if lang.len > 0: ", lang `" & lang & "`" else: "") &
+    "): words run from the right (a sentence's final full stop sits " &
+    "at its left end); the skeleton's centred content cell still " &
+    "centres headings, text and images."
+
+proc familyDarkNote(family: string): string =
+  ## What the family's client does to the message in a dark scheme on
+  ## top of the message's own dark rules ("" when nothing).
+  if family == "outlookWeb":
+    return "Outlook web also recolours the message itself (partial " &
+      "inversion: light backgrounds turn dark, dark text turns light); " &
+      "that is expected, not a defect, as long as text stays legible."
+  ""
 
 proc darkLine(dark: tuple[bg, fg: seq[string]]; scheme: string): string =
   var parts: seq[string] = @[]
@@ -607,12 +666,16 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
     firstH1)
   items.add(footerLine(doc))
   if familyHonoursDark(family) and scheme != "light":
-    items.add(darkLine(dark, scheme))
+    let note = familyDarkNote(family)
+    items.add(darkLine(dark, scheme) & (if note.len > 0: " " & note else: ""))
   let backendKind =
     if familyApproximation(family): "emulation" else: "local engine"
   result = "### Expected: " & story.name & " — " & family & " — " &
     viewportLabel(viewport) & " — " & scheme & " — backend A (" &
     backendKind & ")\n"
+  let direction = directionLine(doc)
+  if direction.len > 0:
+    result.add("\n" & direction & "\n")
   result.add("\nPresent, top to bottom:\n")
   for i, item in items:
     result.add($(i + 1) & ". " & item & "\n")
@@ -620,6 +683,272 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   for d in degradationLines(family, doc, images):
     result.add("- " & d & "\n")
   result.add("\nNot expected here: " & notExpectedLine(family, images) &
+    ".\n")
+
+# ----------------------------------------------------------------------------
+# Real-client briefs
+# ----------------------------------------------------------------------------
+# A capture made by a real client (a provider other than backend A) gets
+# a brief of its own: the same `Present` list, plus what that client is
+# and what it is expected to show. The statements are the recorded
+# behaviour of each client: the sanitiser evidence in
+# `tools/capture/emulation/RULES.md` and the clients' dark modes and
+# crops as the providers document them. Mirrors the client descriptors
+# of `tools/capture/providers/` (client id, backend, family): update both
+# together. `briefClientMismatch` lets the driver refuse a drifted pair.
+
+type
+  RealClient* = object
+    ## What a brief says about one real client.
+    id*: string            ## the client id (`ClientDescriptor.clientId`)
+    display*: string       ## the name readers see
+    backend*: string       ## the serving provider's backend label
+    family*: string        ## its capture family
+    engine*: string        ## what renders the message
+    audience*: string      ## the audience family it is ("" = none)
+    headCss*: bool         ## the message's `<style>` blocks reach the render
+    darkRules*: bool       ## in its dark scheme the message's own
+                           ## `prefers-color-scheme: dark` rules can apply
+    shows*: seq[string]    ## sanitiser and engine behaviour, one line each
+    dark*: seq[string]     ## dark-scheme behaviour ("" scheme lines)
+    degradations*: seq[string] ## expected differences from the design
+    rtlDegradation*: string    ## an extra expected difference for a
+                               ## right-to-left story ("" = none)
+    notExpected*: seq[string]  ## what a reviewer must not expect here
+
+const verificationNote = "This client stands in for no audience " &
+  "family: it shows how a real, independent sanitiser and engine " &
+  "treat the message, not how Gmail, Outlook or Apple Mail render it."
+
+const darkTextDefect = "Every text keeps its own colour: text that " &
+  "turns light on the message's light background (invisible or " &
+  "faint) is a defect (R-TXT-02), not dark mode."
+
+const realClients*: array[7, RealClient] = [
+  RealClient(id: "roundcube", display: "Roundcube 1.6 (Elastic skin)",
+    backend: "selfhosted-webmail", family: "verification",
+    engine: "Chromium, behind Roundcube's washtml sanitiser",
+    audience: "", headCss: true, darkRules: true,
+    shows: @[
+      "Roundcube keeps the message's `<style>` blocks, scopes every " &
+        "selector under its message wrapper and prefixes class names " &
+        "(`v1…`): the message's responsive and dark rules apply " &
+        "inside the message.",
+      "Conditional comments are removed with their content; `role` " &
+        "and `aria-*` attributes are removed (not visible).",
+      "Remote images load (from the local assets host)."],
+    dark: @[
+      "Dark: Roundcube's Elastic skin turns its own chrome dark; " &
+        "Roundcube does not recolour the message. The message keeps " &
+        "its own backgrounds and text colours (a light message inside " &
+        "dark chrome is expected) unless its own dark rules change " &
+        "them.",
+      darkTextDefect],
+    degradations: @[],
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)"]),
+  RealClient(id: "snappymail", display: "SnappyMail 2.38",
+    backend: "selfhosted-webmail", family: "verification",
+    engine: "Chromium, behind SnappyMail's HTML cleaner",
+    audience: "", headCss: false, darkRules: false,
+    shows: @[
+      "SnappyMail removes every `<style>` block, class and id of the " &
+        "message: only inline styles reach the page.",
+      "Hidden elements (the preheader) are removed.",
+      "An image's `width` attribute becomes inline " &
+        "`width:100%;max-width:{w}px`, so images keep their designed " &
+        "width."],
+    dark: @[
+      "Dark: SnappyMail has no dark mode; its dark scheme is the " &
+        "NightShine theme, whose chrome is dark and whose own text " &
+        "colour is light. The message keeps its inline backgrounds (a " &
+        "light message inside dark chrome is expected).",
+      darkTextDefect],
+    degradations: @[
+      "no head CSS (no responsive, dark or hover rules): the message " &
+        "must still be correct with inline styles only (R-CSS-01)"],
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)",
+      "the message's own dark colours (SnappyMail strips its dark rules)"]),
+  RealClient(id: "thunderbird", display: "Thunderbird",
+    backend: "linux-desktop", family: "thunderbird", engine: "Gecko",
+    audience: "thunderbird", headCss: true, darkRules: true,
+    shows: @[
+      "Thunderbird renders the message in Gecko with its `<style>` " &
+        "blocks; remote images load from the assets host only.",
+      "Thunderbird resizes large images to the message pane: every " &
+        "image must still show at its designed size, never stretched " &
+        "to the column width.",
+      "The crop is the message pane only: no Thunderbird headers or " &
+        "toolbars."],
+    dark: @[
+      "Dark: Thunderbird's dark theme, and its own dark adaptation of " &
+        "messages (on by default) may recolour the whole message to a " &
+        "dark background with light text. That is expected, not a " &
+        "defect; text must stay legible and the hierarchy unchanged."],
+    degradations: @[],
+    notExpected: @[]),
+  RealClient(id: "evolution", display: "Evolution 3.58",
+    backend: "linux-desktop", family: "verification",
+    engine: "WebKitGTK",
+    audience: "", headCss: true, darkRules: true,
+    shows: @[
+      "Evolution renders the message's HTML in WebKitGTK with its " &
+        "`<style>` blocks; remote images load from the assets host " &
+        "only.",
+      "The crop is the message's own frame: no Evolution header block."],
+    dark: @[
+      "Dark: GTK's dark theme. The message sees " &
+        "`prefers-color-scheme: dark`, and Evolution does not adapt " &
+        "message colours: the message keeps its own backgrounds.",
+      darkTextDefect],
+    degradations: @[],
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)"]),
+  RealClient(id: "geary", display: "Geary 46", backend: "linux-desktop",
+    family: "verification", engine: "WebKitGTK",
+    audience: "", headCss: true, darkRules: true,
+    shows: @[
+      "Geary renders the message in WebKitGTK with its `<style>` " &
+        "blocks; its remote images are shown through Geary's own " &
+        "\"Show\" control.",
+      "The crop is the open email's body in Geary's conversation " &
+        "viewer: no Geary headers."],
+    dark: @[
+      "Dark: GTK's dark theme. The message sees " &
+        "`prefers-color-scheme: dark`; Geary does not adapt message " &
+        "colours, and its message view keeps a dark text colour.",
+      darkTextDefect],
+    degradations: @[],
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)"]),
+  RealClient(id: "kmail", display: "KMail 6.7", backend: "linux-desktop",
+    family: "verification", engine: "QtWebEngine (Chromium)",
+    audience: "", headCss: true, darkRules: true,
+    shows: @[
+      "KMail renders the message in QtWebEngine with its `<style>` " &
+        "blocks; external references (the images) are loaded through " &
+        "KMail's own notice.",
+      "KMail draws its own header block (subject, sender, date) inside " &
+        "the message view, above the email; it is in the crop and is " &
+        "not part of the email."],
+    dark: @[
+      "Dark: Breeze Dark around the message. The message sees " &
+        "`prefers-color-scheme: dark`; KMail does not adapt message " &
+        "colours, and its message view keeps a dark text colour.",
+      darkTextDefect],
+    degradations: @[],
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)"]),
+  RealClient(id: "claws-mail", display: "Claws Mail 4.4",
+    backend: "linux-desktop", family: "verification",
+    engine: "litehtml (Claws Mail's HTML viewer plugin)",
+    audience: "", headCss: true, darkRules: false,
+    shows: @[
+      "litehtml is a deliberately weak renderer with partial CSS " &
+        "support (no engine quirks): a stress test for graceful " &
+        "degradation. Plainer styling is expected; every element must " &
+        "still be present, legible, in order and aligned as in the " &
+        "other clients.",
+      "The crop is the viewer's viewport, without its scroll bar."],
+    dark: @[],
+    degradations: @[
+      "simpler typography and spacing than in a browser engine"],
+    rtlDegradation: "right-to-left text: litehtml has no bidirectional " &
+      "reordering, so the words of an Arabic or Hebrew line appear in " &
+      "left-to-right order (each word itself is shaped correctly)",
+    notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
+      "(this client stands in for none of them)",
+      "dark colours (Claws Mail is captured in light only)"]),
+]
+
+proc realClient*(id: string): RealClient =
+  ## The brief's knowledge of client `id`; raises `BriefError` for a
+  ## client it does not know (a new client needs its statements first).
+  for c in realClients:
+    if c.id == id:
+      return c
+  var known: seq[string] = @[]
+  for c in realClients:
+    known.add(c.id)
+  raise newException(BriefError, "unknown real client '" & id &
+    "' (known: " & known.join(", ") & ")")
+
+proc briefClientMismatch*(backend, family, id: string): string =
+  ## "" when the brief knows `id` as served by `backend` in `family`,
+  ## otherwise why not (the driver refuses a drifted pair).
+  let c = realClient(id)
+  if c.backend != backend or c.family != family:
+    return "client '" & id & "' is " & c.backend & "/" & c.family &
+      " in the brief generator, not " & backend & "/" & family
+  ""
+
+proc clientBriefName*(backend, family, id, viewport,
+    scheme: string): string =
+  ## The brief file of one real-client capture: the capture's name
+  ## without its `-<images>.png`.
+  "brief-" & backend & "-" & family & "-" & id & "-" & viewport & "-" &
+    scheme & ".md"
+
+proc clientExpectedBlock*(story: Story; id, viewport,
+    scheme: string): string =
+  ## The expected-screenshot block for one real-client capture: the
+  ## `Present` list from the story's tree, then what the client stands
+  ## in for, what it is expected to show (sanitiser, dark behaviour,
+  ## crop), its expected degradations and what is not expected there.
+  ## Ends with a newline (file-ready).
+  let c = realClient(id)
+  let width = viewportWidth(viewport)
+  let breakpoint = defaultTarget().breakpoint
+  let (doc, dark) = renderedTree(story)
+  var items: seq[string] = @[]
+  var images: seq[string] = @[]
+  var firstH1 = false
+  walkItems(doc, docBackground(doc), width, breakpoint, items, images,
+    firstH1)
+  items.add(footerLine(doc))
+  if scheme != "light":
+    if c.darkRules and c.headCss:
+      items.add(darkLine(dark, scheme))
+    else:
+      items.add("Dark palette (" & scheme & "): the message's own dark " &
+        "rules do not apply in this client; it keeps its light colours.")
+  result = "### Expected: " & story.name & " — " & c.id & " (" &
+    c.family & ") — " & viewportLabel(viewport) & " — " & scheme &
+    " — " & c.backend & " (real client)\n"
+  result.add("\nClient: " & c.display & ", rendering with " & c.engine &
+    ".\n")
+  if c.audience.len > 0:
+    result.add("This is the real client of the `" & c.audience &
+      "` audience family, not an emulation.\n")
+  else:
+    result.add(verificationNote & "\n")
+  let direction = directionLine(doc)
+  if direction.len > 0:
+    result.add("\n" & direction & "\n")
+  result.add("\nPresent, top to bottom:\n")
+  for i, item in items:
+    result.add($(i + 1) & ". " & item & "\n")
+  result.add("\nWhat this client is expected to show:\n")
+  for line in c.shows:
+    result.add("- " & line & "\n")
+  if scheme != "light":
+    for line in c.dark:
+      result.add("- " & line & "\n")
+  result.add("\nExpected degradations in this client:\n")
+  var degr = c.degradations
+  if c.rtlDegradation.len > 0 and directionLine(doc).len > 0:
+    degr.add(c.rtlDegradation)
+  if c.audience.len > 0:
+    for d in degradationLines(c.audience, doc, images):
+      if d != "(none)":
+        degr.add(d)
+  if degr.len == 0:
+    degr.add("(none)")
+  for d in degr:
+    result.add("- " & d & "\n")
+  result.add("\nNot expected here: " &
+    (if c.notExpected.len == 0: "(none)" else: c.notExpected.join("; ")) &
     ".\n")
 
 proc numberedItems(`block`: string): seq[string] =

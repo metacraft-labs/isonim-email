@@ -14,6 +14,7 @@
 import std/[os, json, times]
 import isonim_email
 import stories/email_stories
+import stories/seed_broken
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -59,6 +60,7 @@ proc main(): int =
     # CI matrices and the t7 story-set pins never see them.
     registerOverflowStories()
     registerSanitiserProbeStory()
+    registerBrokenStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

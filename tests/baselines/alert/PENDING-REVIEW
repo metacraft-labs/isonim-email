@@ -1,1 +1,0 @@
-Out of date: these baselines were captured while mailImage reached the output as a raw custom tag, so they show no image. The story's image now renders (mailImage lowers to img, served from the fixture host). Re-approve only after a real visual review of the new captures, with `just email-capture-ci --update-baselines --approve <story>`.

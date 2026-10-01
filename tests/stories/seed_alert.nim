@@ -10,7 +10,10 @@ import fixture_images
 
 proc seedAlert*(): EmailNode =
   ## A P1-clean alert: `lang`/`dir`/`title`/`preheader` (RTL, to pin
-  ## `dir` propagation past the `ltr` default), an `h1`, one layout
+  ## `dir` propagation past the `ltr` default), its copy in Arabic to
+  ## match `lang="ar"` (English copy in an RTL document is laid out
+  ## right to left, so a sentence's final full stop shows at its left
+  ## end; reviewers rightly read that as wrong text), an `h1`, one layout
   ## table (its `role` left for P7 to backfill) and a `mailImage`
   ## with `alt` and a px width. Only elements with a lowering: a bare
   ## `img` is not part of the vocabulary, and an element without a
@@ -19,15 +22,17 @@ proc seedAlert*(): EmailNode =
   let doc = r.createElement("mailDocument")
   r.setAttribute(doc, "lang", "ar")
   r.setAttribute(doc, "dir", "rtl")
-  r.setAttribute(doc, "title", "Security alert")
-  r.setAttribute(doc, "preheader", "New sign-in detected.")
+  r.setAttribute(doc, "title", "تنبيه أمني") # "Security alert"
+  r.setAttribute(doc, "preheader", "تم رصد تسجيل دخول جديد.")
+  # "New sign-in detected."
   let h1 = r.createElement("h1")
-  r.setTextContent(h1, "Security alert")
+  r.setTextContent(h1, "تنبيه أمني")
   r.appendChild(doc, h1)
   let table = r.createElement("table")
   let tr = r.createElement("tr")
   let td = r.createElement("td")
-  r.setTextContent(td, "Sign-in from a new device.")
+  r.setTextContent(td, "تسجيل دخول من جهاز جديد.")
+  # "Sign-in from a new device."
   r.appendChild(tr, td)
   r.appendChild(table, tr)
   r.appendChild(doc, table)
@@ -35,7 +40,7 @@ proc seedAlert*(): EmailNode =
   # served to the capture browsers from the fixture host).
   let img = r.createElement("mailImage")
   r.setAttribute(img, "src", fixtureImageUrl("shield.png"))
-  r.setAttribute(img, "alt", "Shield icon")
+  r.setAttribute(img, "alt", "رمز الدرع") # "Shield icon"
   r.setStyle(img, "width", "48px")
   r.appendChild(doc, img)
   doc

@@ -17,8 +17,8 @@ const receiptText = "Receipt #1234\n\nThanks for your order.\n\n" &
   ## generator will produce these; the content mirrors the seed's
   ## title, preheader and line item).
 
-const alertText = "Security alert\n\nNew sign-in detected.\n\n" &
-  "Sign-in from a new device.\n"
+const alertText = "تنبيه أمني\n\nتم رصد تسجيل دخول جديد.\n\n" &
+  "تسجيل دخول من جهاز جديد.\n"
   ## Fixed plain-text alternative for the alert seed.
 
 proc renderReceipt*(): StoryHtml =

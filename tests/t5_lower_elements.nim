@@ -147,10 +147,15 @@ suite "mailImage lowers to the fixed-size image":
     let res = renderOne(image(EmailRenderer(), "https://x.test/logo.png",
       "Acme logo", styles = [("width", "120px")]))
     check res.diagnostics.len == 0
+    # The px width capped by max-width:100% (never width:100% capped by
+    # a px max-width, which Thunderbird's shrinktofit stylesheet
+    # overrides), centred by margin under the skeleton's centred cell.
     check ("<img src=\"https://x.test/logo.png\" alt=\"Acme logo\" " &
-      "width=\"120\" style=\"display:block;border:0;outline:none;" &
-      "text-decoration:none;height:auto;width:100%;max-width:120px;" &
-      "-ms-interpolation-mode:bicubic;" & altStyle & "\">") in res.html
+      "width=\"120\" style=\"display:block;margin:0 auto;border:0;" &
+      "outline:none;text-decoration:none;height:auto;width:120px;" &
+      "max-width:100%;-ms-interpolation-mode:bicubic;" & altStyle &
+      "\">") in res.html
+    check ";width:100%" notin res.html.split("<img ")[1].split(">")[0]
     check "<mailimage" notin res.html.toLowerAscii()
     # No height attribute unless the author gave one.
     check "height=\"" notin res.html.split("<img ")[1].split(">")[0]
@@ -163,7 +168,7 @@ suite "mailImage lowers to the fixed-size image":
     check ("alt=\"Acme logo\" width=\"120\" height=\"40\" style=\"" &
       "display:block;") in res.html
     # The inline height stays auto, so the aspect follows the width.
-    check "height:auto;width:100%;max-width:120px;" in res.html
+    check "height:auto;width:120px;max-width:100%;" in res.html
 
   test "test_linked_image_wraps_without_whitespace":
     # rule: R-IMG-10
@@ -174,8 +179,8 @@ suite "mailImage lowers to the fixed-size image":
     check ("<a href=\"https://acme.example/\" target=\"_blank\" " &
       "style=\"display:block;\"><img src=\"https://x.test/logo.png\"") in
       res.html
-    check "max-width:120px;-ms-interpolation-mode:bicubic;" & altStyle &
-      "\"></a>" in res.html
+    check "width:120px;max-width:100%;-ms-interpolation-mode:bicubic;" &
+      altStyle & "\"></a>" in res.html
 
   test "test_intrinsic_width_halves_for_2x_assets":
     # rule: R-IMG-05
@@ -189,7 +194,8 @@ suite "mailImage lowers to the fixed-size image":
       store)
     check retina.diagnostics.len == 0
     check ("width=\"" & $(info.width div 2) & "\" style=") in retina.html
-    check ("max-width:" & $(info.width div 2) & "px;") in retina.html
+    check (";width:" & $(info.width div 2) & "px;max-width:100%;") in
+      retina.html
     let plain = renderOne(image(EmailRenderer(), "plain.png", "Plain"),
       store)
     check plain.diagnostics.len == 0
@@ -198,6 +204,53 @@ suite "mailImage lowers to the fixed-size image":
     let given = renderOne(image(EmailRenderer(), "plain.png", "Plain",
       styles = [("width", "7px")]), store)
     check ("width=\"7\" style=") in given.html
+
+  test "test_mail_image_margin_follows_the_inherited_alignment":
+    # rule: R-IMG-01
+    # The image sits in a cell whose own alignment (attribute or
+    # text-align) decides the margin; with none, the skeleton's centred
+    # content cell centres it.
+    proc inCell(cellAttrs, cellStyles: seq[(string, string)]):
+        string =
+      let html = renderTree(docWith(proc(r: EmailRenderer;
+          doc: EmailNode) =
+        let table = r.createElement("table")
+        let tr = r.createElement("tr")
+        let td = r.createElement("td")
+        for (k, v) in cellAttrs:
+          r.setAttribute(td, k, v)
+        for (k, v) in cellStyles:
+          r.setStyle(td, k, v)
+        r.appendChild(td, image(r, "https://x.test/logo.png", "Acme logo",
+          styles = [("width", "120px")]))
+        r.appendChild(tr, td)
+        r.appendChild(table, tr)
+        r.appendChild(doc, table))).html
+      html.split("<img ")[1].split(">")[0]
+    check "style=\"display:block;margin:0 auto;border:0;" in inCell(@[], @[])
+    check "style=\"display:block;margin:0 auto;border:0;" in
+      inCell(@[("align", "center")], @[])
+    check "style=\"display:block;margin:0 0 0 auto;border:0;" in
+      inCell(@[("align", "right")], @[])
+    check "style=\"display:block;margin:0 0 0 auto;border:0;" in
+      inCell(@[], @[("text-align", "right")])
+    let left = inCell(@[("align", "left")], @[])
+    check "style=\"display:block;border:0;" in left
+    check "margin" notin left
+    # A table's own align places the table, not its content: it does
+    # not stop the walk, so the skeleton's centre still applies.
+    let tableAligned = renderTree(docWith(proc(r: EmailRenderer;
+        doc: EmailNode) =
+      let table = r.createElement("table")
+      r.setAttribute(table, "align", "left")
+      let tr = r.createElement("tr")
+      let td = r.createElement("td")
+      r.appendChild(td, image(r, "https://x.test/logo.png", "Acme logo",
+        styles = [("width", "120px")]))
+      r.appendChild(tr, td)
+      r.appendChild(table, tr)
+      r.appendChild(doc, table))).html
+    check "style=\"display:block;margin:0 auto;border:0;" in tableAligned
 
   test "test_unknown_width_is_an_error":
     let res = renderOne(image(EmailRenderer(), "https://x.test/logo.png",
@@ -228,7 +281,7 @@ suite "seed stories reach the output with their images":
       receipt
     let alert = renderAlert().html
     check "<img src=\"" & fixtureImageUrl("shield.png") &
-      "\" alt=\"Shield icon\" width=\"48\" style=\"display:block;" in
+      "\" alt=\"رمز الدرع\" width=\"48\" style=\"display:block;" in
       alert
     for html in [receipt, alert]:
       check "<mailimage" notin html.toLowerAscii()

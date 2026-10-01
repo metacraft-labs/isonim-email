@@ -30,6 +30,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { clientBriefArgs, clientBriefJobs } from "./briefs.ts";
 import { composeStorySheets } from "./contact_sheet.ts";
 import {
   changedFilesSince,
@@ -192,7 +193,10 @@ each capture's provenance (network.blocked); a desktop client runs in a
 network namespace with loopback only and name resolution of its own,
 reaching the local IMAP server and assets service and nothing else (a
 client that takes a proxy uses the assets service's guard).
-Review briefs are written for the backend-a families only.
+Review briefs: one per backend-a family, viewport and scheme
+(brief-<family>-<viewport>-<scheme>.md), and one per real-client capture
+(brief-<backend>-<family>-<client>-<viewport>-<scheme>.md, saying what
+the client stands in for and what it is expected to show).
 On an --affected run the change selects backend a's captures only; the
 real clients of the other providers (the webmails, the desktop clients)
 run on --full, when nothing in this repository changed, or when named
@@ -591,8 +595,9 @@ async function main(): Promise<void> {
   // Step 1b: review briefs for the selected
   // matrix — brief-<family>-<viewport>-<scheme>.md per story dir,
   // written before any capture so reviewers start with the briefs.
-  // Briefs describe what backend a's families are expected to show;
-  // the real clients of the other providers get none (yet).
+  // These describe what backend a's families are expected to show; the
+  // real clients of the other providers get theirs once the plan is
+  // routed (step 1c).
   const viewportNames = opt.viewports.map((v) => v.name).join(",");
   const briefFamilies = families.filter((f) =>
     Object.hasOwn(BROWSER_FAMILIES, f),
@@ -678,6 +683,25 @@ async function main(): Promise<void> {
       emptyMatrixReason(SERVED, families, familySource, backends, opt.clients),
     );
   }
+
+  // Step 1c: a brief for every real-client capture the plan routes
+  // (brief-<backend>-<family>-<client>-<viewport>-<scheme>.md), written
+  // before any capture starts, like backend a's.
+  const tClientBriefs = Date.now();
+  for (const job of clientBriefJobs(plan.items, BROWSER_BACKEND)) {
+    const briefed = spawnSync(
+      opt.briefDriver,
+      clientBriefArgs(job, join(runDir, job.story)),
+      { cwd: repoRoot, stdio: ["ignore", "inherit", "inherit"] },
+    );
+    if (briefed.status !== 0) {
+      await services.stopAll();
+      fail(
+        `brief driver exited with status ${briefed.status} (story ${job.story}, client ${job.clientId})`,
+      );
+    }
+  }
+  steps.briefs = (steps.briefs ?? 0) + (Date.now() - tClientBriefs);
 
   // Steps 2+4: every provider runs at once, in-process; one JSON line
   // per finished capture on stdout; index.json rewritten atomically.

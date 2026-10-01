@@ -112,7 +112,7 @@ template story*(name: static string; tpl: typed; data: typed;
   ## As above, with overrides: `body` runs once, at registration, with
   ## `target` (an `EmailTarget`, default `defaultTarget()`) and
   ## `profile` (an `AudienceProfile`, default `consumer`) in scope as
-  ## variables, e.g. `story("alert/dark", alertTpl, data): target.darkMode = dmDesigned`.
+  ## variables, e.g. `story("alert/no-dark", alertTpl, data): target.darkMode = dmNone`.
   block:
     var target {.inject.} = defaultTarget()
     var profile {.inject.} = consumer

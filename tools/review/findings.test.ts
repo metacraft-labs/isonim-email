@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   parseFindingLine,
   rateFinding,
   readFindings,
+  updateFindingStatus,
   type Finding,
   type NewFinding,
 } from "./findings.ts";
@@ -187,5 +188,81 @@ describe("rateFinding", () => {
     assert.equal(rateFinding(0), 10);
     assert.equal(rateFinding(0, 7), 7);
     assert.throws(() => rateFinding(-1));
+  });
+});
+
+describe("updateFindingStatus", () => {
+  it("changes one entry's status in place and keeps every other byte", () => {
+    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const path = join(dir, "findings.jsonl");
+    appendFinding(path, fields());
+    appendFinding(path, fields({ story: "alert" }));
+    // A key outside the format survives on the changed entry.
+    const lines = readFileSync(path, "utf8").split("\n");
+    lines[1] = lines[1]!.replace('"id":"F2"', '"id":"F2","note":"kept"');
+    writeFileSync(path, lines.join("\n"));
+    const before = readFileSync(path, "utf8").split("\n");
+    const f = updateFindingStatus(path, "F2", {
+      status: "fixed",
+      fixed_in_run: "r2",
+    });
+    assert.equal(f.status, "fixed");
+    assert.equal(f.fixed_in_run, "r2");
+    const after = readFileSync(path, "utf8").split("\n");
+    assert.equal(after.length, before.length);
+    assert.equal(after[0], before[0]);
+    assert.match(after[1]!, /"note":"kept"/);
+    assert.match(after[1]!, /"status":"fixed"/);
+    assert.match(after[1]!, /"fixed_in_run":"r2"/);
+    assert.deepEqual(
+      listFindings(path, { status: "open" }).map((x) => x.id),
+      ["F1"],
+    );
+    // wontfix carries its reason; the entry check still applies.
+    const w = updateFindingStatus(path, "F1", {
+      status: "wontfix",
+      reason: "measured: a capture artefact",
+    });
+    assert.equal(w.reason, "measured: a capture artefact");
+    assert.throws(
+      () => updateFindingStatus(path, "F2", { status: "wontfix" }),
+      /reason/,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("records the owner of an entry left open", () => {
+    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const path = join(dir, "findings.jsonl");
+    appendFinding(path, fields({ severity: "P3", owner: "text leaves" }));
+    appendFinding(path, fields({ severity: "P3" }));
+    assert.equal(readFindings(path)[0]!.owner, "text leaves");
+    assert.equal(readFindings(path)[1]!.owner, undefined);
+    const f = updateFindingStatus(path, "F2", {
+      status: "open",
+      owner: "capture provider",
+    });
+    assert.equal(f.owner, "capture provider");
+    assert.equal(readFindings(path)[1]!.owner, "capture provider");
+    assert.throws(() => appendFinding(path, fields({ owner: "" })), /owner/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a fixed entry without its run, and an unknown id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const path = join(dir, "findings.jsonl");
+    appendFinding(path, fields());
+    const before = readFileSync(path, "utf8");
+    assert.throws(
+      () => updateFindingStatus(path, "F1", { status: "fixed" }),
+      /fixed_in_run/,
+    );
+    assert.throws(
+      () =>
+        updateFindingStatus(path, "F9", { status: "fixed", fixed_in_run: "r" }),
+      /no entry with the id 'F9'/,
+    );
+    assert.equal(readFileSync(path, "utf8"), before);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

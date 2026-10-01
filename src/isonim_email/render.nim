@@ -257,6 +257,19 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   diags.add(headRes.diagnostics)
   diags.add(applyA11y(doc))
   diags.add(lintTree(doc, profile))
+  if target.darkMode == dmDesigned:
+    # R-DRK-04's dark scheme, as painted by the dark block when it
+    # survived the head budget (a dropped block paints nothing dark).
+    var darkSurvived = false
+    for blk in headRes.blocks:
+      if blk.kind == enHeadStyle and blk.priority == darkPriority:
+        darkSurvived = true
+    if darkSurvived:
+      var dark: seq[DarkDecl] = @[]
+      for d in styled.head:
+        if d.variant == "dark" and d.prop in ["color", "background-color"]:
+          dark.add((d.node, d.prop, d.value))
+      diags.add(lintDarkContrast(doc, dark))
   let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
 

@@ -219,6 +219,22 @@ email-shots-build: build-tailwind
 email-shots *args: email-shots-build
     node tools/capture/email-shots.ts {{args}}
 
+# The review loop's own check (visual design methodology, checklist
+# item 7): does a reviewer notice a missing element? Captures the
+# intact receipt and `receiptB` (the receipt with its logo
+# dropped from the output; its brief still expects the logo), then
+# prints what each read-only reviewer sub-agent must be given and where
+# its report is to be saved. The reviewers are agents, so the result is
+# a recorded session: `email-review-broken-check RUN` then checks the
+# saved reports and the session findings list (the broken story
+# reported missing its logo and rated 4 or lower, the intact one
+# passing, the P1 recorded).
+email-review-broken *args: email-shots-build
+    node tools/review/broken_story.ts prepare {{args}}
+
+email-review-broken-check run:
+    node tools/review/broken_story.ts check {{run}}
+
 # Capture regression checks (Tier-1 + Tier-2, Tier-3 record/gate),
 # run locally as part of `just test` (test-capture-ci) or on their own.
 # Captures the full story set on the pinned CI matrix (backend a only:
@@ -274,7 +290,7 @@ lint-nim:
 # parses the whole capture CLI under Node's type stripping, and
 # importing each emulation module plus the contact-sheet,
 # dom-assertions, perceptual, capture-ci, latency, launch, fixture-host,
-# capture-provider and findings
+# client-brief, capture-provider, findings and broken-story
 # modules parses those too (cache/affected ride along transitively).
 # The declarations tsc reads (@types/node, playwright-core's own) come
 # from the dev shell's ISONIM_EMAIL_TS_TYPES, a Nix-pinned tree linked
@@ -293,8 +309,10 @@ lint-ts:
     node --input-type=module -e "await import('./tools/capture/latency.ts')"
     node --input-type=module -e "await import('./tools/capture/launch.ts')"
     node --input-type=module -e "await import('./tools/capture/fixture_host.ts')"
+    node --input-type=module -e "await import('./tools/capture/briefs.ts')"
     for m in tools/capture/providers/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/review/findings.ts')"
+    node --input-type=module -e "await import('./tools/review/broken_story.ts')"
 
 lint-nix:
     nixfmt --check flake.nix

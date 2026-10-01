@@ -47,6 +47,11 @@ import ../passes/head
 ## the capture CLI to pick the families of an `--affected` run.
 const affects*: set[ClientFamily] = allFamilies
 
+const contentCellAlign* = "center"
+  ## The horizontal alignment of the skeleton's content cell
+  ## (`<td align="center">`, catalogue §1): what content inherits when
+  ## no container of its own sets one (the image lowering reads it).
+
 proc preheaderPaddingUnits*(preheader: string): int =
   ## R-PRE-02: N = clamp(100 − len(preheader), 0, 150), where len
   ## counts characters. The rule stays pending (the unit sequence and
@@ -150,8 +155,9 @@ proc lowerDocument*(doc: EmailNode; sections: EmailNode;
       r.appendChild(headEl, msoWrap(b))
     r.appendChild(headEl, msoGroupFix())
 
+  # R-DOC-14: no `class` on <body> (Roundcube copies it over the
+  # `rcmBody` class its scoped head rules select).
   let body = r.createElement("body")
-  r.setAttribute(body, "class", "body")
   r.setAttribute(body, "xml:lang", lang)
   r.setStyle(body, "margin", "0")
   r.setStyle(body, "padding", "0")

@@ -119,15 +119,22 @@ painted; the same message with the class removed from `<body>` keeps
 `div.rcmBody` and paints it (the test's control). Recorded as a
 library issue rather than worked around here.
 
+Since the skeleton dropped the body class (catalogue R-DOC-14), the
+wrapper keeps `rcmBody` and the scoped rules apply; the test now
+checks that directly and keeps the old failure as its control (the
+same message with a body class added).
+
 **SnappyMail's dark themes and uncoloured text.** In the dark theme,
 text with no inline colour inherits the theme's light text colour
 while the message keeps its white background: the receipt's
 `Widget: $10.00` cell and the alert's heading and cell (no inline
-colour) compute to `#ffffff` on the message's `#ffffff` and vanish
+colour) computed to `#ffffff` on the message's `#ffffff` and vanished
 from the dark captures, while the inline-coloured receipt heading
-stays legible (seen in the captures and their computed styles; the
-test does not assert it). This is what R-TXT-02 (inline `color` on
-every text element) guards against.
+stayed legible. This is what R-TXT-02 (inline `color` on every text
+element) guards against; since every text element without a colour
+gets inline the colour it would have inherited (the nearest coloured
+ancestor's, else the theme's primary text colour), the dark captures
+show the text (first review loop, rounds 1 and 2).
 
 **With styles allowed.** SnappyMail has a per-user "allow styles"
 setting (off by default, with no administrator default in 2.38.2);
@@ -143,6 +150,39 @@ message's body class can remove. SnappyMail behaves like ganga (no
 never carry layout there either: consistent with R-CSS-01 (correct
 with every `<style>` removed). No transform step is changed by this
 evidence.
+
+## Real-client evidence: desktop clients
+
+The `linux-desktop` provider's clients (Thunderbird 150, Evolution
+3.58, Geary 46, KMail 6.7, Claws Mail 4.4) are real engines, so they
+show what no backend-A transform models. Recorded from the first real
+review loop over the seed stories (2026-10-01); each changed a library
+rule, not a transform:
+
+- **Thunderbird's `shrinktofit`.** Thunderbird marks message images
+  `shrinktofit`, and its message stylesheet
+  (`chrome://messagebody/skin/messageBody.css`) gives them
+  `max-inline-size: … !important`. Measured on the live element over
+  Marionette: the alert's 48 px image (`width:100%;max-width:48px`) had
+  a computed `max-width` of 772px and rendered 772 px wide; with the
+  attribute removed, 48px; with `width:48px;max-width:100%`, 48 px
+  with the attribute in place. Backend A's `thunderbird` family is
+  plain Firefox, which has no such stylesheet, so it showed 48 px
+  throughout. Rule change: catalogue R-IMG-01 (a fixed-size image is
+  `width:{w}px;max-width:100%`). No transform models the override yet;
+  a fluid image (R-IMG-11, `width:100%;max-width:{w}px`) would meet it
+  too.
+- **litehtml (Claws Mail) has no `align` quirk and no bidi.** A block
+  image under `align="center"` sat at the left edge, because the
+  browser engines centre it only through a legacy mapping of `align`;
+  rule change: catalogue R-IMG-01's alignment margin. Right-to-left
+  words are laid out left to right (no bidirectional reordering);
+  declared in Claws Mail's review brief, nothing the message can do.
+- **WebKitGTK under a dark GTK theme (Evolution).** The message sees
+  `prefers-color-scheme: dark`; with `color-scheme: light dark` the
+  engine's default text colour turns light while the message's inline
+  backgrounds stay white, so uncoloured text vanished. Rule change:
+  catalogue R-TXT-02's default text colour.
 
 ## Real-client evidence (once backend B lands)
 

@@ -4,7 +4,17 @@
 ## `src`, `alt`, the px `width` attribute (always, for DPI scaling and
 ## Word), the `height` attribute only when the author gave one, and
 ## the inline stack
-## `display:block;border:0;outline:none;text-decoration:none;height:auto;width:100%;max-width:{w}px;-ms-interpolation-mode:bicubic;`
+## `display:block;{margin}border:0;outline:none;text-decoration:none;height:auto;width:{w}px;max-width:100%;-ms-interpolation-mode:bicubic;`
+## The width is the px width capped by `max-width:100%`, never
+## `width:100%` capped by a px `max-width`: Thunderbird's `shrinktofit`
+## message stylesheet replaces an author `max-width` with `!important`,
+## which let a `width:100%` image fill the column. `{margin}` places the
+## block by the alignment it inherits (`inheritedAlign`): `margin:0
+## auto;` when centred, `margin:0 0 0 auto;` when right-aligned,
+## nothing when left-aligned, because `align`/`text-align` move inline
+## content only and engines without the legacy `align` quirk
+## (litehtml) left a centred image at the left edge.
+## The stack is
 ## followed by the alt-text styling of R-IMG-03 (body font, small type
 ## size and line height, secondary text colour from the theme), so the
 ## alt stays readable when images are blocked. `display:block` is what
@@ -39,6 +49,7 @@ import ../assets
 import ../style/tokens
 import ../style/units
 import ../target
+from ./document import contentCellAlign
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -81,6 +92,25 @@ proc intrinsicWidth(src: string; assets: openArray[AssetRef]): int =
         return a.width div 2
       return a.width
   0
+
+proc inheritedAlign*(node: EmailNode): string =
+  ## The horizontal alignment `node` inherits: the nearest ancestor's
+  ## `text-align` style or `align` attribute (`left`, `center` or
+  ## `right`; a `table`'s `align` places the table, not its content, so
+  ## it is skipped), else the skeleton's content cell (`center`).
+  const aligns = ["left", "center", "right"]
+  var p = if node == nil: nil else: node.parent
+  while p != nil:
+    if p.kind == enElement:
+      let ta = p.styles.getOrDefault("text-align", "").strip().toLowerAscii()
+      if ta in aligns:
+        return ta
+      if p.tag.toLowerAscii() notin ["table", "img"]:
+        let a = p.attrs.getOrDefault("align", "").strip().toLowerAscii()
+        if a in aligns:
+          return a
+    p = p.parent
+  contentCellAlign
 
 proc lowerMissing(node: EmailNode; what, rule: string): EmailDiagnostic =
   EmailDiagnostic(severity: sevError, code: codeLowerMissing,
@@ -152,13 +182,21 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
   if "class" in node.attrs:
     r.setAttribute(img, "class", node.attrs["class"])
   r.setStyle(img, "display", "block")
+  case inheritedAlign(node)
+  of "center": r.setStyle(img, "margin", "0 auto")
+  of "right": r.setStyle(img, "margin", "0 0 0 auto")
+  else: discard
   r.setStyle(img, "border", "0")
   r.setStyle(img, "outline", "none")
   r.setStyle(img, "text-decoration", "none")
   r.setStyle(img, "height", "auto")
-  r.setStyle(img, "width", "100%")
   if width.len > 0:
-    r.setStyle(img, "max-width", width & "px")
+    r.setStyle(img, "width", width & "px")
+    r.setStyle(img, "max-width", "100%")
+  else:
+    # No known width: an error was collected above; the image still
+    # lowers, at most as wide as its container.
+    r.setStyle(img, "max-width", "100%")
   r.setStyle(img, "-ms-interpolation-mode", "bicubic")
   # R-IMG-03: the alt text is styled on the img itself.
   let small = theme.lightFor("type.small").split('/')

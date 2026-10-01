@@ -38,6 +38,10 @@
 ## The a11y lint covers meaningless link text (R-A11Y-06),
 ## light-scheme text/background contrast (R-A11Y-07), and the
 ## R-IMG-04 alt-length heuristic. All three are warnings.
+## `lintDarkContrast` adds R-DRK-04's dark scheme under
+## `darkMode = designed`: each pair as the dark head rules paint it,
+## an error (`E-A11Y-CONTRAST`). The partial and full inversion
+## models are not checked yet.
 
 import std/[math, strutils, tables]
 import ../diagnostics
@@ -759,6 +763,116 @@ proc lintContrast(node: EmailNode;
       origin: node.origin, rules: @["R-A11Y-07"],
     )]
   @[]
+
+type DarkDecl* = tuple[node: EmailNode; prop, value: string]
+  ## One dark-scheme declaration as P6 paints it: the element, `color`
+  ## or `background-color`, and the dark value. (P5's `HeadDecl` filtered
+  ## to the dark variant; lint sits below the styles pass, so it takes
+  ## the plain tuple.)
+
+proc darkValueOf(dark: openArray[DarkDecl]; node: EmailNode;
+                 prop: string): string =
+  ## The element's dark value for `prop` (last one wins), or "".
+  for d in dark:
+    if d.node == node and d.prop == prop:
+      result = d.value
+
+type SchemeBackground = tuple[value: string; darkened, document: bool]
+  ## The dark-scheme background of a text element: its value, whether a
+  ## dark rule paints it, and whether it is the document's own (no
+  ## element on the way sets one).
+
+proc schemeBackground(node: EmailNode;
+                      dark: openArray[DarkDecl]): SchemeBackground =
+  ## The background a text element sits on in the dark scheme: the
+  ## nearest element (itself first) with a dark or inline
+  ## `background-color`, the dark value winning; else the document's
+  ## own `background_color`; else white. The document shell repeats
+  ## that background on three carriers with no dark value of its own.
+  var n = node
+  while n != nil:
+    if n.kind == enElement:
+      let d = darkValueOf(dark, n, "background-color")
+      if d != "":
+        return (d, true, false)
+      if "background-color" in n.styles:
+        return (n.styles["background-color"], false, n.parent == nil)
+      if n.parent == nil:
+        for key in ["background_color", "background-color"]:
+          if key in n.attrs:
+            return (n.attrs[key], false, true)
+        if "background_color" in n.styles:
+          return (n.styles["background_color"], false, true)
+    n = n.parent
+  ("#ffffff", false, true)
+
+proc darkContrastAdvice(bg: SchemeBackground): string =
+  ## What the author can do about a failing dark pair whose background
+  ## no dark rule paints.
+  if bg.darkened:
+    return ""
+  let where =
+    if bg.document: "the document background, which has no dark value " &
+      "under darkMode = designed yet"
+    else: "a background with no dark value"
+  "; the text sits on " & where & ": put it in a container with a " &
+    "dark background (a `dark:bg-…` class or `@dark:background-color`), " &
+    "or give the text its own colour that reads on " & bg.value
+
+proc lintDarkContrastImpl(node: EmailNode; dark: openArray[DarkDecl];
+                          diags: var seq[EmailDiagnostic]) =
+  if node == nil:
+    return
+  if node.kind == enElement and node.tag.toLowerAscii() in ["h1", "h2",
+      "h3", "h4", "h5", "h6", "p", "li", "span", "a", "td", "th"] and
+      "color" in node.styles:
+    var fgValue = darkValueOf(dark, node, "color")
+    if fgValue == "":
+      fgValue = node.styles["color"]
+    let white = Rgba(r: 255, g: 255, b: 255, a: 1.0)
+    var fg, bg: Rgba
+    var parsed = true
+    let under = schemeBackground(node, dark)
+    try:
+      fg = parseColor(fgValue)
+      bg = parseColor(under.value)
+    except ValueError:
+      parsed = false
+    if parsed:
+      if bg.a < 1.0:
+        bg = blendOver(bg, white)
+      if fg.a < 1.0:
+        fg = blendOver(fg, bg)
+      let size = fontSizePx(node.styles.getOrDefault("font-size", ""))
+      let large = size >= 24.0 or
+        (size >= 18.66 and isBoldWeight(node.styles.getOrDefault(
+          "font-weight", "")))
+      let threshold = if large: 3.0 else: 4.5
+      let ratio = contrastRatio(fg, bg)
+      if ratio < threshold:
+        diags.add(EmailDiagnostic(
+          severity: sevError, code: codeA11yContrastDark,
+          message: "<" & node.tag & "> text/background contrast " &
+            formatFloat(ratio, ffDecimal, 2) & ":1 in the dark scheme (" &
+            fg.toHex() & " on " & bg.toHex() & ") is below " &
+            (if large: "3" else: "4.5") & ":1 (R-DRK-04)" &
+            darkContrastAdvice(under),
+          origin: node.origin, rules: @["R-DRK-04"],
+        ))
+  for child in node.children:
+    lintDarkContrastImpl(child, dark, diags)
+
+proc lintDarkContrast*(root: EmailNode;
+                       dark: openArray[DarkDecl]): seq[EmailDiagnostic] =
+  ## R-DRK-04's dark scheme under `darkMode = designed`: every text
+  ## element with a resolved `color` (P5 gives text elements one,
+  ## R-TXT-02), painted with its dark value when the dark head rules
+  ## give it one, over `schemeBackground`. Below 4.5:1 (3:1 for large
+  ## text) is `E-A11Y-CONTRAST`. Call it only for designed renders whose
+  ## dark block survived the head budget: otherwise no dark rule
+  ## exists and the light check (R-A11Y-07) already covers the pairs.
+  ## Unparseable colours are skipped, as in the light check.
+  lintDarkContrastImpl(root, dark, result)
 
 proc lintAltLength(node: EmailNode): seq[EmailDiagnostic] =
   ## R-IMG-04's length half (P1 owns presence): alt longer than 60

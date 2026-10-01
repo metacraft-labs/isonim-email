@@ -104,6 +104,9 @@ const
   codeA11yContrast* = "W-A11Y-CONTRAST"
     ## Text/background pair below threshold in the light scheme
     ## (R-A11Y-07). Collected from `passes/lint.nim`.
+  codeA11yContrastDark* = "E-A11Y-CONTRAST"
+    ## Text/background pair below threshold in the designed dark scheme
+    ## (R-DRK-04). Collected from `passes/lint.lintDarkContrast`.
   codeA11yAltLong* = "W-A11Y-ALT-LONG"
     ## Alt longer than 60 characters (R-IMG-04, text-in-image
     ## heuristic). Collected from `passes/lint.nim`.

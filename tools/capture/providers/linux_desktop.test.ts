@@ -1650,6 +1650,19 @@ describe(
         ["linux-desktop/thunderbird/thunderbird/done"],
       );
       assert.ok(existsSync(join(shots, "named", named.entries[0]!.png!)));
+      // The real client's own brief, named like its capture.
+      assert.match(
+        readFileSync(
+          join(
+            shots,
+            "named",
+            "receipt",
+            "brief-linux-desktop-thunderbird-thunderbird-desktop-light.md",
+          ),
+          "utf8",
+        ),
+        /real client of the `thunderbird` audience family/,
+      );
       const bare = cli("bare", ["receipt"]);
       assert.equal(bare.status, 0, bare.stderr);
       assert.ok(bare.entries.length > 0);

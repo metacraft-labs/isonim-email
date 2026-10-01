@@ -7,7 +7,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -407,6 +413,78 @@ describe("composeStorySheets", () => {
     const before = readFileSync(join(run, sheetRel));
     composeStorySheets(run, "canary");
     assert.deepEqual(readFileSync(join(run, sheetRel)), before);
+  });
+
+  it("gives every client of a family its own cell, backend a first", () => {
+    // thunderbird: backend a's emulation and the real client;
+    // verification: two clients of two providers. One cell each, in
+    // family order, backend a first, then by backend and client.
+    const run = mkdtempSync(join(tmpdir(), "contact-clients-"));
+    const storyDir = join(run, "receipt");
+    mkdirSync(storyDir, { recursive: true });
+    const cells: [string, string, string, [number, number, number]][] = [
+      ["verification", "selfhosted-webmail", "roundcube", [0, 0, 255]],
+      ["thunderbird", "linux-desktop", "thunderbird", [255, 0, 0]],
+      ["verification", "linux-desktop", "kmail", [255, 0, 255]],
+      ["thunderbird", "a", "firefox", [0, 255, 0]],
+    ];
+    const index: unknown[] = [];
+    for (const [family, backend, client, color] of cells) {
+      const base = `${backend}-${family}-${client}-desktop-light-on`;
+      writeFileSync(
+        join(storyDir, `${base}.png`),
+        writePng(solidRgb(120, 60, color)),
+      );
+      writeFileSync(
+        join(storyDir, `${base}.json`),
+        JSON.stringify({
+          backend,
+          family,
+          client: { id: client, build: `${client}-1` },
+          approximation: backend === "a",
+        }),
+      );
+      index.push({
+        story: "receipt",
+        backend,
+        family,
+        client,
+        viewport: "desktop",
+        scheme: "light",
+        images: "on",
+        png: join("receipt", `${base}.png`),
+        meta: join("receipt", `${base}.json`),
+        status: "done",
+      });
+    }
+    writeFileSync(join(run, "index.json"), JSON.stringify(index));
+    const [rel] = composeStorySheets(run, "receipt");
+    const sheet = readPng(readFileSync(join(run, rel!)));
+    // 120x60 → 600x300 cells; four cells, three to a row (2400 px cap).
+    const columns = Math.floor((2400 + 8) / (600 + 8));
+    assert.equal(sheet.width, columns * (600 + 8) + 8);
+    const flat = {
+      width: sheet.width,
+      height: sheet.height,
+      data: new Uint8Array(sheet.width * sheet.height * 3),
+    };
+    for (let i = 0; i < sheet.width * sheet.height; i++)
+      flat.data.set(sheet.data.subarray(i * 4, i * 4 + 3), i * 3);
+    const centre = (k: number): [number, number] => [
+      8 + (k % columns) * (600 + 8) + 300,
+      8 + Math.floor(k / columns) * (16 + 300 + 8) + 16 + 150,
+    ];
+    const at = (k: number): number[] => pixel(flat, ...centre(k));
+    assert.deepEqual(
+      [at(0), at(1), at(2), at(3)],
+      [
+        [0, 255, 0], // thunderbird, backend a
+        [255, 0, 0], // thunderbird, the real client
+        [255, 0, 255], // verification, linux-desktop kmail
+        [0, 0, 255], // verification, selfhosted-webmail roundcube
+      ],
+    );
+    rmSync(run, { recursive: true, force: true });
   });
 
   it("fails loudly without an index.json", () => {

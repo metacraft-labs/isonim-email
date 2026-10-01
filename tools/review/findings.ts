@@ -9,13 +9,23 @@
 // and on parse),
 // `degradation` requires a non-empty `rules` (enforced both ways).
 // The entry format is closed: a reader returns exactly those fields
-// (plus a string `reason`), and a key outside the format is ignored on
-// read — not rejected, and never removed from the file, which this
-// tool only appends to.
+// (plus a string `reason`, and the `owner` of an entry left open), and a key outside the format is ignored on
+// read — not rejected, and never removed from the file. Entries are
+// appended; the one change made in place is an entry's status
+// (`updateFindingStatus`: open → fixed in a named run, wontfix with a
+// reason, degradation), which rewrites only that entry's status fields
+// and keeps every other byte of the list.
 // `rateFinding` is the brief's mechanical rating rule (methodology:
 // anything missing means a rating ≤ 4).
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
@@ -52,11 +62,18 @@ export interface Finding {
   fixed_in_run: string | null;
   // Present only on wontfix entries: the required reason.
   reason?: string;
+  // Who takes an open P3/P4 the loop leaves open (a milestone, a
+  // module or a person); optional.
+  owner?: string;
 }
 
-export type NewFinding = Omit<Finding, "id" | "fixed_in_run" | "reason"> & {
+export type NewFinding = Omit<
+  Finding,
+  "id" | "fixed_in_run" | "reason" | "owner"
+> & {
   fixed_in_run?: string | null;
   reason?: string;
+  owner?: string;
 };
 
 function fail(message: string): never {
@@ -134,6 +151,10 @@ export function parseFindingLine(line: string): Finding {
     fixed_in_run: fixedInRun,
   };
   if (typeof reason === "string") entry.reason = reason;
+  const owner = fields.owner;
+  if (owner !== undefined && (typeof owner !== "string" || owner.length === 0))
+    fail("'owner', when present, must be a non-empty string");
+  if (typeof owner === "string") entry.owner = owner;
   return entry;
 }
 
@@ -189,10 +210,61 @@ export function appendFinding(path: string, fields: NewFinding): Finding {
     fixed_in_run: fields.fixed_in_run ?? null,
   };
   if (fields.reason !== undefined) entry.reason = fields.reason;
+  if (fields.owner !== undefined) entry.owner = fields.owner;
   // Validate before writing: parseFindingLine is the single gate.
   parseFindingLine(JSON.stringify(entry));
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, JSON.stringify(entry) + "\n");
+  return entry;
+}
+
+export interface StatusChange {
+  status: FindingStatus;
+  // Required (non-empty) for `fixed`: the run whose captures show it.
+  fixed_in_run?: string | null;
+  // Required for `wontfix` (the entry check enforces it).
+  reason?: string;
+  // Who takes it, for an entry left open.
+  owner?: string;
+}
+
+// Changes one entry's status in place: the entry with `id` (exactly
+// one must exist) gets `status`, `fixed_in_run` and, when given,
+// `reason`; every other key of it, and every other line of the list,
+// stays byte for byte. The changed entry is validated like an appended
+// one before the list is replaced (written beside it, then renamed).
+export function updateFindingStatus(
+  path: string,
+  id: string,
+  change: StatusChange,
+): Finding {
+  if (!existsSync(path)) fail(`no findings list at ${path}`);
+  if (
+    change.status === "fixed" &&
+    (typeof change.fixed_in_run !== "string" || change.fixed_in_run === "")
+  )
+    fail("a fixed entry needs the run it was fixed in ('fixed_in_run')");
+  const lines = readFileSync(path, "utf8").split("\n");
+  let at = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim().length === 0) continue;
+    if (parseFindingLine(line).id !== id) continue;
+    if (at >= 0) fail(`two entries carry the id '${id}'`);
+    at = i;
+  }
+  if (at < 0) fail(`no entry with the id '${id}'`);
+  const raw = JSON.parse(lines[at]!) as Record<string, unknown>;
+  raw.status = change.status;
+  raw.fixed_in_run = change.fixed_in_run ?? null;
+  if (change.reason !== undefined) raw.reason = change.reason;
+  if (change.owner !== undefined) raw.owner = change.owner;
+  const updated = JSON.stringify(raw);
+  const entry = parseFindingLine(updated);
+  lines[at] = updated;
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, lines.join("\n"));
+  renameSync(tmp, path);
   return entry;
 }
 

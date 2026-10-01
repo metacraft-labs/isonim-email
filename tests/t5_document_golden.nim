@@ -11,6 +11,7 @@
 # rule: R-DOC-11
 # rule: R-DOC-12
 # rule: R-DOC-13
+# rule: R-DOC-14
 # rule: R-RST-01
 # rule: R-RST-02
 # rule: R-RST-03
@@ -62,6 +63,13 @@
 ## stay pinned: `test_document_skeleton_designed_adds_dark_block`
 ## requires the `dmDesigned` render to be the golden with exactly that
 ## element put back in block-3 position.
+##
+## Golden update, 2026-10-01 (second): both goldens lost the
+## ` class="body"` attribute of `<body>` (R-DOC-14, catalogue §1
+## amended first): Roundcube copies a body class over the `rcmBody`
+## class its scoped head rules select, so with it none of the
+## message's head CSS applied there. One hunk per golden, that
+## attribute only; every other byte is unchanged.
 ##
 ## Backend-independent (tree building + pure passes; the goldens load
 ## via `staticRead`), so `just test` also runs it on JS.
@@ -256,7 +264,7 @@ suite "document golden skeleton":
       # (clients strip them from <html>); xml:lang on <body>.
       check "<html lang=\"en\" dir=\"ltr\"" in html
       check "aria-label=\"\" lang=\"en\" dir=\"ltr\"" in html
-      check "<body class=\"body\" xml:lang=\"en\"" in html
+      check "<body xml:lang=\"en\"" in html
       # R-DOC-03…07: the metas in skeleton order.
       checkIncreasing(html, [
         "<meta charset=\"utf-8\">",
@@ -317,9 +325,13 @@ suite "document golden skeleton":
         "font-size:max(16px, 1rem);" in html
       # R-DOC-13: word-spacing on <body>. Backend-effect
       # confirmation rides with later capture evidence.
-      check "<body class=\"body\" xml:lang=\"en\" style=\"margin:0;" &
+      check "<body xml:lang=\"en\" style=\"margin:0;" &
         "padding:0;word-spacing:normal;background-color:#ffffff;\">" in
         html
+      # R-DOC-14: no class on <body> (Roundcube would put it in place
+      # of the class its scoped head rules select).
+      # rule: R-DOC-14
+      check "class=" notin html.split("<body")[1].split(">")[0]
       # The wrapper table carries no align attribute; the cell does.
       check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
         "cellpadding=\"0\" cellspacing=\"0\" " &

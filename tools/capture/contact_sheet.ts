@@ -713,6 +713,8 @@ interface IndexEntry {
   story: string;
   backend: string;
   family: string;
+  // Absent in index files written before clients were recorded.
+  client?: string;
   viewport: string;
   scheme: string;
   images: string;
@@ -766,8 +768,13 @@ export function sheetFileName(
 
 // Every (viewport, scheme) sheet for one story. Reads the run's
 // index.json (done entries carry the viewport names the provenance
-// files lack), prefers images=on per family, orders families per
-// the fixed order, and writes the sheets into the story's run dir.
+// files lack), keeps one cell per (family, backend, client) with
+// images=on preferred, orders families per the fixed order (within a
+// family by backend label, so backend a first, then client id), and writes
+// the sheets into the story's run dir. One cell per client, not per
+// family: a family several clients capture (thunderbird: backend a's
+// emulation and the real client; verification: every webmail and
+// desktop client) would otherwise show its first client only.
 // Returns the written relative paths.
 export function composeStorySheets(runDir: string, story: string): string[] {
   let index: IndexEntry[];
@@ -802,26 +809,38 @@ export function composeStorySheets(runDir: string, story: string): string[] {
   for (const [, { viewport, scheme, entries }] of [...groups.entries()].sort(
     byKey,
   )) {
-    const byFamily = new Map<string, CapturedEntry[]>();
+    const byCell = new Map<string, CapturedEntry[]>();
     for (const e of entries) {
-      const cands = byFamily.get(e.family);
-      if (cands === undefined) byFamily.set(e.family, [e]);
+      const key = `${e.family}\n${e.backend}\n${e.client ?? ""}`;
+      const cands = byCell.get(key);
+      if (cands === undefined) byCell.set(key, [e]);
       else cands.push(e);
     }
-    // One capture per family: images=on wins, then the first path
+    // One capture per cell: images=on wins, then the first path
     // (deterministic — the same run always picks the same PNG).
     const before = (a: CapturedEntry, b: CapturedEntry): boolean => {
       const ai = a.images === "on" ? 0 : 1;
       const bi = b.images === "on" ? 0 : 1;
       return ai !== bi ? ai < bi : a.png < b.png;
     };
-    const picked = [...byFamily.entries()].map(([family, cands]) => ({
-      family,
-      // Every family list holds at least the entry that created it.
-      entry: cands.reduce((best, e) => (before(e, best) ? e : best)),
-    }));
-    const order = orderFamilies(picked.map((p) => p.family));
-    picked.sort((a, b) => order.indexOf(a.family) - order.indexOf(b.family));
+    const picked = [...byCell.values()].map((cands) => {
+      // Every cell list holds at least the entry that created it.
+      const entry = cands.reduce((best, e) => (before(e, best) ? e : best));
+      return { family: entry.family, entry };
+    });
+    const order = orderFamilies([...new Set(picked.map((p) => p.family))]);
+    // Within a family: by backend label, then client id (backend a's
+    // label sorts before the named providers').
+    const within = (a: CapturedEntry, b: CapturedEntry): number => {
+      const ka = `${a.backend}\n${a.client ?? ""}`;
+      const kb = `${b.backend}\n${b.client ?? ""}`;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    };
+    picked.sort(
+      (a, b) =>
+        order.indexOf(a.family) - order.indexOf(b.family) ||
+        within(a.entry, b.entry),
+    );
     const cellW = cellWidthForViewport(viewport);
     const cells: SheetCell[] = picked.map(({ family, entry }) => {
       if (entry.meta === null)

@@ -102,11 +102,31 @@ just email-shots --affected --schemes light,dark  # full set
 # device-farm spread will run in the background (--async, refused today)
 ```
 
-Briefs (`brief-<family>-<viewport>-<scheme>.md`) and contact sheets
-(`contact-<viewport>-<scheme>.png`) land in each story's run dir next
-to its captures. The loop stops when the full capture set for the
-work in hand has no open P1/P2 findings; a
-rating summarises the list, it is never the gate itself.
+Briefs (`brief-<family>-<viewport>-<scheme>.md` for backend `a`;
+`brief-<backend>-<family>-<client>-<viewport>-<scheme>.md` for every
+real-client capture, named like the capture without `-<images>.png`)
+and contact sheets (`contact-<viewport>-<scheme>.png`, one cell per
+client) land in each story's run dir next to its captures. A
+real-client brief says which audience family the client is (the real
+Thunderbird) or that it stands in for none (the webmails and the
+other desktop clients), and what that client is expected to show:
+its sanitiser, its dark behaviour and any of its own UI in the crop.
+Reviewer sub-agents are read-only: their prompt says they may only
+read files, never edit, build or commit, so they can run in parallel.
+
+Keep the findings list with `tools/review/findings.ts`
+(`appendFinding`, then `updateFindingStatus` to mark an entry `fixed`
+in a run, `wontfix` with a reason, or to name the `owner` of a P3/P4
+left open). The loop stops when the full capture set for the work in
+hand has no open P1/P2 findings; a rating summarises the list, it is
+never the gate itself.
+
+The loop's own check (does a reviewer notice a missing element?):
+`just email-review-broken` captures the receipt and `receiptB` (the
+receipt with its logo dropped from the output, its brief unchanged)
+and prints what each reviewer must be given; save each reviewer's
+report verbatim where it says, record the broken story's P1, then
+`just email-review-broken-check <run>` checks the session.
 
 ### Capture providers
 

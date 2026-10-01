@@ -73,6 +73,13 @@ const
   bgAttrCarriers = ["body", "table", "tr", "td", "th"]
     ## Elements whose `bgcolor` mirrors `background-color`.
 
+  textColorCarriers = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]
+    ## Text elements that always carry an inline `color` (R-TXT-02);
+    ## `td`/`th` carry one when they hold text directly.
+
+  defaultTextColorToken = "color.text.primary"
+    ## The theme token a text element without a colour of its own gets.
+
   alignCarriers = ["td", "th", "tr", "div", "p", "h1", "h2", "h3", "h4",
     "h5", "h6"]
     ## Elements whose `align` mirrors `text-align`. `table` is excluded:
@@ -444,6 +451,53 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
   # pass covers background/border/margin plus the packed type specs).
   @[(prop, val.strip())]
 
+proc holdsText(node: EmailNode): bool =
+  ## True when `node` has a non-blank text child of its own.
+  for c in node.children:
+    if c.kind == enText and c.text.strip().len > 0:
+      return true
+  false
+
+proc darkColorOf(node: EmailNode; head: seq[HeadDecl]): string =
+  ## The dark `color` an element's own `@dark:` declaration produced
+  ## (the last one wins, as in the head block), or "".
+  for d in head:
+    if d.node == node and d.variant == "dark" and d.prop == "color":
+      result = d.value
+
+proc inheritedTextColor(node: EmailNode; theme: EmailTheme;
+                        head: seq[HeadDecl]): tuple[light, dark: string] =
+  ## The light and dark colours `node` would inherit (R-TXT-02). Light:
+  ## the nearest ancestor's resolved inline `color`, else the theme's
+  ## `color.text.primary`. Dark: the nearest ancestor that sets either —
+  ## its `@dark:` value, or its inline colour when it has no dark one
+  ## (that colour then holds in dark mode too) — else the token's dark
+  ## value. Ancestors are final already: the walk is pre-order.
+  var lightFound, darkFound = false
+  var a = node.parent
+  while a != nil and not (lightFound and darkFound):
+    if a.kind == enElement:
+      let own = a.styles.getOrDefault("color", "")
+      if not darkFound:
+        let d = darkColorOf(a, head)
+        if d != "":
+          result.dark = d
+          darkFound = true
+        elif own != "":
+          result.dark = own
+          darkFound = true
+      if not lightFound and own != "":
+        result.light = own
+        lightFound = true
+    a = a.parent
+  try:
+    if not lightFound:
+      result.light = normaliseColor(theme.lightFor(defaultTextColorToken))
+    if not darkFound:
+      result.dark = normaliseColor(theme.darkFor(defaultTextColorToken))
+  except ThemeError, StyleError:
+    discard
+
 proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
                   profile: AudienceProfile; head: var seq[HeadDecl];
                   diags: var seq[EmailDiagnostic]) =
@@ -523,6 +577,20 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     for (p, v) in normaliseDecl(node, tag, prop, val, fromToken, tkey,
         theme, target, fontSizePx, true, diags):
       res[p] = v
+  if "color" notin res and (tag in textColorCarriers or
+      (tag in ["td", "th"] and holdsText(node))):
+    # R-TXT-02: a text element never relies on an inherited colour. A
+    # client whose dark scheme or theme supplies a light default text
+    # colour (SnappyMail's dark themes, WebKit under `color-scheme:
+    # light dark`) would otherwise paint it light on the message's own
+    # light background. The inline value is the one inheritance would
+    # have given; under `designed` the dark pairing follows it too.
+    let (light, dark) = inheritedTextColor(node, theme, head)
+    if light != "":
+      res["color"] = light
+      if target.darkMode == dmDesigned and dark != "" and dark != light:
+        head.add(HeadDecl(variant: "dark", prop: "color", value: dark,
+          node: node, origin: node.origin))
   if target.outlookWord:
     # The closed MSO list: each addition checks for an
     # author-set value first and never overwrites one. With outlookWord

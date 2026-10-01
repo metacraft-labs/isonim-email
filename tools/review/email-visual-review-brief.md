@@ -29,7 +29,13 @@ applies it, but no separate dark artwork is expected.
 
 ## 3. What is expected on the screenshot
 
-See the generated block below.
+See the generated block below. A capture from a real client (a
+self-hosted webmail or a desktop client) has a block of its own,
+named like the capture: it also says which audience family, if any,
+the client stands in for, and what the client is expected to show
+(its sanitiser, its dark behaviour, and any of its own UI inside the
+crop). Judge the email against that client's expectations, not
+against a browser's.
 
 ## 4. What to evaluate
 

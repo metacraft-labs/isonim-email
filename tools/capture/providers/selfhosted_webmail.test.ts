@@ -727,23 +727,29 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
   });
 
   it("records how Roundcube and SnappyMail sanitise head CSS", async () => {
-    // The probe has every kind of head block; the control is the same
-    // message with the class attribute removed from <body>.
+    // The probe has every kind of head block, and (catalogue R-DOC-14)
+    // no class on <body>; the control is the same message with a body
+    // class added, the skeleton's old form, which Roundcube copies over
+    // the rcmBody class its scoped rules select.
     const n = (s: string, re: RegExp): number => s.match(re)?.length ?? 0;
-    const bodyClassQp = '<body class=3D"body" ';
+    const bodyQp = "<body xml:lang=3D";
     assert.equal(
-      n(Buffer.from(probe.mime).toString("latin1"), /<body class=3D"body" /g),
+      n(Buffer.from(probe.mime).toString("latin1"), /<body xml:lang=3D/g),
       1,
     );
+    assert.doesNotMatch(probe.html, /<body [^>]*class=/);
     const control: StoryMessage = {
-      story: "sanitiserProbeNoBodyClass",
+      story: "sanitiserProbeBodyClass",
       mime: Buffer.from(
         Buffer.from(probe.mime)
           .toString("latin1")
-          .replace(bodyClassQp, "<body "),
+          .replace(bodyQp, '<body class=3D"body" xml:lang=3D'),
         "latin1",
       ),
-      html: probe.html.replace('<body class="body" ', "<body "),
+      html: probe.html.replace(
+        "<body xml:lang=",
+        '<body class="body" xml:lang=',
+      ),
     };
     const classes = [
       ...new Set(
@@ -799,30 +805,34 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     );
     assert.doesNotMatch(rc, /\[if /);
     assert.doesNotMatch(rc, /mso-group-fix/);
-    // The <body> class replaces the wrapper's rcmBody class, so no
-    // element carries it and none of those rules can match: the dark
-    // paragraph background never appears.
+    // With no class on <body>, the wrapper keeps Roundcube's rcmBody
+    // class, so the scoped rules match: the dark paragraph background
+    // is painted.
     assert.match(
       rc,
-      /<div class="v1body" id="message-htmlpart1" xml:lang="en" style="margin: 0; padding: 0; word-spacing: normal; background-color: #ffffff">/,
+      /<div class="rcmBody" id="message-htmlpart1" xml:lang="en" style="margin: 0; padding: 0; word-spacing: normal; background-color: #ffffff">/,
     );
     // Ids are prefixed like classes; inline styles are kept, re-spaced.
     assert.match(rc, /#message-htmlpart1 div\.rcmBody #v1outlook a\{/);
     assert.match(rc, /<h1 class="v1e-[0-9a-z]+" style="color: #111111">/);
-    assert.doesNotMatch(rc, /class="[^"]*\brcmBody\b/);
     // (Text pixels in the paragraph's own #111827 colour count a few
     // hundred; its dark background, where applied, tens of thousands.)
     assert.ok(
-      countColour(get("sanitiserProbe", "roundcube").png!, DARK_BG) < 1500,
+      countColour(get("sanitiserProbe", "roundcube").png!, DARK_BG) > 5000,
     );
-    // The control: without the body class the wrapper keeps rcmBody and
-    // the same rules apply.
-    const rcControl = get("sanitiserProbeNoBodyClass", "roundcube");
+    // The control: a body class replaces the wrapper's rcmBody class,
+    // so no element carries it, none of those rules can match, and the
+    // dark paragraph background never appears.
+    const rcControl = get("sanitiserProbeBodyClass", "roundcube");
     assert.match(
       String(rcControl.meta.sanitised_html),
-      /<div class="rcmBody" id="message-htmlpart1"/,
+      /<div class="v1body" id="message-htmlpart1"/,
     );
-    assert.ok(countColour(rcControl.png!, DARK_BG) > 5000);
+    assert.doesNotMatch(
+      String(rcControl.meta.sanitised_html),
+      /class="[^"]*\brcmBody\b/,
+    );
+    assert.ok(countColour(rcControl.png!, DARK_BG) < 1500);
     // Kept: the hidden preheader, the image (on the assets service),
     // lang and dir on the wrapper; removed: role and aria-*.
     assert.match(rc, /Head CSS under a webmail sanitiser\./);
@@ -837,7 +847,7 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     // class name of the message is stripped, conditional comments too,
     // and elements hidden with display:none (the preheader) are
     // removed; the inline styles and the image stay.
-    for (const story of ["sanitiserProbe", "sanitiserProbeNoBodyClass"]) {
+    for (const story of ["sanitiserProbe", "sanitiserProbeBodyClass"]) {
       const row = get(story, "snappymail");
       const sm = String(row.meta.sanitised_html);
       assert.equal(n(sm, /<style\b/g), 0, story);
@@ -1019,6 +1029,18 @@ describe(
       assert.ok(
         e!.png !== null && existsSync(join(shots, "roundcube", e!.png)),
       );
+      // The capture's own brief, named like it, written by the run.
+      const brief = readFileSync(
+        join(
+          shots,
+          "roundcube",
+          "receipt",
+          "brief-selfhosted-webmail-verification-roundcube-desktop-light.md",
+        ),
+        "utf8",
+      );
+      assert.match(brief, /stands in for no audience family/);
+      assert.match(brief, /Roundcube keeps the message's `<style>` blocks/);
     });
 
     it("--clients snappymail and --backends selfhosted-webmail capture the webmails", () => {

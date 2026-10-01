@@ -121,7 +121,8 @@ suite "variant keys split out of inline for P6":
       check h.node == p
     # A head-bound flex is kept, not removed: Word ignores head rules
     # entirely, so it cannot collapse anything (the lint precedent).
-    let q = styled("p", [("@sm:display", "flex")])
+    # (A div: a text element would also get its default inline colour.)
+    let q = styled("div", [("@sm:display", "flex")])
     let (qHead, qDiags) = applyStyles(q, defaultTheme(), defaultTarget())
     check qDiags.len == 0
     check q.styles.len == 0
@@ -296,7 +297,9 @@ suite "harmful display is removed with its R-OL-10 severity":
 suite "custom properties never reach output":
   test "test_no_var_anywhere":
     # rule: R-CSS-11
-    let p = styled("p", [("color", "var(--ink)"), ("--ink", "#111827"),
+    # Divs: a text element would also get its default inline colour
+    # once the var() colour is removed.
+    let p = styled("div", [("color", "var(--ink)"), ("--ink", "#111827"),
       ("width", "var (--w)")])
     let (head, diags) = applyStyles(p, defaultTheme(), defaultTarget())
     check p.styles.len == 0
@@ -310,7 +313,7 @@ suite "custom properties never reach output":
     check "var(" notin allStyleText(p)
     # Variant values are rejected the same way (P6's serialiser would
     # otherwise pass the parens through into a head block).
-    let q = styled("p", [("@sm:color", "var(--x)")])
+    let q = styled("div", [("@sm:color", "var(--x)")])
     let (qHead, qDiags) = applyStyles(q, defaultTheme(), defaultTarget())
     check qHead.len == 0
     check q.styles.len == 0
@@ -418,3 +421,198 @@ suite "translucent colours inline as the blend":
       styled("p", [("color", "rgba(0,0,0,.5)")]))
     discard applyStyles(card, defaultTheme(), defaultTarget())
     check card.children[0].styles["color"] == "#0f3775"
+
+suite "text elements never inherit their colour":
+  test "test_text_elements_get_the_theme_text_colour":
+    # Every heading, paragraph and list item without a colour of its own
+    # gets the theme's primary text colour inline; a cell gets it only
+    # when it holds text itself (a layout cell inherits nothing it
+    # needs). An author colour is never replaced. Clients whose dark
+    # scheme supplies a light default text colour (SnappyMail's dark
+    # themes, WebKit under color-scheme: light dark) otherwise paint
+    # inherited text light on the message's light background.
+    let r = EmailRenderer()
+    let h1 = styled("h1", [])
+    r.setTextContent(h1, "Heading")
+    let h3 = styled("h3", [])
+    r.setTextContent(h3, "Sub")
+    let p = styled("p", [])
+    r.setTextContent(p, "Body")
+    let li = styled("li", [])
+    r.setTextContent(li, "Item")
+    let own = styled("p", [("color", "#1f6feb")])
+    r.setTextContent(own, "Mine")
+    let textCell = styled("td", [])
+    r.setTextContent(textCell, "Widget: $10.00")
+    let layoutCell = styled("td", [], styled("p", []))
+    let blankCell = styled("td", [])
+    r.setTextContent(blankCell, "  ")
+    let tree = styled("div", [], h1, h3, p, li, own,
+      styled("table", [], styled("tr", [], textCell, layoutCell,
+        blankCell)))
+    let (head, diags) = applyStyles(tree, defaultTheme(), defaultTarget())
+    check head.len == 0
+    check diags.len == 0
+    for n in [h1, h3, p, li, textCell]:
+      check n.styles.getOrDefault("color", "") == "#111827"
+    check own.styles["color"] == "#1f6feb"
+    check "color" notin layoutCell.styles
+    check layoutCell.children[0].styles["color"] == "#111827"
+    check "color" notin blankCell.styles
+    check "color" notin tree.styles
+    # The colour is the theme's, not a constant.
+    var pairs: seq[(string, ThemePair)] = @[]
+    let base = defaultTheme()
+    for key in requiredThemeKeys:
+      pairs.add((key, ThemePair(light: base.lightFor(key),
+        dark: base.darkFor(key))))
+    for i, (key, _) in pairs:
+      if key == "color.text.primary":
+        pairs[i][1] = ThemePair(light: "#202122", dark: "#eeeeee")
+    let custom = buildTheme(pairs, "custom")
+    let q = styled("p", [])
+    r.setTextContent(q, "Custom")
+    discard applyStyles(q, custom, defaultTarget())
+    check q.styles["color"] == "#202122"
+    # Silent under darkMode=designed too: the default is a token value,
+    # not a raw author colour.
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let d = styled("p", [])
+    r.setTextContent(d, "Designed")
+    let (_, dDiags) = applyStyles(d, defaultTheme(), designed)
+    check dDiags.len == 0
+    check d.styles["color"] == "#111827"
+
+proc darkColorsOf(head: seq[HeadDecl]; node: EmailNode): seq[string] =
+  ## The dark `color` values P5 split out for `node`.
+  for h in head:
+    if h.node == node and h.variant == "dark" and h.prop == "color":
+      result.add(h.value)
+
+suite "an uncoloured text element gets the colour it would inherit":
+  test "test_uncoloured_text_copies_the_container_light_and_dark_colour":
+    # The container sets its colour and background as tokens with
+    # dark variants; the paragraph sets nothing. Under designed the
+    # paragraph carries the container's light colour inline and the
+    # container's dark colour as its own dark declaration, so in a dark
+    # client it is light on the container's dark background, as it was
+    # when it inherited.
+    let r = EmailRenderer()
+    let p = styled("p", [])
+    r.setTextContent(p, "Inherits")
+    let box = styled("div", [("color", "tok:color.text.secondary"),
+      ("@dark:color", "tok:color.text.secondary"),
+      ("background-color", "tok:color.surface.card"),
+      ("@dark:background-color", "tok:color.surface.card")], p)
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let (head, diags) = applyStyles(box, defaultTheme(), designed)
+    check diags.len == 0
+    check box.styles["color"] == "#4b5563"
+    check p.styles["color"] == "#4b5563"
+    check darkColorsOf(head, box) == @["#c3c8d0"]
+    check darkColorsOf(head, p) == @["#c3c8d0"]
+    # P6 turns the paragraph's pairing into its own dark class and rule.
+    let res = assembleHead(head, designed)
+    let cls = p.attrs.getOrDefault("class", "")
+    check cls.startsWith("e-")
+    var css = ""
+    for b in res.blocks:
+      css.add(b.text)
+    check ("." & cls & "{color:#c3c8d0 !important}") in css
+
+  test "test_uncoloured_text_without_a_coloured_ancestor_is_dark_paired":
+    let r = EmailRenderer()
+    let p = styled("p", [])
+    r.setTextContent(p, "Default")
+    let tree = styled("div", [], p)
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let (head, diags) = applyStyles(tree, defaultTheme(), designed)
+    check diags.len == 0
+    check p.styles["color"] == "#111827"
+    check darkColorsOf(head, p) == @["#f3f4f6"]
+    let res = assembleHead(head, designed)
+    let cls = p.attrs.getOrDefault("class", "")
+    check cls.startsWith("e-")
+    var css = ""
+    for b in res.blocks:
+      css.add(b.text)
+    check ("." & cls & "{color:#f3f4f6 !important}") in css
+
+  test "test_uncoloured_text_is_light_only_outside_designed":
+    # accommodate and none write no dark CSS: the default and the
+    # inherited colour are light values only, as before.
+    for mode in [dmAccommodate, dmNone]:
+      var target = defaultTarget()
+      target.darkMode = mode
+      let r = EmailRenderer()
+      let bare = styled("p", [])
+      r.setTextContent(bare, "Default")
+      let inner = styled("p", [])
+      r.setTextContent(inner, "Inherits")
+      let box = styled("div", [("color", "#334155"),
+        ("@dark:color", "#e2e8f0")], inner)
+      let tree = styled("div", [], bare, box)
+      let (head, diags) = applyStyles(tree, defaultTheme(), target)
+      check diags.len == 0
+      check bare.styles["color"] == "#111827"
+      check inner.styles["color"] == "#334155"
+      check darkColorsOf(head, bare).len == 0
+      check darkColorsOf(head, inner).len == 0
+      discard assembleHead(head, target)
+      check "class" notin bare.attrs
+      check "class" notin inner.attrs
+
+  test "test_author_text_colour_always_wins":
+    let r = EmailRenderer()
+    let own = styled("p", [("color", "tok:color.link")])
+    r.setTextContent(own, "Mine")
+    let ownDark = styled("p", [("color", "tok:color.link"),
+      ("@dark:color", "tok:color.link")])
+    r.setTextContent(ownDark, "Mine, paired")
+    let box = styled("div", [("color", "tok:color.text.secondary"),
+      ("@dark:color", "tok:color.text.secondary")], own, ownDark)
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let (head, diags) = applyStyles(box, defaultTheme(), designed)
+    check diags.len == 0
+    check own.styles["color"] == "#1f6feb"
+    check darkColorsOf(head, own).len == 0
+    check ownDark.styles["color"] == "#1f6feb"
+    check darkColorsOf(head, ownDark) == @["#7aa7ff"]
+
+  test "test_nearest_coloured_ancestor_wins":
+    # Grandparent sets A, parent sets B: the child gets B, light and
+    # dark. A parent with no dark value of its own holds its light
+    # colour in dark mode too, so the child gets no dark rule then.
+    let r = EmailRenderer()
+    let child = styled("p", [])
+    r.setTextContent(child, "Nested")
+    let parent = styled("div", [("color", "#1e3a8a"),
+      ("@dark:color", "#bfdbfe")], child)
+    let grand = styled("div", [("color", "#7f1d1d"),
+      ("@dark:color", "#fecaca")], parent)
+    var designed = defaultTarget()
+    designed.darkMode = dmDesigned
+    let (head, _) = applyStyles(grand, defaultTheme(), designed)
+    check child.styles["color"] == "#1e3a8a"
+    check darkColorsOf(head, child) == @["#bfdbfe"]
+    let child2 = styled("p", [])
+    r.setTextContent(child2, "Nested, light-only parent")
+    let parent2 = styled("div", [("color", "#1e3a8a")], child2)
+    let grand2 = styled("div", [("color", "#7f1d1d"),
+      ("@dark:color", "#fecaca")], parent2)
+    let (head2, _) = applyStyles(grand2, defaultTheme(), designed)
+    check child2.styles["color"] == "#1e3a8a"
+    check darkColorsOf(head2, child2).len == 0
+    # A parent with only a dark value: light from the grandparent,
+    # dark from the parent.
+    let child3 = styled("p", [])
+    r.setTextContent(child3, "Nested, dark-only parent")
+    let parent3 = styled("div", [("@dark:color", "#bfdbfe")], child3)
+    let grand3 = styled("div", [("color", "#7f1d1d")], parent3)
+    let (head3, _) = applyStyles(grand3, defaultTheme(), designed)
+    check child3.styles["color"] == "#7f1d1d"
+    check darkColorsOf(head3, child3) == @["#bfdbfe"]
