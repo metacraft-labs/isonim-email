@@ -59,6 +59,9 @@ proc registerAll() =
     # The layout reference stories (see build_stories.nim).
     registerLayoutStories()
     registerStoryTree("layoutOneColumn", layoutOneColumnDoc)
+    registerStoryTree("layoutTwoColumns", layoutTwoColumnsDoc)
+    registerStoryTree("layoutThreeColumns", layoutThreeColumnsDoc)
+    registerStoryTree("layoutFourColumns", layoutFourColumnsDoc)
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>

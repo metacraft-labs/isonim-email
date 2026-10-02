@@ -238,6 +238,68 @@ proc wrapperColumns(): EmailNode =
   r.add(doc, w)
   doc
 
+# --- Rows with a gutter: `mailColumns` in a section's implicit column.
+
+proc row(r: EmailRenderer; section: EmailNode; gutter: string;
+    attrs: openArray[(string, string)] = []): EmailNode =
+  result = r.el("mailColumns", attrs = @[("gutter", gutter)] & @attrs)
+  r.add(section, result)
+
+proc gutterThirds(): EmailNode =
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("background-color", "#f4f5f7")])
+  let row = r.row(s, "24px")
+  for m in ["MK1", "MK2", "MK3"]:
+    let c = r.el("mailColumn")
+    r.leaf(c, m)
+    r.add(row, c)
+  r.add(doc, s)
+  doc
+
+proc gutterPxRemainder(): EmailNode =
+  ## px columns and an odd gutter: each column loses 2/3 of 25px, and
+  ## the rounding remainder goes to the first columns (MJML's
+  ## `getDesktopWidth`); the half-gutters are 13px and 12px.
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("padding", "16px 0")])
+  let row = r.row(s, "25px")
+  for (m, w) in [("MK1", "185px"), ("MK2", "184px"), ("MK3", "183px")]:
+    let c = r.el("mailColumn", [("width", w)])
+    r.leaf(c, m)
+    r.add(row, c)
+  r.add(doc, s)
+  doc
+
+proc gutterBoxes(): EmailNode =
+  ## % columns with a gutter; one paints a background and pads itself,
+  ## the other pads differently, so Word gets a box per column.
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("padding", "10px 20px")])
+  let row = r.row(s, "16px")
+  let a = r.el("mailColumn", [("width", "25%"),
+    ("background-color", "#e5e7eb"), ("padding", "8px")])
+  r.leaf(a, "MK1")
+  let b = r.el("mailColumn", [("width", "75%"), ("padding", "0 4px 12px")])
+  r.leaf(b, "MK2")
+  r.leaf(b, "MK3")
+  r.add(row, a, b)
+  r.add(doc, s)
+  doc
+
+proc gutterOddPercent(): EmailNode =
+  ## Four default columns and an odd gutter in a wrapper's section.
+  let (r, doc) = newDoc()
+  let w = r.el("mailWrapper", [("padding", "0 12px")])
+  let s = r.el("mailSection", [("padding", "8px 4px")])
+  let row = r.row(s, "15px")
+  for m in ["MK1", "MK2", "MK3", "MK4"]:
+    let c = r.el("mailColumn")
+    r.leaf(c, m)
+    r.add(row, c)
+  r.add(w, s)
+  r.add(doc, w)
+  doc
+
 proc conformanceFixtures*(): seq[ConformanceFixture] =
   @[
     ConformanceFixture(name: "section-default", lowered: true,
@@ -263,22 +325,34 @@ proc conformanceFixtures*(): seq[ConformanceFixture] =
       description: "a bordered wrapper", build: wrapperBorder),
     ConformanceFixture(name: "document-width", lowered: true,
       description: "mailDocument(width = 640px)", build: documentWidth640),
-    ConformanceFixture(name: "columns-mixed", lowered: false,
+    ConformanceFixture(name: "columns-mixed", lowered: true,
       description: "% and px columns beside a % group",
       build: columnsMixed),
-    ConformanceFixture(name: "columns-thirds", lowered: false,
+    ConformanceFixture(name: "columns-thirds", lowered: true,
       description: "three default-width columns", build: columnsThirds),
-    ConformanceFixture(name: "columns-thirds-rounded", lowered: false,
+    ConformanceFixture(name: "columns-thirds-rounded", lowered: true,
       description: "thirds of 590 px: each column rounds on its own",
       build: columnsThirdsRounded),
-    ConformanceFixture(name: "columns-border", lowered: false,
+    ConformanceFixture(name: "columns-border", lowered: true,
       description: "a bordered section's columns", build: columnsBorder),
-    ConformanceFixture(name: "group-px", lowered: false,
+    ConformanceFixture(name: "group-px", lowered: true,
       description: "a px group of default columns beside a % column",
       build: groupPx),
-    ConformanceFixture(name: "wrapper-columns", lowered: false,
+    ConformanceFixture(name: "wrapper-columns", lowered: true,
       description: "columns of a section in a padded wrapper",
       build: wrapperColumns),
+    ConformanceFixture(name: "gutter-thirds", lowered: true,
+      description: "mailColumns: three default columns, a 24px gutter",
+      build: gutterThirds),
+    ConformanceFixture(name: "gutter-px-remainder", lowered: true,
+      description: "px columns, a 25px gutter: the remainder goes first",
+      build: gutterPxRemainder),
+    ConformanceFixture(name: "gutter-boxes", lowered: true,
+      description: "a gutter between a padded background column and a " &
+        "column with other vertical padding", build: gutterBoxes),
+    ConformanceFixture(name: "gutter-odd-percent", lowered: true,
+      description: "four default columns, a 15px gutter, in a wrapper",
+      build: gutterOddPercent),
   ]
 
 # --- Width facts from the layout pass.
@@ -292,7 +366,8 @@ proc factsOf(node: EmailNode; acc: var seq[WidthFact]) =
       acc.add(WidthFact(kind: "table", px: float(node.layout.outer)))
       var columns = false
       for c in node.children:
-        if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:
+        if c.kind == enElement and c.tag in ["mailColumn", "mailGroup",
+            "mailColumns"]:
           columns = true
       if node.tag == "mailSection" and not columns:
         # Content directly in a section is its implicit single column,
@@ -300,9 +375,10 @@ proc factsOf(node: EmailNode; acc: var seq[WidthFact]) =
         acc.add(WidthFact(kind: "cell", px: float(node.layout.box),
           responsive: "100%"))
     of "mailColumn", "mailGroup":
+      # The class width: the desktop width, less the gutter share.
       let resp =
-        if node.layout.pxWidth: $node.layout.outer & "px"
-        else: percentText(node.layout.percent) & "%"
+        if node.layout.pxWidth: $node.layout.deskPx & "px"
+        else: percentText(node.layout.deskPercent) & "%"
       acc.add(WidthFact(kind: "cell", px: float(node.layout.outer),
         responsive: resp))
     else:
@@ -346,15 +422,49 @@ proc columnMjml(col: EmailNode; theme: EmailTheme): string =
   "<mj-column" & attrText([("width", value(col, "width")),
     ("padding", pad)]) & ">" & leavesMjml(col) & "</mj-column>"
 
+proc rowOf(s: EmailNode): EmailNode =
+  ## The section's `mailColumns` row, when it is the section's content.
+  for c in s.children:
+    if c.kind == enElement and c.tag == "mailColumns":
+      return c
+  nil
+
+proc sideText(v: array[4, int]): string =
+  $v[0] & "px " & $v[1] & "px " & $v[2] & "px " & $v[3] & "px"
+
 proc sectionMjml(s: EmailNode; theme: EmailTheme): string =
   var pad = value(s, "padding")
   if pad.len == 0:
     pad = theme.lightFor(sectionPaddingToken)
   let full = if s.attrs.getOrDefault("full_width", "") == "true":
     "full-width" else: ""
+  let row = rowOf(s)
+  var gutter = ""
+  if row != nil:
+    # A row in the section's implicit column: MJML puts the column
+    # padding on the section and the gutter on the section too.
+    let sp = expandBox(pad)
+    let cp = expandBox(theme.lightFor(columnPaddingToken))
+    var sum: array[4, int]
+    for i in 0 .. 3:
+      sum[i] = int(toPx(sp[i]) + toPx(cp[i]))
+    pad = sideText(sum)
+    gutter = value(row, "gutter")
   result = "<mj-section" & attrText([("padding", pad),
     ("background-color", value(s, "background-color")),
-    ("border", value(s, "border")), ("full-width", full)]) & ">"
+    ("border", value(s, "border")), ("full-width", full),
+    ("gutter", gutter)]) & ">"
+  if row != nil:
+    for c in row.children:
+      if c.kind == enElement and c.tag == "mailColumn":
+        var cpad = value(c, "padding")
+        if cpad.len == 0:
+          cpad = "0"
+        result.add("<mj-column" & attrText([("width", value(c, "width")),
+          ("padding", cpad),
+          ("background-color", value(c, "background-color"))]) & ">" &
+          leavesMjml(c) & "</mj-column>")
+    return result & "</mj-section>"
   var columns = false
   for c in s.children:
     if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:

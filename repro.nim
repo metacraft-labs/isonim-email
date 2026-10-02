@@ -130,6 +130,7 @@ const emailTestSpecs = @[
   "t5_lower_elements",
   "t5_layout",
   "t5_scaffolding",
+  "t5_columns",
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",
@@ -158,6 +159,10 @@ const emailTestSpecs = @[
   "e2e_local_capture_deterministic",
   "e2e_brief_diff_missing_element",
   "e2e_dom_assertions",
+  # Added 2026-10-02: spawns node and the pinned Chromium like the four
+  # above, so it is expected to meet the same engine defect; `repro test`
+  # was not re-run for it.
+  "e2e_local_columns",
 ]
 
 package isonim_email:

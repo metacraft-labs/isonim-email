@@ -359,28 +359,69 @@ proc tableLine(node: EmailNode; width, breakpoint: int): string =
     else:
       discard
 
+type CssMode* = enum
+  ## How a client treats the message's `<style>` blocks, as far as the
+  ## column arrangement is concerned.
+  cmHeadCss  ## kept: media queries apply
+  cmNoCss    ## removed (GANGA, a sanitiser that strips them)
+  cmWord     ## Word's ghost tables: desktop widths, never stacked
+
+proc familyCssMode*(family: string): CssMode =
+  ## A backend-A family's mode: GANGA strips every `<style>`, the Word
+  ## approximation lays out the ghost tables; the rest keep head CSS.
+  checkFamily(family)
+  case family
+  of "ganga": cmNoCss
+  of "wordApprox": cmWord
+  else: cmHeadCss
+
 proc columnCount(node: EmailNode): int =
   for c in node.children:
-    if tagLower(c) == "mailcolumn":
+    if tagLower(c) in ["mailcolumn", "mailgroup"]:
       inc result
   if result == 0:
     for c in node.children:
       if c.kind == enElement:
         inc result
 
-proc columnsLine(node: EmailNode; width, breakpoint: int): string =
-  ## Stacked vs side-by-side from the viewport width and the
-  ## `mailColumns`/`stack` attrs: `strategy=cells` and `stack=never`
-  ## never stack; anything else stacks below the target breakpoint.
-  let stacked =
+proc columnsLine(node: EmailNode; width, breakpoint: int;
+    mode: CssMode): string =
+  ## Stacked vs side-by-side from the row's strategy, the client's
+  ## treatment of head CSS and the viewport width (the strategy table
+  ## of the column documentation): `cells` and `stack = never` never
+  ## stack; with head CSS the other strategies stack below the
+  ## breakpoint; without it a hybrid row (and a section's own columns)
+  ## stacks at every width, a Fab Four row still switches at the
+  ## breakpoint (inline `calc`), and a stacking cell row stays side by
+  ## side; Word shows every row side by side. Cell rows add that their
+  ## cells share one height.
+  var strategy =
     if tagLower(node) == "mailcolumns":
-      attrValue(node, "strategy").toLowerAscii() != "cells" and
-        width < breakpoint
-    else:
-      attrValue(node, "stack").toLowerAscii() != "never" and
-        width < breakpoint
-  "Columns (" & $columnCount(node) & "): " &
+      attrValue(node, "strategy").toLowerAscii()
+    elif attrValue(node, "stack").toLowerAscii() == "never": "never"
+    else: "hybrid"
+  if strategy.len == 0:
+    strategy = "hybrid"
+  let narrow = width < breakpoint
+  let stacked = case mode
+    of cmWord: false
+    of cmHeadCss: strategy notin ["cells", "never"] and narrow
+    of cmNoCss:
+      case strategy
+      of "hybrid": true
+      of "fabfour": narrow
+      else: false
+  result = "Columns (" & $columnCount(node) & "): " &
     (if stacked: "stacked" else: "side-by-side") & " at this width."
+  if not stacked and strategy in ["cells", "cellsstacking"]:
+    result.add(" The cells share one height.")
+  if stacked and strategy == "hybrid" and mode == cmNoCss and not narrow:
+    result.add(" Without the head CSS these columns stack at every " &
+      "width: that is their safe fallback (R-LAY-01).")
+  if stacked and strategy == "fabfour" and mode == cmNoCss:
+    result.add(" Without the head CSS the stacked columns keep their " &
+      "half-gutter side offsets and have no gap between them " &
+      "(declared, R-LAY-18).")
 
 proc sectionDirection(node: EmailNode): string =
   ## A section's direction: its own, else the nearest ancestor's
@@ -398,7 +439,8 @@ proc sectionDirection(node: EmailNode): string =
 
 proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
                items: var seq[string]; images: var seq[string];
-               firstH1: var bool; align = "center") =
+               firstH1: var bool; align = "center";
+               mode = cmHeadCss) =
   ## Present-list lines plus image alts, in document order. Containers
   ## recurse silently; only `mailColumns` (and multi-column
   ## `mailSection`) add an arrangement line of their own. `align` is
@@ -409,7 +451,8 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     return
   if node.kind != enElement:
     for c in node.children:
-      walkItems(c, bg, width, breakpoint, items, images, firstH1, align)
+      walkItems(c, bg, width, breakpoint, items, images, firstH1, align,
+        mode)
     return
   var curBg = bg
   let nodeBg = styleValue(node, "background-color")
@@ -442,24 +485,24 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
   of "mailtable", "table":
     items.add(tableLine(node, width, breakpoint))
   of "mailcolumns":
-    items.add(columnsLine(node, width, breakpoint))
+    items.add(columnsLine(node, width, breakpoint, mode))
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign)
+        curAlign, mode)
   of "mailsection":
     var cols = 0
     for c in node.children:
-      if tagLower(c) == "mailcolumn":
+      if tagLower(c) in ["mailcolumn", "mailgroup"]:
         inc cols
     if cols >= 2:
-      items.add(columnsLine(node, width, breakpoint))
+      items.add(columnsLine(node, width, breakpoint, mode))
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign)
+        curAlign, mode)
   else:
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign)
+        curAlign, mode)
 
 proc linksUnder(node: EmailNode; acc: var seq[tuple[text, href: string]]) =
   ## (text, href) of every `a`/`mailNavLink` in document order.
@@ -683,7 +726,7 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   var images: seq[string] = @[]
   var firstH1 = false
   walkItems(doc, docBackground(doc), width, breakpoint, items, images,
-    firstH1)
+    firstH1, mode = familyCssMode(family))
   items.add(footerLine(doc))
   if familyHonoursDark(family) and scheme != "light":
     let note = familyDarkNote(family)
@@ -727,6 +770,8 @@ type
     engine*: string        ## what renders the message
     audience*: string      ## the audience family it is ("" = none)
     headCss*: bool         ## the message's `<style>` blocks reach the render
+    noMediaQueries*: bool  ## the head CSS applies, but no `@media` rule
+                           ## does (rows of columns lay out as without CSS)
     darkRules*: bool       ## in its dark scheme the message's own
                            ## `prefers-color-scheme: dark` rules can apply
     shows*: seq[string]    ## sanitiser and engine behaviour, one line each
@@ -777,7 +822,10 @@ const realClients*: array[7, RealClient] = [
       "Hidden elements (the preheader) are removed.",
       "An image's `width` attribute becomes inline " &
         "`width:100%;max-width:{w}px`, so images keep their designed " &
-        "width."],
+        "width.",
+      "SnappyMail removes `min-width`; a Fab Four row keeps its lower " &
+        "bound from its `max()` width, so its columns sit side by side " &
+        "on a wide screen and stack on a narrow one (R-LAY-18)."],
     dark: @[
       "Dark: SnappyMail has no dark mode; its dark scheme is the " &
         "NightShine theme, whose chrome is dark and whose own text " &
@@ -857,13 +905,18 @@ const realClients*: array[7, RealClient] = [
         "`prefers-color-scheme: dark`; KMail does not adapt message " &
         "colours, and its message view keeps a dark text colour.",
       darkTextDefect],
-    degradations: @[],
+    degradations: @[
+      "a full-width band stops about 20 px short of each side: KMail " &
+        "lays the message out inside its own page margin (its header " &
+        "block shares it), while the page colour fills the view behind " &
+        "it (R-LAY-09; reaching the edge would take a negative margin, " &
+        "R-TBL-04)"],
     notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
       "(this client stands in for none of them)"]),
   RealClient(id: "claws-mail", display: "Claws Mail 4.4",
     backend: "linux-desktop", family: "verification",
     engine: "litehtml (Claws Mail's HTML viewer plugin)",
-    audience: "", headCss: true, darkRules: false,
+    audience: "", headCss: true, noMediaQueries: true, darkRules: false,
     shows: @[
       "litehtml is a deliberately weak renderer with partial CSS " &
         "support (no engine quirks): a stress test for graceful " &
@@ -873,7 +926,11 @@ const realClients*: array[7, RealClient] = [
       "The crop is the viewer's viewport, without its scroll bar."],
     dark: @[],
     degradations: @[
-      "simpler typography and spacing than in a browser engine"],
+      "simpler typography and spacing than in a browser engine",
+      "rows of columns arranged as without head CSS: litehtml applies " &
+        "no media query, so columns that take their desktop width from " &
+        "one stack at every width; a Fab Four row, sized by calc(), may " &
+        "wrap early"],
     rtlDegradation: "right-to-left text: litehtml has no bidirectional " &
       "reordering, so the words of an Arabic or Hebrew line appear in " &
       "left-to-right order (each word itself is shaped correctly)",
@@ -925,7 +982,8 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   var images: seq[string] = @[]
   var firstH1 = false
   walkItems(doc, docBackground(doc), width, breakpoint, items, images,
-    firstH1)
+    firstH1, mode = if c.headCss and not c.noMediaQueries: cmHeadCss
+      else: cmNoCss)
   items.add(footerLine(doc))
   if scheme != "light":
     if c.darkRules and c.headCss:

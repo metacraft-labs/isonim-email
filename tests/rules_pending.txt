@@ -18,6 +18,7 @@
 # R-RST-13 added 2026-09-29 for reset line 8 (`a{text-decoration:none}`); claimed 2026-10-01 by tests/t5_document_golden.nim.
 # R-A11Y-05 moved BACK here 2026-10-01 (the second exception to shrink-only): its dark-swap duplicates do not exist yet (mailImage dark_src reports E-LOWER-MISSING; the dark-image swap of R-IMG-06 is unbuilt), so the rule is not fully implemented. Its other three parts (spacers, preheader padding, decorative VML) stay unit-tested, unclaimed, in tests/t5_a11y.nim. Owner is the dark-mode work that builds R-IMG-06.
 # Implemented: R-LAY-06, R-LAY-08, R-LAY-09, R-LAY-17, R-TBL-01, R-TBL-02, R-TBL-04, R-TBL-05, R-TBL-06, R-TBL-14, R-TBL-15, R-OL-03, R-OL-15 (tests/t5_scaffolding.nim; R-TBL-02, R-TBL-14 and R-OL-03 for sections and wrappers, the columns' share comes with their lowering).
+# Implemented: R-LAY-01, R-LAY-02, R-LAY-03, R-LAY-04, R-LAY-07, R-LAY-10, R-LAY-11, R-LAY-12, R-LAY-13, R-LAY-14, R-TBL-03, R-TBL-11 (tests/t5_columns.nim; R-LAY-18, -19 and -20 were added to the catalogue with their test, never pending). Also R-LAY-15, R-OL-08 (tests/t5_columns.nim) and R-LAY-16 (tests/t5_columns.nim for hand-built rows, tests/t2_vocabulary_compile_fail.nim for templates). R-OL-06 (tests/t4_styles.nim, the existing MSO-additions test).
 R-A11Y-05
 R-A11Y-09
 R-BTN-01
@@ -48,24 +49,10 @@ R-IMG-11
 R-INT-01
 R-INT-02
 R-INT-03
-R-LAY-01
-R-LAY-02
-R-LAY-03
-R-LAY-04
-R-LAY-07
-R-LAY-10
-R-LAY-11
-R-LAY-12
-R-LAY-13
-R-LAY-14
-R-LAY-15
-R-LAY-16
 R-OL-02
 R-OL-04
 R-OL-05
-R-OL-06
 R-OL-07
-R-OL-08
 R-OL-09
 R-OL-11
 R-OL-12
@@ -76,12 +63,10 @@ R-PRE-02
 R-PRE-04
 R-RST-12
 R-SIZE-03
-R-TBL-03
 R-TBL-07
 R-TBL-08
 R-TBL-09
 R-TBL-10
-R-TBL-11
 R-TBL-12
 R-TBL-13
 R-TBL-16

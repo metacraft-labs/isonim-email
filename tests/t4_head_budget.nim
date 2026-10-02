@@ -91,14 +91,15 @@ suite "head budget drops lowest priority first":
     check "#MessageViewBody,#MessageWebViewDiv{width:100% !important;}" in
       full.blocks[0].text
     check "a{text-decoration:none;}" in full.blocks[0].text
-    # Responsive: the mobile query (sm: is below the breakpoint) plus
-    # the Thunderbird copy (default on); no OWA copy (default off).
+    # Responsive: the mobile query (sm: is below the breakpoint). The
+    # Thunderbird and OWA copies are copies of desktop column widths
+    # (R-LAY-12/13), so an `sm:` rule gets neither, whatever the flags.
     # Every variant rule carries !important — responsive, dark and
     # decorative :hover alike (R-CSS-03, R-INT-02).
     check full.blocks[1].text.startsWith(
       "@media only screen and (max-width: 479px){")
     check "min-width" notin full.blocks[1].text
-    check ".moz-text-html" in full.blocks[1].text
+    check ".moz-text-html" notin full.blocks[1].text
     check "[owa]" notin full.blocks[1].text
     check "!important" in full.blocks[1].text
     check "!IMPORTANT" notin full.blocks[1].text
@@ -129,8 +130,17 @@ suite "head budget drops lowest priority first":
     let owa = assembleHead(o.decls, owaTarget)
     check owa.blocks[1].text.startsWith(
       "@media only screen and (max-width: 599px){")
-    check "[owa]" in owa.blocks[1].text
+    check "[owa]" notin owa.blocks[1].text
     check ".moz-text-html" notin owa.blocks[1].text
+    # A desktop column rule is copied: for OWA outside the query.
+    let col = ColumnRule(desktop: true, cls: "e-col-50",
+      decls: @[("width", "50%", true), ("max-width", "50%", false)])
+    let withCols = assembleHead(freshDecls().decls, owaTarget,
+      columns = @[col])
+    check withCols.blocks[1].text.startsWith(
+      "@media only screen and (min-width: 600px){.e-col-50{")
+    check "}[owa] .e-col-50{max-width:50%;width:50% !important}@media " &
+      "only screen and (max-width: 599px){" in withCols.blocks[1].text
 
     # Staged budgets from the measured sizes: each stage drops exactly
     # one more block (mso is never budgeted, so it is excluded).

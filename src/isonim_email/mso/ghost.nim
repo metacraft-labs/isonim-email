@@ -112,3 +112,52 @@ proc notMsoOpen*(tagText: string): EmailNode =
 proc notMsoClose*(tag: string): EmailNode =
   ## `<!--[if !mso]><!--></{tag}><!--<![endif]-->`.
   newNotMso(@[raw("</" & tag & ">")])
+
+type GhostColumn* = object
+  ## One cell of a multi-column ghost row (R-LAY-07): the column's px
+  ## width and its vertical alignment. Never padding: a cell's `width`
+  ## does not include its padding in every engine, so the half-gutters
+  ## and the column's own padding go on a single-cell table inside the
+  ## cell (`msoBoxOpen`).
+  width*: int
+  valign*: string
+
+proc columnCellTag(c: GhostColumn): string =
+  var style = "width:" & $c.width & "px;"
+  if c.valign.len > 0:
+    style.add("vertical-align:" & c.valign & ";")
+  tagText("td", [("valign", c.valign), ("width", $c.width),
+    ("style", style)])
+
+proc ghostRowOpen*(first: GhostColumn; rtl = false;
+    background = ""): EmailNode =
+  ## R-LAY-07: `<!--[if mso]><table role="presentation" border="0"
+  ## cellpadding="0" cellspacing="0" width="100%"><tr><td valign
+  ## width style="width;vertical-align"><![endif]-->` before the
+  ## first column. The row fills its box (the cells carry the px
+  ## widths); `dir="rtl"` runs the cells right to left (R-LAY-11), and a
+  ## group's row paints the group's background.
+  var attrs = @[("role", "presentation"), ("border", "0"),
+    ("cellpadding", "0"), ("cellspacing", "0"), ("width", "100%")]
+  if background.len > 0:
+    attrs.add(("bgcolor", background))
+  if rtl:
+    attrs.add(("dir", "rtl"))
+  newMsoIf("mso", @[raw(tagText("table", attrs) & "<tr>" &
+    columnCellTag(first))])
+
+proc ghostRowNext*(next: GhostColumn): EmailNode =
+  ## `<!--[if mso]></td><td …><![endif]-->` between two columns.
+  newMsoIf("mso", @[raw("</td>" & columnCellTag(next))])
+
+proc msoBoxOpen*(cell: GhostCell): EmailNode =
+  ## Padding or a box inside a ghost cell, for Word only: a single-cell
+  ## 100% table whose cell carries the half-gutters and the column's
+  ## padding, or the column's own box (padding, background, border).
+  ## The row's cells themselves stay unpadded, so Word has no vertical
+  ## padding to equalise across them (R-TBL-03) and a background never
+  ## reaches into the gutter. Closed by `ghostTableClose`.
+  let table = tagText("table", [("role", "presentation"),
+    ("width", "100%"), ("border", "0"), ("cellpadding", "0"),
+    ("cellspacing", "0")])
+  newMsoIf("mso", @[raw(table & "<tr>" & cellTag(cell))])

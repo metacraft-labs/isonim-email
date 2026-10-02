@@ -175,6 +175,15 @@ const
   codeCssMsoUnlisted* = "W-CSS-MSO-UNLISTED"
     ## An `mso-*` property outside the closed list (R-OL-15): its effect
     ## in Word is unverified. Collected from `passes/lint.nim`.
+  codeLayoutMinColumn* = "W-LAYOUT-MIN-COLUMN"
+    ## A column of a cell row (`cells`, `cellsStacking`) whose content
+    ## box at a 320px document is narrower than its declared minimum
+    ## (R-TBL-11); an error under `strict`. Collected from
+    ## `passes/layout.nim`.
+  codeLayoutReverseText* = "E-LAYOUT-REVERSE-TEXT"
+    ## `reverse_on_mobile` on a row where more than one column holds
+    ## text, or in a right-to-left row (R-LAY-11). Collected from
+    ## `passes/validate.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

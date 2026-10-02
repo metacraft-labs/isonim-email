@@ -12,7 +12,9 @@
 ## element, so the static vocabulary never sees it, and a raw node built
 ## by one proc may be appended inside `mailRaw` by another. Sectioning
 ## elements are rejected at compile time in `ui(r)` templates; the check
-## here catches trees built by hand. Other nesting and vocabulary rules
+## here catches trees built by hand. A row's `reverse_on_mobile` is
+## checked here too (R-LAY-11): only a non-text column may move, and
+## never in a right-to-left row. Other nesting and vocabulary rules
 ## belong to the static vocabulary check, contrast and sizes to P10.
 
 import std/[strutils, tables, unicode]
@@ -61,6 +63,66 @@ proc nearestOrigin(node: EmailNode): SourceSpan =
     n = n.parent
   SourceSpan()
 
+proc holdsText(node: EmailNode): bool =
+  ## True when `node` or a descendant holds non-blank text (an image's
+  ## alt text is not text on the page).
+  if node.kind == enText:
+    return node.text.strip().len > 0
+  for c in node.children:
+    if holdsText(c):
+      return true
+  false
+
+proc rowRtl(node: EmailNode): bool =
+  ## True when the row runs right to left before any reversal: its own
+  ## `direction`, else the nearest section's, else the document's.
+  var n = node
+  while n != nil:
+    if n.kind == enElement:
+      let own = n.attrs.getOrDefault("direction",
+        n.styles.getOrDefault("direction", "")).toLowerAscii()
+      if own in ["ltr", "rtl"]:
+        return own == "rtl"
+      if n.tag == "mailDocument":
+        return n.attrs.getOrDefault("dir", "").toLowerAscii() == "rtl"
+    n = n.parent
+  false
+
+proc checkReversal(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## R-LAY-11: `reverse_on_mobile` flips the desktop order of a row whose
+  ## moved columns carry no text (an image beside text), and only in a
+  ## left-to-right row; a `cells` row never stacks, so it has no mobile
+  ## order to keep.
+  if node.attrs.getOrDefault("reverse_on_mobile", "").toLowerAscii() !=
+      "true":
+    return
+  if node.tag == "mailColumns" and
+      node.attrs.getOrDefault("strategy", "") == "cells":
+    diags.add(EmailDiagnostic(severity: sevError, code: codeVocabBadValue,
+      message: "reverse_on_mobile on a cells row, which never stacks: " &
+        "order its columns as they should show (R-LAY-11)",
+      origin: node.origin, rules: @["R-LAY-11"]))
+    return
+  var textual = 0
+  for c in node.children:
+    if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"] and
+        holdsText(c):
+      inc textual
+  if textual > 1:
+    diags.add(EmailDiagnostic(severity: sevError,
+      code: codeLayoutReverseText,
+      message: "reverse_on_mobile on a row where " & $textual &
+        " columns hold text: reversal moves only a non-text column " &
+        "(an image beside text), so the reading order and the visual " &
+        "order never disagree for text (R-LAY-11)",
+      origin: node.origin, rules: @["R-LAY-11"]))
+  if rowRtl(node):
+    diags.add(EmailDiagnostic(severity: sevError,
+      code: codeLayoutReverseText,
+      message: "reverse_on_mobile in a right-to-left row: the reversal " &
+        "is itself a right-to-left row and cannot be expressed in one " &
+        "(R-LAY-11)", origin: node.origin, rules: @["R-LAY-11"]))
+
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
   ## result means the tree is structurally valid.
@@ -104,6 +166,8 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
           "and content patterns, which add landmark roles themselves",
         origin: node.origin, rules: @["R-A11Y-10"],
       ))
+    if node.kind == enElement and node.tag in ["mailSection", "mailColumns"]:
+      checkReversal(node, result)
     if node.kind == enRaw and not insideMailRaw(node):
       let within =
         if node.parent != nil and node.parent.kind == enElement:

@@ -82,7 +82,17 @@ proc sameGeometry(ours, mjml: Geometry; why: var seq[string]): bool =
   if ours.bleeds != mjml.bleeds:
     why.add("full-bleed " & $ours.bleeds & " vs MJML " & $mjml.bleeds)
     result = false
-  if ours.responsive != mjml.responsive:
+  # Class widths compare as numbers, to 1e-5 as the solver check does:
+  # MJML writes a default column's width unnormalised
+  # (`33.333333333333336%`), this library to six decimals.
+  var sameResponsive = ours.responsive.len == mjml.responsive.len
+  if sameResponsive:
+    for i in 0 ..< ours.responsive.len:
+      let (ua, va) = responsiveValue(ours.responsive[i])
+      let (ub, vb) = responsiveValue(mjml.responsive[i])
+      if ua != ub or abs(va - vb) > 1e-5:
+        sameResponsive = false
+  if not sameResponsive:
     why.add("responsive widths " & $ours.responsive & " vs MJML " &
       $mjml.responsive)
     result = false

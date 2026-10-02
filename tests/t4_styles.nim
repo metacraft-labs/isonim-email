@@ -199,6 +199,7 @@ suite "margins convert to cell padding":
 
 suite "MSO additions apply iff outlookWord":
   test "test_mso_additions_apply_iff_outlook_word":
+    # rule: R-OL-06
     proc msoTree(): EmailNode =
       styled("table", [],
         styled("tr", [],

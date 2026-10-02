@@ -10,7 +10,8 @@
 ## story's MIME and with it the capture cache key.
 ##
 ## The images are hand-made placeholders: `logo.png` (240×80, shown at
-## 120 px) and `shield.png` (96×96, shown at 48 px), both @2x.
+## 120 px), `shield.png` (96×96, shown at 48 px) and `scene.png`
+## (560×320, a flat landscape, shown at 280 px), all @2x.
 ##
 ## Backend-independent (compile-time read + pure hashing).
 import isonim_email

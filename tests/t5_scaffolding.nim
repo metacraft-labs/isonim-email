@@ -218,9 +218,10 @@ suite "mailSection lowers div-first":
     check "<div style=\"margin:0 auto;max-width:600px;" &
       "background-color:#eeeeee;\">" in html
 
-  test "test_column_scaffolding_is_reported_not_dropped":
-    # Several columns, a column with its own box, and reversal need the
-    # column scaffolding, which does not exist yet: errors, content kept.
+  test "test_column_scaffolding_lowers":
+    # Several columns, a column with its own box, a narrower column and
+    # reversal lower through the column scaffolding (lower/column.nim):
+    # no placeholder errors, the content kept, no raw custom tags.
     let r = EmailRenderer()
     let doc = newDoc(r)
     r.heading(doc)
@@ -236,16 +237,22 @@ suite "mailSection lowers div-first":
       attrs = [("reverse_on_mobile", "true")])
     r.para(rev, "Reversed")
     let res = renderTree(doc)
-    check codesOf(res.diagnostics) == @[codeLowerMissing, codeLowerMissing,
-      codeLowerMissing, codeLowerMissing, codeLowerMissing]
+    check res.diagnostics.len == 0
     check "<mailcolumn" notin res.html.toLowerAscii()
     for text in ["Left", "Right", "Boxed", "Narrow", "Reversed"]:
       check text in res.html
-    # Negative control: a plain single column is clean.
+    # The two columns, the boxed one and the narrower one are rows of
+    # inline-block columns with a ghost row each.
+    check res.html.count("display:inline-block") == 4
+    check res.html.count("<table role=\"presentation\" border=\"0\" " &
+      "cellpadding=\"0\" cellspacing=\"0\" width=\"100%\"><tr><td valign") == 3
+    # Negative control: a plain single column still merges.
     let r2 = EmailRenderer()
     let doc2 = newDoc(r2)
     r2.heading(r2.child(r2.child(doc2, "mailSection"), "mailColumn"))
-    check renderTree(doc2).diagnostics.len == 0
+    let plain = renderTree(doc2)
+    check plain.diagnostics.len == 0
+    check "inline-block" notin plain.html
 
 suite "mailWrapper lowers as a band around its sections":
   test "test_wrapper_nests_its_sections_ghost_tables":

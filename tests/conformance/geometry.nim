@@ -19,10 +19,13 @@
 ##   tables to their container). `align="center"` centres it in the box.
 ## - A row's cells take their px widths (clamped to the table); cells
 ##   without one share what is left. A cell's content box is its width
-##   less its padding and border; top and bottom insets add up the
-##   cells' vertical padding and borders down to the leaf.
+##   less its padding and border, never below zero; top and bottom
+##   insets add up the cells' vertical padding and borders down to the
+##   leaf.
 ## - A background is a `bgcolor` attribute or a CSS `background-color`
-##   (or `background`) on a table or cell.
+##   (or `background`) on a table or cell. A leaf on the document's own
+##   colour has no background of its own: the skeleton paints the page
+##   colour on its wrapper table, MJML on the body only.
 ##
 ## From that model come three measures: the **leaves** (each marker
 ## text's left edge, width, vertical insets and background), the
@@ -337,7 +340,9 @@ proc layoutTable(w: var Walk; t: WNode; x, avail: float; top, bottom: int;
       let bor = bordersOf(st)
       let cbg0 = backgroundOf(c)
       let cbg = if cbg0.len > 0: cbg0 else: rowBg
-      let inner = cw - pad[1] - pad[3] - bor[1] - bor[3]
+      # A cell narrower than its padding lays its content out in
+      # nothing, never in a negative width.
+      let inner = max(0.0, cw - pad[1] - pad[3] - bor[1] - bor[3])
       for k in c.kids:
         layoutNode(w, k, cx + pad[3] + bor[3], inner,
           top + int(pad[0] + bor[0]), bottom + int(pad[2] + bor[2]), cbg,
@@ -352,8 +357,11 @@ proc layoutNode(w: var Walk; n: WNode; x, avail: float; top, bottom: int;
   if n.tag == "":
     let t = n.text.strip()
     if t.startsWith("MK"):
+      # The document's own colour is the page, wherever it is painted:
+      # this library's skeleton repeats it on its wrapper table
+      # (catalogue §1), MJML only on the body and a div.
       w.leaves.add(Leaf(marker: t, x: x, width: avail, top: top,
-        bottom: bottom, background: bg))
+        bottom: bottom, background: if bg == w.docBg: "" else: bg))
     return
   if n.tag == "table":
     layoutTable(w, n, x, avail, top, bottom, bg, bleed, autoParent)

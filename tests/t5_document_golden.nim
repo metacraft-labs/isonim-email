@@ -71,6 +71,13 @@
 ## message's head CSS applied there. One hunk per golden, that
 ## attribute only; every other byte is unchanged.
 ##
+## Golden update, 2026-10-02: both goldens lost the Thunderbird copy of
+## the responsive fixture's `sm:` rule (`.moz-text-html .e-1b9{…}`).
+## R-LAY-12 (amended first) copies the desktop column widths of the
+## `min-width` query only; an `sm:` rule is a phone rule, and
+## Thunderbird applies the media query itself. One hunk per golden,
+## that rule only; every other byte is unchanged.
+##
 ## Backend-independent (tree building + pure passes; the goldens load
 ## via `staticRead`), so `just test` also runs it on JS.
 import std/[algorithm, os, strutils, unittest]

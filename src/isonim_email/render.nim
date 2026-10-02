@@ -113,6 +113,7 @@ proc cloneTree(node: EmailNode; parent: EmailNode = nil): EmailNode =
     text: node.text,
     attrs: node.attrs,
     styles: node.styles,
+    fallbacks: node.fallbacks,
     children: @[],
     parent: parent,
     origin: node.origin,
@@ -248,7 +249,8 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## — it must never reach output. Other errors are collected, and
   ## `strict` re-raises the first one; it also raises
   ## `W-CSS-OVER-BUDGET`, since head CSS Gmail is certain to truncate
-  ## is an error under `strict` (R-CSS-07). The text is empty: the
+  ## is an error under `strict` (R-CSS-07), and `W-LAYOUT-MIN-COLUMN`,
+  ## a cell row too narrow at 320px (R-TBL-11). The text is empty: the
   ## plain-text pass generates it later, and an honest absence beats
   ## a lossy guess. MIME packaging then sends the HTML alone, never an
   ## empty `text/plain` part (see `toMessage`).
@@ -260,7 +262,8 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   diags.add(solveLayout(doc, theme, target))
   let styled = applyStyles(doc, theme, target, profile)
   diags.add(styled.diagnostics)
-  let headRes = assembleHead(styled.head, target)
+  let headRes = assembleHead(styled.head, target,
+    columns = columnRules(doc))
   diags.add(headRes.diagnostics)
   diags.add(applyA11y(doc))
   diags.add(lintTree(doc, profile))
@@ -313,7 +316,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
     raiseDiagnostic(firstError(diags))
   if strict:
     for d in diags:
-      if d.code == codeCssOverBudget:
+      # Warnings `strict` turns into errors: head CSS Gmail will
+      # truncate (R-CSS-07), and a cell row too narrow at 320px
+      # (R-TBL-11).
+      if d.code in [codeCssOverBudget, codeLayoutMinColumn]:
         raiseDiagnostic(d)
   RenderedEmail(
     html: html,

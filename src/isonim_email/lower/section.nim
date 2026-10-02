@@ -63,6 +63,14 @@ const innerFontSize* = "16px"
   ## The font-size reset of a single-column section's inner div
   ## (R-LAY-04, the column's own reset).
 
+const zeroFontSize* = "0.01px"
+  ## The font-size of a box that lays out no text of its own: the
+  ## container of inline-block columns (R-LAY-04) and a gutter cell
+  ## (R-TBL-05). Not `0`: WebKitGTK 2.52 (Evolution 3.58, Geary 46)
+  ## renders no message holding a box whose font-size is zero, and
+  ## Playwright's WebKit build crashes on one, while a hundredth of a
+  ## pixel lays out the same in every engine captured.
+
 type LowerCtx* = object
   ## What every scaffolding lowering needs from the render.
   theme*: EmailTheme
@@ -182,6 +190,7 @@ type Band* = object
   ## the inner div the content goes into.
   nodes*: seq[EmailNode]
   inner*: EmailNode
+  row*: bool  ## The section holds a row of columns, still to be placed in `inner`
 
 proc bandNodes*(node: EmailNode; ctx: LowerCtx; padding: array[4, int];
     background, border, radius, align: string; ghostAlign: bool;
@@ -238,6 +247,17 @@ proc bandNodes*(node: EmailNode; ctx: LowerCtx; padding: array[4, int];
   else:
     result.nodes = @[outer]
 
+proc mergesIntoSection*(col, section: EmailNode): bool =
+  ## A section's one `mailColumn` merges into the section (R-LAY-08)
+  ## when it needs no box of its own: no background, no border, no
+  ## radius, the section's full width, and no reversal.
+  if col.tag != "mailColumn" or section.layout.reversed:
+    return false
+  if colourOf(col, "background-color").len > 0 or max(col.layout.border) > 0 or
+      radiusOf(col).len > 0:
+    return false
+  not col.layout.pxWidth and col.layout.percent == 100.0
+
 proc lowerSection*(node: EmailNode; ctx: LowerCtx):
     tuple[band: Band; diagnostics: seq[EmailDiagnostic]] =
   ## Lowers one laid-out `mailSection`. Its content (the merged single
@@ -247,9 +267,6 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
   let r = EmailRenderer()
   var diags: seq[EmailDiagnostic] = @[]
   missingProps(node, diags)
-  if node.attrs.getOrDefault("reverse_on_mobile", "").toLowerAscii() ==
-      "true":
-    diags.add(lowerMissing(node, "reverse_on_mobile", "R-LAY-11"))
 
   var columns: seq[EmailNode] = @[]
   for c in node.children:
@@ -258,24 +275,13 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
   var padding = node.layout.padding
   var content: seq[EmailNode] = node.children
   var fontSize = innerFontSize
+  var row = false
   if columns.len == 0:
     padding = addSides(padding, defaultColumnPadding(ctx.theme))
-  elif columns.len == 1 and columns[0].tag == "mailColumn":
+  elif columns.len == 1 and mergesIntoSection(columns[0], node):
     # The single column merges into the section (no column scaffolding).
     let col = columns[0]
     padding = addSides(padding, col.layout.padding)
-    for prop in ["background-color", "background_color", "border",
-        "border-width", "border-radius", "border_radius"]:
-      if prop in col.styles:
-        diags.add(lowerMissing(col, "own " & prop.replace("_", "-") &
-          " in a single-column section (the column scaffolding)",
-          "R-LAY-01"))
-        break
-    if col.layout.percent notin [0.0, 100.0] or col.layout.pxWidth:
-      diags.add(lowerMissing(col, "width narrower than its section " &
-        "(the column scaffolding)", "R-LAY-01"))
-    if "inner_padding" in col.attrs:
-      diags.add(lowerMissing(col, "inner_padding", "R-LAY-14"))
     var merged: seq[EmailNode] = @[]
     for c in node.children:
       if c == col:
@@ -285,9 +291,11 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
         merged.add(c)
     content = merged
   else:
-    # Several columns or a group: the inline-block container
-    # (R-LAY-04); the columns themselves report E-LOWER-MISSING.
-    fontSize = "0"
+    # A row: several columns, a group, or one column with a box or a
+    # width of its own. The inner div holds inline-block columns
+    # (R-LAY-04).
+    fontSize = zeroFontSize
+    row = true
 
   let dir = directionOf(node, ctx)
   let align = alignOf(node, dir)
@@ -301,10 +309,16 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
   let radius = radiusOf(node)
   var consumed = @bandConsumed
   consumed.add(["font-size", "direction"])
+  if row and node.layout.reversed:
+    # R-LAY-11: the row runs right to left on desktop; each column
+    # restores its own direction.
+    innerStyles = @[("font-size", fontSize), ("text-align", align),
+      ("direction", "rtl")]
   var band = bandNodes(node, ctx, padding, background, border, radius,
     align, ghostAlign = true, innerStyles, consumed, r)
-  if columns.len == 1 and columns[0].tag == "mailColumn" and
-      "class" in columns[0].attrs:
+  if row and node.layout.reversed:
+    r.setAttribute(band.inner, "dir", "rtl")
+  if not row and columns.len == 1 and "class" in columns[0].attrs:
     # The merged column's classes (head rules on its padding) land
     # where its padding now is.
     var parts = band.inner.attrs.getOrDefault("class", "").splitWhitespace()
@@ -312,8 +326,11 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
       if cls notin parts:
         parts.add(cls)
     r.setAttribute(band.inner, "class", parts.join(" "))
-  for c in content:
-    r.appendChild(band.inner, c)
+  band.row = row
+  if not row:
+    # A row's columns are placed by `lower/column.nim` (the caller).
+    for c in content:
+      r.appendChild(band.inner, c)
 
   if node.attrs.getOrDefault("full_width", "").toLowerAscii() == "true":
     # R-LAY-09: the full-bleed band around the unchanged section.

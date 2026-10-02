@@ -73,9 +73,16 @@ suite "P3 widths match MJML 5":
           check abs(va - vb) < 1e-5
         else:
           inc tables
-    # Non-vacuity: the fixtures exercise columns, groups and wrappers.
-    check cells >= 25
-    check tables >= 15
+    # Non-vacuity: the fixtures exercise columns, groups, wrappers and
+    # gutters (where the class width is the desktop width less the
+    # gutter share, so it differs from the cell's share of the row).
+    check cells >= 38
+    check tables >= 19
+    var gutterFixtures = 0
+    for f in fixtures:
+      if f.name.startsWith("gutter-"):
+        inc gutterFixtures
+    check gutterFixtures >= 4
 
 suite "P3 width maths (catalogue §4.1)":
   test "test_section_box_is_width_less_padding_and_borders":
@@ -225,3 +232,74 @@ suite "P3 width maths (catalogue §4.1)":
     check s.layout.padding == [32, 32, 32, 32]
     check s.layout.box == 600 - 64
     check w.layout.padding == [0, 0, 0, 0]
+
+suite "P3 gutters (MJML 5)":
+  test "test_gutter_shares_follow_mjml_5":
+    # A mailColumns row sits in the implicit column's box (600 - 48 =
+    # 552); a 24px gutter between three default columns: each class
+    # width loses 2/3 of 24/552 of the row, each Outlook cell keeps its
+    # full third, the half-gutters sit on the inner sides only.
+    let r = EmailRenderer()
+    let doc = newDoc(r)
+    let s = r.child(doc, "mailSection")
+    let row = r.child(s, "mailColumns")
+    var cols: seq[EmailNode] = @[]
+    for i in 0 .. 2:
+      cols.add(r.child(row, "mailColumn"))
+    discard solved(doc)
+    check row.layout.box == 552
+    check row.layout.gutterPx == 24 # the default, space.5
+    for c in cols:
+      check c.layout.outer == 184
+      check abs(c.layout.deskPercent - 30.434783) < 1e-9
+      check c.layout.className == "e-col-30-434783"
+      check c.layout.padding == [0, 0, 0, 0] # none of their own
+    check cols[0].layout.gutter == [0, 12, 0, 0]
+    check cols[1].layout.gutter == [0, 12, 0, 12]
+    check cols[2].layout.gutter == [0, 0, 0, 12]
+    check cols[0].layout.gutterClass == "e-gutter-3-1-per-4-347826"
+    check cols[1].layout.gutterCss == "0 2.173913% 0 2.173913%"
+    check cols[0].layout.mobileGap == 0
+    check cols[1].layout.mobileGap == 24
+    # The column's content box leaves the half-gutters out.
+    check cols[1].layout.box == 184 - 24
+    # px columns and an odd gutter: 25 · 2/3 off each, floored, the
+    # remainder (round(3 · 1/3) = 1 px) to the first column.
+    let r2 = EmailRenderer()
+    let doc2 = newDoc(r2)
+    let row2 = r2.child(r2.child(doc2, "mailSection"), "mailColumns")
+    r2.setAttribute(row2, "gutter", "25px")
+    var px: seq[EmailNode] = @[]
+    for w in ["185px", "184px", "183px"]:
+      px.add(r2.child(row2, "mailColumn", [("width", w)]))
+    discard solved(doc2)
+    check px[0].layout.deskPx == 169
+    check px[1].layout.deskPx == 167
+    check px[2].layout.deskPx == 166
+    check px[0].layout.gutter == [0, 13, 0, 0]
+    check px[1].layout.gutter == [0, 13, 0, 12]
+    check px[2].layout.gutter == [0, 0, 0, 12]
+    check px[1].layout.gutterCss == "0 13px 0 12px"
+    # Right to left (the document's direction): mirrored.
+    let r3 = EmailRenderer()
+    let doc3 = newDoc(r3)
+    r3.setAttribute(doc3, "dir", "rtl")
+    let row3 = r3.child(r3.child(doc3, "mailSection"), "mailColumns")
+    r3.setAttribute(row3, "gutter", "25px")
+    let a = r3.child(row3, "mailColumn")
+    let b = r3.child(row3, "mailColumn")
+    discard solved(doc3)
+    check a.layout.gutter == [0, 0, 0, 13]
+    check b.layout.gutter == [0, 12, 0, 0]
+    check a.layout.gutterClass.endsWith("-rtl")
+    # Negative control: a section's own columns have no gutter.
+    let r4 = EmailRenderer()
+    let doc4 = newDoc(r4)
+    let s4 = r4.child(doc4, "mailSection")
+    let c4 = r4.child(s4, "mailColumn")
+    discard r4.child(s4, "mailColumn")
+    discard solved(doc4)
+    check s4.layout.gutterPx == 0
+    check c4.layout.gutter == [0, 0, 0, 0]
+    check c4.layout.deskPercent == 50.0
+    check c4.layout.gutterClass == ""

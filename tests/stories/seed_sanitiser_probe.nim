@@ -1,8 +1,9 @@
 ## Capture fixture: head CSS under a webmail sanitiser.
 ##
 ## A small document rendered with `darkMode = designed`, so its head
-## carries every kind of block a real message can: the reset, a
-## responsive `@media` rule with its Thunderbird copy, the dark block
+## carries every kind of block a real message can: the reset, the
+## responsive block (a two-column row's desktop width rule with its
+## Thunderbird copy, and a mobile `sm:` rule), the dark block
 ## (`prefers-color-scheme` rules and their `[data-ogsc]`/`[data-ogsb]`
 ## copies), a `:hover` rule and the MSO-only conditional block, plus the
 ## generated `e-` classes those rules target and one hosted image. The
@@ -20,7 +21,7 @@ import fixture_images
 
 proc sanitiserProbeDoc*(): EmailNode =
   ## h1 and p with dark-mode colours, a p with a phone-width padding,
-  ## a link with a hover rule, and the logo.
+  ## a link with a hover rule, the logo, and a two-column row.
   let r = EmailRenderer()
   let doc = r.createElement("mailDocument")
   r.setAttribute(doc, "lang", "en")
@@ -51,6 +52,14 @@ proc sanitiserProbeDoc*(): EmailNode =
   r.setAttribute(img, "alt", "Acme logo")
   r.setStyle(img, "width", "120px")
   r.appendChild(doc, img)
+  let row = r.createElement("mailSection")
+  for side in ["Left", "Right"]:
+    let col = r.createElement("mailColumn")
+    let cp = r.createElement("p")
+    r.setTextContent(cp, side & " column.")
+    r.appendChild(col, cp)
+    r.appendChild(row, col)
+  r.appendChild(doc, row)
   doc
 
 const sanitiserProbeText* = "Sanitiser probe\n\n" &

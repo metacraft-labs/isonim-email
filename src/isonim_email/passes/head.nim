@@ -29,9 +29,20 @@
 ## block leaves no dangling class: classes attach to elements only for
 ## surviving blocks.
 ##
-## Variants: `sm:` means mobile, so its rules sit under
-## `@media only screen and (max-width:{breakpoint-1}px)`; desktop is the
-## inline style. Every variant rule — responsive, dark and `:hover` —
+## The responsive block is mobile first, MJML's model: the rows' column
+## widths and desktop gutters sit under
+## `@media only screen and (min-width:{breakpoint}px)` (R-LAY-02, with
+## the Thunderbird copy when `thunderbirdMq`, R-LAY-12, and the OWA copy
+## when `owaDesktop`, R-LAY-13, both after the query and outside it:
+## neither client applies a media query in a message); stacked cells,
+## stacking gaps and `sm:` rules sit under
+## `@media only screen and (max-width:{breakpoint-1}px)`. Only the
+## desktop column rules are copied for Thunderbird and OWA: a copy of a
+## mobile rule outside the query would give OWA's desktop the phone
+## layout.
+##
+## Variants: `sm:` means mobile, so its rules sit under the `max-width`
+## query; desktop is the inline style. Every variant rule — responsive, dark and `:hover` —
 ## carries `!important`, because each must beat an inline value
 ## (R-CSS-03, R-INT-02). Class names hash the variant with the
 ## declarations (R-CSS-08), so one variant's rule never matches another
@@ -67,6 +78,7 @@ import ../diagnostics
 import ../ir
 import ../style/classes
 import ./styles
+import ./layout
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -299,12 +311,16 @@ proc ogsCopies(cls: string; decls: seq[Declaration]): seq[string] =
 
 proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     webfonts: seq[seq[Declaration]] = @[];
-    msoRules: seq[Rule] = @[]
+    msoRules: seq[Rule] = @[];
+    columns: seq[ColumnRule] = @[]
   ): tuple[blocks: seq[EmailNode]; diagnostics: seq[EmailDiagnostic]] =
   ## P6 over one render: prioritised head blocks plus the budget
   ## diagnostics, in block order (mso last). `webfonts`/`msoRules` are
-  ## the component feed seam; both default to absent. Raises `StyleError`
-  ## (`E-CSS-INVALID`) on any block that fails validation.
+  ## the component feed seam; both default to absent. `columns` are the
+  ## rows' rules (`layout.columnRules`): the desktop column widths and
+  ## gutters under the `min-width` query, the stacked cells and gaps
+  ## under the `max-width` one. Raises `StyleError` (`E-CSS-INVALID`) on
+  ## any block that fails validation.
   var gen = initClassGen()
   var diags: seq[EmailDiagnostic] = @[]
 
@@ -320,18 +336,45 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
       continue
     seenResp.add(cls)
     respGroups.add((cls, g.decls))
-  var respText = ""
-  if respGroups.len > 0:
-    var inner: seq[tuple[selector: string; decls: seq[Declaration]]] = @[]
-    for (cls, ds) in respGroups:
-      inner.add(("." & cls, ds))
+  var desktop, mozCopies, owaCopies: seq[tuple[selector: string;
+    decls: seq[Declaration]]]
+  var mobile: seq[tuple[selector: string; decls: seq[Declaration]]] = @[]
+  for c in columns:
+    var ds: seq[Declaration] = @[]
+    for d in c.decls:
+      ds.add(Declaration(prop: d.prop, value: d.value,
+        important: d.important))
+    if c.desktop:
+      # R-LAY-02 with its copies, both outside the query: Thunderbird
+      # (R-LAY-12) and OWA (R-LAY-13) apply no media query in a
+      # message, and both are desktop clients. Only the desktop column
+      # rules are copied.
+      desktop.add(("." & c.cls, ds))
       if target.thunderbirdMq:
-        inner.add((".moz-text-html ." & cls, ds))
+        mozCopies.add((".moz-text-html ." & c.cls, ds))
       if target.owaDesktop:
-        inner.add(("[owa] ." & cls, ds))
-    # `sm:` is the mobile variant: below the breakpoint.
-    respText = emitMediaRule("only screen and (max-width: " &
-      $(target.breakpoint - 1) & "px)", inner)
+        owaCopies.add(("[owa] ." & c.cls, ds))
+    else:
+      mobile.add(("." & c.cls, ds))
+  for (cls, ds) in respGroups:
+    # `sm:` is the mobile variant: below the breakpoint, never copied
+    # for Thunderbird or OWA (they are copies of desktop widths only).
+    mobile.add(("." & cls, ds))
+  var respText = ""
+  if desktop.len > 0:
+    # Mobile first: the column widths hold from the breakpoint up.
+    respText.add(emitMediaRule("only screen and (min-width: " &
+      $target.breakpoint & "px)", desktop))
+  for copies in [mozCopies, owaCopies]:
+    if copies.len > 0:
+      var parts: seq[string] = @[]
+      for r in copies:
+        parts.add(emitStyleRule(r.selector, r.decls))
+      parts.sort()
+      respText.add(parts.join(""))
+  if mobile.len > 0:
+    respText.add(emitMediaRule("only screen and (max-width: " &
+      $(target.breakpoint - 1) & "px)", mobile))
 
   var darkGroups: seq[tuple[cls: string; decls: seq[Declaration]]] = @[]
   var darkAttach: seq[tuple[node: EmailNode; cls: string]] = @[]

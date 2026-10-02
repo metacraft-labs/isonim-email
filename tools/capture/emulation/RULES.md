@@ -55,10 +55,12 @@ No catalogue rule; models images blocked by default: empty `img[src]`/`srcset`,
 drop CSS `background-image`. `--images off` applies it after any
 family's own transform, and blocks image requests to the fixture host.
 
-## wordApprox (`wordApprox.ts`, version 2)
+## wordApprox (`wordApprox.ts`, version 3)
 
 Lint-grade (emulation steps 1–5): reveal mso conditionals; strip
-`max-width` (R-OL-03), `display:flex|grid|inline-block`, CSS
+`max-width` (R-OL-03), `display:flex|grid|inline-block`, declarations
+using `calc()` (caniemail `css-unit-calc`: no support in Outlook for
+Windows; the Fab Four width, R-LAY-18), CSS
 `background-image` (R-OL-11), `border-radius` (R-OL-12), `margin:auto`
 (R-LAY-08) and non-`td`/`th` padding (R-OL-05, R-TBL-02); strip
 `<style>` media queries (R-LAY-02 excludes outlookWord); stand VML
@@ -75,8 +77,9 @@ and scoped classes fare outside a browser engine, and they calibrate
 the two kinds of webmail behaviour the transforms above model
 (prefix-and-scope like gmailWeb and outlookWeb, strip-everything like
 ganga). Measured 2026-10-01 on the `sanitiserProbe` capture fixture
-(a `darkMode = designed` render whose head has the reset, a
-responsive `@media` rule with its `.moz-text-html` copy, the dark
+(a `darkMode = designed` render whose head has the reset, the
+responsive block — a column width rule with its `.moz-text-html` copy
+and a mobile rule — the dark
 block with its `[data-ogsc]`/`[data-ogsb]` copies, a `:hover` rule and
 the `lte mso 11` conditional block) and on the receipt story, light
 and dark, desktop and mobile. Each claim below is asserted by

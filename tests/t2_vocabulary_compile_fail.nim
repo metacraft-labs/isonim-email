@@ -41,7 +41,8 @@ proc firstErrorLine*(output: string): string =
 const fixtures = ["unknown_mail_tag.nim", "forbidden_script.nim",
   "forbidden_iframe.nim", "forbidden_form.nim", "forbidden_video.nim",
   "forbidden_svg.nim", "proc_as_element.nim", "forbidden_sectioning.nim",
-  "forbidden_sectioning_top.nim", "bare_table.nim"]
+  "forbidden_sectioning_top.nim", "bare_table.nim",
+  "column_outside_row.nim"]
   ## Every fixture a test below reads (a test naming one missing here
   ## fails on the table lookup).
 
@@ -136,6 +137,20 @@ suite "vocabulary compile failures":
     check want == "E-STRUCT-NESTING"
     check "'table' must not be a child of 'mailColumn'" in output
     check "Use 'mailTable (data) or layout primitives' instead." in output
+    check cited in output
+    let first = firstErrorLine(output)
+    check first.startsWith(testsDir / "compile_fail" / cited)
+    check ("Error: " & want) in first
+
+  test "test_column_outside_a_row_is_compile_error":
+    # rule: R-LAY-16
+    # A column belongs to a row (a section, a group or a mailColumns):
+    # anywhere else it is a compile-time nesting error at its own line.
+    let (output, exitCode, want, cited) = checkFixture(
+      testsDir / "compile_fail" / "column_outside_row.nim")
+    check exitCode != 0
+    check want in output
+    check "mailColumn" in output
     check cited in output
     let first = firstErrorLine(output)
     check first.startsWith(testsDir / "compile_fail" / cited)

@@ -108,6 +108,13 @@ proc writeOpenTag(sink: var SerialSink; tag: string; node: EmailNode;
   if node.styles.len > 0:
     var style = " style=\""
     for k, v in node.styles.pairs:
+      if k in node.fallbacks:
+        # A fallback pair (R-CSS-19): the fallback first, so a client
+        # that rejects the later value still has one.
+        style.add k
+        style.add ":"
+        style.add escapeEmailAttr(node.fallbacks[k])
+        style.add ";"
       style.add k
       style.add ":"
       style.add escapeEmailAttr(v)

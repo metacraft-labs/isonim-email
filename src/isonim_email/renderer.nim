@@ -61,6 +61,19 @@ type
     padding*: array[4, int] ## Resolved own padding, top, right, bottom, left (px)
     border*: array[4, int]  ## Resolved own border widths, same order (px)
     className*: string    ## Responsive column class (`e-col-…` / `e-colpx-…`), columns and groups only
+    # Rows (a section holding columns, a `mailColumns`) and their columns:
+    strategy*: string     ## Rows and their columns: `hybrid`, `fabFour`, `cellsStacking` or `cells`
+    gutterPx*: int        ## Rows: the gutter between columns (px; 0 for a section's own columns)
+    reversed*: bool       ## Rows and their columns: desktop order reversed (`reverse_on_mobile`)
+    rtl*: bool            ## Rows and their columns: the row flows right to left (document, section or reversal)
+    stacks*: bool         ## Rows and their columns: the columns stack below the breakpoint
+    index*, siblings*: int  ## Columns: position in the row and the row's column count
+    deskPercent*: float   ## Columns: the desktop class width in % (the width less its gutter share)
+    deskPx*: int          ## Columns: the desktop class width in px (px columns)
+    gutter*: array[4, int]  ## Columns: the desktop gutter padding, px, top, right, bottom, left
+    gutterClass*: string  ## Columns: the desktop gutter class, "" without a gutter
+    gutterCss*: string    ## Columns: the desktop gutter class's padding value
+    mobileGap*: int       ## Columns: inline `padding-top` while stacked (the gutter, every column but the first)
 
   EmailNode* = ref object
     kind*: EmailNodeKind
@@ -68,6 +81,7 @@ type
     text*: string                 ## enText / enRaw payload, enHeadStyle CSS
     attrs*: OrderedTable[string, string] ## Insertion order kept → deterministic output
     styles*: OrderedTable[string, string] ## setStyle(prop, value); variant keys allowed (Tailwind @-prefixed keys)
+    fallbacks*: OrderedTable[string, string] ## setStyleWithFallback: prop -> the value written just before `styles[prop]`
     children*: seq[EmailNode]
     parent* {.cursor.}: EmailNode ## Untracked: breaks the parent/child cycle
     origin*: SourceSpan           ## Template file:line for diagnostics
@@ -219,7 +233,23 @@ proc setTextContent*(r: EmailRenderer; node: EmailNode; text: string) =
     node.children.add(textNode)
 
 proc setStyle*(r: EmailRenderer; node: EmailNode; prop, value: string) =
+  ## Sets one declaration. It replaces any earlier value of `prop`,
+  ## including a fallback pair set by `setStyleWithFallback`.
   node.styles[prop] = value
+  node.fallbacks.del(prop)
+
+proc setStyleWithFallback*(r: EmailRenderer; node: EmailNode;
+                           prop, fallback, value: string) =
+  ## A fallback pair (catalogue R-CSS-19): the inline style carries
+  ## `prop:fallback;prop:value;`, both declarations, in that order, at
+  ## `prop`'s place among the node's declarations. A client that
+  ## rejects `value` (an unsupported function) keeps `fallback`; one
+  ## that understands both takes the later `value`. A style table holds
+  ## one value per property, so the fallback rides beside it and only
+  ## the serialiser writes it. For output-side nodes built by lowering:
+  ## the style pass, which runs before lowering, never sees it.
+  node.styles[prop] = value
+  node.fallbacks[prop] = fallback
 
 proc setStyle*(r: EmailRenderer; node: EmailNode; prop: string;
                token: TokenRef) =

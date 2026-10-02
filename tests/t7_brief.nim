@@ -141,6 +141,69 @@ suite "review brief":
     check "Button" notin noBtn
     check "Columns (2): stacked at this width." in noBtn
 
+  test "test_brief_columns_follow_strategy_and_client":
+    # The arrangement line follows the row's strategy and what the
+    # client does with head CSS: without it a hybrid row stacks at
+    # every width, a Fab Four row still switches, a stacking cell row
+    # stays side by side; Word shows every row side by side.
+    proc rowsDoc(): EmailNode =
+      let r = EmailRenderer()
+      let doc = r.createElement("mailDocument")
+      r.setAttribute(doc, "lang", "en")
+      r.setAttribute(doc, "dir", "ltr")
+      r.setAttribute(doc, "title", "Rows")
+      let h1 = r.createElement("h1")
+      r.setTextContent(h1, "Rows")
+      r.appendChild(doc, h1)
+      for strategy in ["hybrid", "fabFour", "cellsStacking", "cells"]:
+        let row = r.createElement("mailColumns")
+        r.setAttribute(row, "strategy", strategy)
+        for t in ["A", "B"]:
+          let col = r.createElement("mailColumn")
+          let p = r.createElement("p")
+          r.setTextContent(p, strategy & t)
+          r.appendChild(col, p)
+          r.appendChild(row, col)
+        r.appendChild(doc, row)
+      # A section of plain content is no row, whatever it holds.
+      let plain = r.createElement("mailSection")
+      for t in ["One", "Two"]:
+        let p = r.createElement("p")
+        r.setTextContent(p, t)
+        r.appendChild(plain, p)
+      r.appendChild(doc, plain)
+      doc
+    registerStoryTree("briefRows", rowsDoc)
+    let rows = Story(name: "briefRows", group: "brief",
+      description: "rows of every strategy", render: nil)
+    proc arrangement(family, viewport: string): seq[string] =
+      for line in expectedBlock(rows, family, viewport, "light").splitLines():
+        if "Columns (2)" in line:
+          result.add(line.split(". ", 1)[1])
+    const stacked = "Columns (2): stacked at this width."
+    const side = "Columns (2): side-by-side at this width."
+    const cells = side & " The cells share one height."
+    check arrangement("chromium-baseline", "mobile") ==
+      @[stacked, stacked, stacked, cells]
+    check arrangement("chromium-baseline", "desktop") ==
+      @[side, side, cells, cells]
+    const fabNoCss = stacked & " Without the head CSS the stacked " &
+      "columns keep their half-gutter side offsets and have no gap " &
+      "between them (declared, R-LAY-18)."
+    check arrangement("ganga", "mobile") == @[stacked, fabNoCss, cells, cells]
+    const hybridNoCss = stacked & " Without the head CSS these " &
+      "columns stack at every width: that is their safe fallback (R-LAY-01)."
+    check arrangement("ganga", "desktop") ==
+      @[hybridNoCss, side, cells, cells]
+    check arrangement("wordApprox", "mobile") == @[side, side, cells, cells]
+    # A real client that strips the head CSS reads like GANGA.
+    let snappy = clientExpectedBlock(rows, "snappymail", "desktop",
+      "light")
+    check snappy.count(stacked) == 1
+    # The Fab Four keeps its lower bound there (R-LAY-18's max() width).
+    check "a Fab Four row keeps its lower bound" in snappy
+    check "shrink to nothing" notin snappy
+
   test "test_brief_images_off_names_alt_texts":
     let off = expectedBlock(getStory("receipt"), "imagesOff",
       "mobile", "light")

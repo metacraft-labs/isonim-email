@@ -746,11 +746,15 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     // class added, the skeleton's old form, which Roundcube copies over
     // the rcmBody class its scoped rules select.
     const n = (s: string, re: RegExp): number => s.match(re)?.length ?? 0;
-    const bodyQp = "<body xml:lang=3D";
-    assert.equal(
-      n(Buffer.from(probe.mime).toString("latin1"), /<body xml:lang=3D/g),
-      1,
+    // The quoted-printable body tag, wherever a soft line break falls
+    // inside it (how much head CSS precedes it decides where).
+    const bodyQp = new RegExp(
+      [..."<body xml:lang=3D"]
+        .map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("(?:=\r\n)?"),
+      "g",
     );
+    assert.equal(n(Buffer.from(probe.mime).toString("latin1"), bodyQp), 1);
     assert.doesNotMatch(probe.html, /<body [^>]*class=/);
     const control: StoryMessage = {
       story: "sanitiserProbeBodyClass",

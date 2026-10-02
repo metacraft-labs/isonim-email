@@ -17,8 +17,8 @@ proc cardTpl(r: EmailRenderer; title: string; n: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Card"):
       mailSection:
-        mailColumn(vertical_align = "top", inner_padding = "4px",
-                   background_color = "#fff", padding = "8px"):
+        mailColumn(vertical_align = "top", background_color = "#fff",
+                   padding = "8px"):
           h1: text title
           p: text "static para"
           raw "<!--stamp-->"
@@ -39,9 +39,8 @@ suite "renderer conformance":
     check col.tag == "mailColumn"
     # Style keywords (styleProperties) become styles with `-`; every other
     # keyword becomes an attribute with underscores kept.
-    check toSeq(col.attrs.keys) == @["vertical_align", "inner_padding"]
+    check toSeq(col.attrs.keys) == @["vertical_align"]
     check col.attrs["vertical_align"] == "top"
-    check col.attrs["inner_padding"] == "4px"
     check toSeq(col.styles.keys) == @["background-color", "padding"]
     check col.styles["background-color"] == "#fff"
     check col.styles["padding"] == "8px"

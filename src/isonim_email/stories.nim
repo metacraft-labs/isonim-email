@@ -156,7 +156,8 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
     raise newException(StoryError,
       "story tree failed layout: " & laid[0].code & ": " & laid[0].message)
   let styled = applyStyles(doc, defaultTheme(), target)
-  let headRes = assembleHead(styled.head, target)
+  let headRes = assembleHead(styled.head, target,
+    columns = columnRules(doc))
   discard applyA11y(doc)
   let lowered = lowerElements(doc, defaultTheme(), target = target)
   if hasErrors(lowered):

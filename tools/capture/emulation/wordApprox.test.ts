@@ -76,6 +76,27 @@ describe("wordApprox step 2: CSS Word ignores is stripped", () => {
     assert.ok(out.includes(`<div style="">y</div>`), `grid kept:\n${out}`);
   });
 
+  it("strips calc() declarations, which Word does not support, and keeps the rest", () => {
+    const out = wordApprox(
+      doc(
+        `<style>.f{width:calc(480px - 100%);color:red}</style>`,
+        `<div style="display:inline-block;width:calc((480px - 100%) * 480);min-width:50%;font-size:16px">x</div>` +
+          // The Fab Four's fallback pair: the max() form wraps calc(),
+          // so it goes too (Word has neither function).
+          `<div style="width:calc((480px - 100%) * 480);width:max(50%, calc((480px - 100%) * 480));min-width:50%">y</div>`,
+      ),
+    );
+    assert.ok(out.includes(`.f{color:red}`), `unexpected output:\n${out}`);
+    assert.ok(
+      out.includes(`<div style="min-width:50%;font-size:16px">x</div>`),
+      `unexpected output:\n${out}`,
+    );
+    assert.ok(
+      out.includes(`<div style="min-width:50%">y</div>`),
+      `unexpected output:\n${out}`,
+    );
+  });
+
   it("keeps padding on td/th only, in blocks and inline", () => {
     const out = wordApprox(
       doc(

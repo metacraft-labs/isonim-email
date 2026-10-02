@@ -99,7 +99,6 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("width", akStyle, "Len"),
         attr("vertical_align", akAttr, "VAlign"),
         attr("padding", akStyle, "Box"),
-        attr("inner_padding", akAttr, "Box"),
         attr("background_color", akStyle, "Color"),
         attr("border", akStyle, "Border"),
         attr("border_radius", akStyle, "Len"),
@@ -223,7 +222,6 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("valign", akAttr, "VAlign"),
         attr("reverse_on_mobile", akAttr, "bool"),
         attr("min_column", akAttr, "Len"),
-        attr("equal_height", akAttr, "bool"),
       ]),
       TagDef(name: "mailGrid", attrs: @[
         attr("columns", akAttr, "int"),

@@ -5,8 +5,9 @@
 ## semantic tree) and replaces every vocabulary element that has a
 ## lowering with its email HTML: the div-first scaffolding
 ## (`mailSection`, `mailWrapper`, `mailStack`: `lower/section.nim`,
-## `lower/wrapper.nim`, `lower/stack.nim`) and `mailImage`
-## (`lower/image.nim`). `mailDocument` is lowered separately, around
+## `lower/wrapper.nim`, `lower/stack.nim`), rows of columns
+## (`mailColumn`, `mailGroup` and `mailColumns`: `lower/column.nim`) and
+## `mailImage` (`lower/image.nim`). `mailDocument` is lowered separately, around
 ## the result, by `lower/document.nim`.
 ##
 ## The scaffolding reads P3's widths (`passes/layout.nim`); a tree that
@@ -42,6 +43,7 @@ import ./image
 import ./section
 import ./wrapper
 import ./stack
+import ./column
 import ../passes/layout
 import ../target
 
@@ -50,7 +52,7 @@ import ../target
 const affects*: set[ClientFamily] = allFamilies
 
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
-  "mailStack"]
+  "mailStack", "mailColumns", "mailColumn", "mailGroup"]
   ## Elements this pass lowers.
 const loweredElsewhere* = ["mailDocument"]
   ## Elements lowered by the render entries themselves (the document
@@ -102,8 +104,16 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
     elif c.kind == enElement and c.tag == "mailSection":
       let (band, found) = lowerSection(c, ctx)
       diags.add(found)
+      if band.row:
+        discard lowerInlineRow(c, ctx, band.inner, EmailRenderer())
       replaceChild(parent, c, band.nodes)
       walk(band.inner, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailColumns":
+      let (row, found) = lowerColumns(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, row.nodes)
+      for h in row.holders:
+        walk(h, ctx, assets, diags)
     elif c.kind == enElement and c.tag == "mailWrapper":
       let (band, found) = lowerWrapper(c, ctx)
       diags.add(found)
@@ -115,6 +125,15 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       replaceChild(parent, c, nodes)
       for w in wrappers:
         walk(w, ctx, assets, diags)
+    elif c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:
+      # A column is lowered by its row; one anywhere else is misplaced
+      # (a hand-built tree: templates cannot express it).
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codeStructNesting,
+        message: "<" & c.tag & "> outside a mailSection or mailColumns " &
+          "row (R-LAY-16)", origin: c.origin, rules: @["R-LAY-16"]))
+      walk(c, ctx, assets, diags)
+      replaceChild(parent, c, c.children)
     elif c.kind == enElement and c.tag notin loweredElsewhere and
         needsLowering(c.tag):
       diags.add(EmailDiagnostic(severity: sevError,

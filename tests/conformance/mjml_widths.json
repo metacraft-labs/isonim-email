@@ -263,5 +263,93 @@
       "px": 405.0,
       "responsive": "75%"
     }
+  ],
+  "gutter-thirds": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 184.0,
+      "responsive": "30.434783%"
+    },
+    {
+      "kind": "cell",
+      "px": 184.0,
+      "responsive": "30.434783%"
+    },
+    {
+      "kind": "cell",
+      "px": 184.0,
+      "responsive": "30.434783%"
+    }
+  ],
+  "gutter-px-remainder": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 185.0,
+      "responsive": "169px"
+    },
+    {
+      "kind": "cell",
+      "px": 184.0,
+      "responsive": "167px"
+    },
+    {
+      "kind": "cell",
+      "px": 183.0,
+      "responsive": "166px"
+    }
+  ],
+  "gutter-boxes": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 128.0,
+      "responsive": "23.4375%"
+    },
+    {
+      "kind": "cell",
+      "px": 384.0,
+      "responsive": "73.4375%"
+    }
+  ],
+  "gutter-odd-percent": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "table",
+      "px": 576.0
+    },
+    {
+      "kind": "cell",
+      "px": 130.0,
+      "responsive": "22.836538%"
+    },
+    {
+      "kind": "cell",
+      "px": 130.0,
+      "responsive": "22.836538%"
+    },
+    {
+      "kind": "cell",
+      "px": 130.0,
+      "responsive": "22.836538%"
+    },
+    {
+      "kind": "cell",
+      "px": 130.0,
+      "responsive": "22.836538%"
+    }
   ]
 }
