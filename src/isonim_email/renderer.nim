@@ -46,6 +46,22 @@ type
     enVml       ## IR: a VML shape; `tag` holds the shape name (`v:rect`, …)
     enHeadStyle ## IR: one `<style>` block; `text` holds the CSS
 
+  LayoutBox* = object
+    ## P3's annotation of one layout element (`passes/layout.nim`): the
+    ## width context it sits in, the px width it occupies, and the px
+    ## width its children get. `solved` is false on every node P3 did
+    ## not lay out (leaves, and every node of a tree P3 never saw).
+    solved*: bool
+    container*: int       ## The width context the element sits in (px)
+    outer*: int           ## Its own px width: the Outlook ghost width
+    box*: int             ## Its content box: the children's width context (px)
+    boxExact*: float      ## `box` before truncation (columns and groups pass fractions on)
+    percent*: float       ## Column or group desktop width, % of the parent box (0 for px widths)
+    pxWidth*: bool        ## True when the author gave the width in px
+    padding*: array[4, int] ## Resolved own padding, top, right, bottom, left (px)
+    border*: array[4, int]  ## Resolved own border widths, same order (px)
+    className*: string    ## Responsive column class (`e-col-…` / `e-colpx-…`), columns and groups only
+
   EmailNode* = ref object
     kind*: EmailNodeKind
     tag*: string                  ## Element tag or VML shape name
@@ -57,6 +73,7 @@ type
     origin*: SourceSpan           ## Template file:line for diagnostics
     cond*: string                 ## enMsoIf condition (`mso`, `gte mso 9`, …)
     priority*: int                ## enHeadStyle block priority (head-block assembly order)
+    layout*: LayoutBox            ## P3 widths (layout elements only; see `LayoutBox`)
 
   EmailAsyncResource* = ref object
     ## One async load a template started. Created pending (`asLoading`)

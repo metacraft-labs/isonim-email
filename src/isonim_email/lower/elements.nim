@@ -3,9 +3,17 @@
 ## Walks a tree that the earlier passes have finished with (the render
 ## entries hand it a clone, so the authoring tree survives as the
 ## semantic tree) and replaces every vocabulary element that has a
-## lowering with its email HTML. Today that is `mailImage`
-## (`lower/image.nim`); `mailDocument` is lowered separately, around
+## lowering with its email HTML: the div-first scaffolding
+## (`mailSection`, `mailWrapper`, `mailStack`: `lower/section.nim`,
+## `lower/wrapper.nim`, `lower/stack.nim`) and `mailImage`
+## (`lower/image.nim`). `mailDocument` is lowered separately, around
 ## the result, by `lower/document.nim`.
+##
+## The scaffolding reads P3's widths (`passes/layout.nim`); a tree that
+## reaches this pass unsolved is laid out first. A container is
+## lowered before its content, so content lowers inside the markup it
+## will sit in (an image reads its alignment from the section's inner
+## div, not from the authoring element).
 ##
 ## The invariant this pass owns: a vocabulary element with no lowering
 ## is an error (`E-LOWER-MISSING`), never emitted as a raw custom tag.
@@ -23,7 +31,7 @@
 ##
 ## Pure tree building: identical on the C and JS targets.
 
-import std/[sets, strutils]
+import std/[sets, strutils, tables]
 import isonim/dsl/vocabulary
 import ../renderer
 import ../diagnostics
@@ -31,13 +39,18 @@ import ../assets
 import ../vocabulary as emailVocabulary
 import ../style/tokens
 import ./image
+import ./section
+import ./wrapper
+import ./stack
+import ../passes/layout
 import ../target
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
 const affects*: set[ClientFamily] = allFamilies
 
-const loweredHere* = ["mailImage"]
+const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
+  "mailStack"]
   ## Elements this pass lowers.
 const loweredElsewhere* = ["mailDocument"]
   ## Elements lowered by the render entries themselves (the document
@@ -76,16 +89,32 @@ proc replaceChild(parent, old: EmailNode; repl: seq[EmailNode]) =
   parent.children = kids
   old.parent = nil
 
-proc walk(parent: EmailNode; theme: EmailTheme;
+proc walk(parent: EmailNode; ctx: LowerCtx;
     assets: openArray[AssetRef]; diags: var seq[EmailDiagnostic]) =
   let kids = parent.children # Copy: replacement edits the seq.
   for c in kids:
     if c == nil:
       continue
     if c.kind == enElement and c.tag == "mailImage":
-      let (lowered, found) = lowerImage(c, theme, assets)
+      let (lowered, found) = lowerImage(c, ctx.theme, assets)
       diags.add(found)
       replaceChild(parent, c, @[lowered])
+    elif c.kind == enElement and c.tag == "mailSection":
+      let (band, found) = lowerSection(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, band.nodes)
+      walk(band.inner, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailWrapper":
+      let (band, found) = lowerWrapper(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, band.nodes)
+      walk(band.inner, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailStack":
+      let (nodes, wrappers, found) = lowerStack(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      for w in wrappers:
+        walk(w, ctx, assets, diags)
     elif c.kind == enElement and c.tag notin loweredElsewhere and
         needsLowering(c.tag):
       diags.add(EmailDiagnostic(severity: sevError,
@@ -93,16 +122,22 @@ proc walk(parent: EmailNode; theme: EmailTheme;
         message: "<" & c.tag & "> has no lowering yet: it would reach " &
           "the output as a raw custom tag, which mail clients strip",
         origin: c.origin, rules: @[]))
-      walk(c, theme, assets, diags)
+      walk(c, ctx, assets, diags)
       replaceChild(parent, c, c.children)
     else:
-      walk(c, theme, assets, diags)
+      walk(c, ctx, assets, diags)
 
 proc lowerElements*(root: EmailNode; theme: EmailTheme;
-    assets: openArray[AssetRef] = []): seq[EmailDiagnostic] =
+    assets: openArray[AssetRef] = []; target = defaultTarget()):
+    seq[EmailDiagnostic] =
   ## P4 in place over `root`'s descendants (`root` itself — the
   ## `mailDocument` — is left for the document lowering). Returns the
-  ## diagnostics in document order.
+  ## diagnostics in document order. A root P3 has not laid out is laid
+  ## out here first (its layout diagnostics are then returned too).
   if root == nil:
     return
-  walk(root, theme, assets, result)
+  if not root.layout.solved:
+    result.add(solveLayout(root, theme, target))
+  let ctx = LowerCtx(theme: theme, target: target,
+    dir: root.attrs.getOrDefault("dir", "ltr"))
+  walk(root, ctx, assets, result)

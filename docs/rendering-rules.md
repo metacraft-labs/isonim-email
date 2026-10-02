@@ -9,7 +9,7 @@
 > **Status:** Normative. This catalogue is the **exact behaviour** the
 > implementation must produce. The rule-traceability test
 > (`tests/t1_rule_traceability.nim`) reads it directly.
-> **Last Updated:** 2026-10-01
+> **Last Updated:** 2026-10-02
 
 This catalogue turns published HTML-email practice (RFCs, vendor
 documentation, caniemail data, framework sources and community write-ups)
@@ -192,14 +192,26 @@ column width, % given   = colPct
 column width, px given  = colPx
 column width, omitted   = 100 / (number of non-raw siblings) %
 column px (Outlook)     = colPx, or round(colPct/100 · B)
-column box              = column px − column paddingL/R − borders   (child context)
-group                   = like a section inside a column: its B is the group's px width
+column box              = colPct/100 · B (or colPx) − column paddingL/R − borders, truncated (child context)
+group                   = like a section inside a column: its B is the group's exact width less its padding
+content in a section    = an implicit single column with the default column padding
 ```
 
-- Rounding: px values are rounded to integers. The **last** column absorbs
-  the rounding remainder, so the px widths sum to exactly `B`.
-- Percentages are normalised to at most 6 decimals, trailing zeros
-  stripped.
+- Rounding follows MJML 5 (`mjml-column` `getWidthAsPixel`): each
+  column's px width is rounded on its own, so the px widths of a row may
+  sum to `B` ± 1 per column (thirds of 590 are 197 each, 591 in all);
+  no remainder is moved onto the last column. Word stretches or shrinks
+  the fixed-width ghost row by that pixel.
+- Lengths are whole px: padding and border widths truncate, as MJML's
+  `parseInt` does. A column's box truncates; a group's box keeps its
+  fraction, and its columns take their percentage of that.
+- Percentages are read as authored, at full precision (the inline
+  `width` is normalised to two decimals later, but the width maths never
+  reads it). Class names normalise them to at most 6 decimals, trailing
+  zeros stripped (R-LAY-03).
+- A section holds either columns or content, never both (`E-STRUCT-NESTING`).
+- These numbers are checked against the pinned MJML's output by
+  `just test-conformance`.
 
 ### 4.2 Rules
 
@@ -210,10 +222,10 @@ group                   = like a section inside a column: its B is the group's p
 | R-LAY-03 | Column class names are `e-col-{pct}` with `.` replaced by `-` (e.g. `e-col-33-333333`), or `e-colpx-{n}` for px columns. They are deduplicated across the document. | style/classes | — | mjml-column class naming (read) | ✓ |
 | R-LAY-04 | The element that contains inline-block columns (the section's inner div, a Grid or a Cluster parent) has `font-size:0`. Each column or item resets `font-size` (16px default) on its own div. | lower/section, lower/column | all | Cerberus hybrid template; MJML (read) | ✓ |
 | R-LAY-05 | **Nothing between inline-block siblings**: no whitespace or text nodes between column `div`s, including across the ⟪mso⟫ conditional comments that separate them. | serialize | all | MJML and Cerberus inline-block practice (read) | ✓ |
-| R-LAY-06 | ⟪mso⟫ Section ghost table (div-first): `<!--[if mso]><table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" width="{W}" style="width:{W}px;"><tr><td bgcolor="{bg}" style="padding:{pad};background-color:{bg};"><![endif]-->` before the section `div`, and `<!--[if mso]></td></tr></table><![endif]-->` after it. The cell carries the section's padding and background (R-TBL-02). | mso/ghost | outlookWord | goodemailcode.com container (read) | ✓ |
+| R-LAY-06 | ⟪mso⟫ Section ghost table (div-first): `<!--[if mso]><table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" width="{W}" style="width:{W}px;"><tr><td bgcolor="{bg}" style="padding:{pad};background-color:{bg};"><![endif]-->` before the section `div`, and `<!--[if mso]></td></tr></table><![endif]-->` after it. The cell carries the section's padding and background (R-TBL-02), its border (`border:{border};` after the background), and, when the section is not left-aligned, `align="{align}"` after `bgcolor` and `text-align:{align};` last (R-TBL-14). Attributes and declarations without a value are omitted (no `bgcolor` without a background). | mso/ghost | outlookWord | goodemailcode.com container (read) | ✓ |
 | R-LAY-07 | ⟪mso⟫ Multi-column ghost row, inside the section's inner div: `<!--[if mso]><table role="presentation" border="0" cellpadding="0" cellspacing="0" width="{B}" style="width:{B}px;"><tr><td valign="{va}" width="{colPx}" style="width:{colPx}px;padding:{colPad};"><![endif]-->` before the first column; `<!--[if mso]></td><td …><![endif]-->` between columns; `<!--[if mso]></td></tr></table><![endif]-->` after the last. Each ghost cell carries its column's padding (R-TBL-02). Grids chunk it into rows of N. | mso/ghost | outlookWord | mjml-section source; Foundation block-grid (read) | ✓ |
-| R-LAY-08 | Section (non-MSO): `<div class="e-sec" style="margin:0 auto;max-width:{W}px;background-color:{bg};"><div style="padding:{pad};font-size:0;text-align:{align};direction:{dir};">…</div></div>`. A single-column section has no column scaffolding: column padding merges into the inner div and the MSO cell. Centring in Word comes from `align="center"` on the ghost table (R-LAY-06), never from `margin:auto` alone. | lower/section | all | goodemailcode.com container; caniemail css-margin note 4 (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
-| R-LAY-09 | `full_width` section: an outer `<div style="background-color:{bg};">` plus ⟪mso⟫ `<table role="presentation" width="100%"><tr><td bgcolor="{bg}">` around the section. The inner container is unchanged. | lower/section | all | mjml-section full-width; Cerberus full-bleed section (read) | ✓ |
+| R-LAY-08 | Section (non-MSO): `<div style="margin:0 auto;max-width:{W}px;background-color:{bg};"><div align="{align}" style="padding:{pad};font-size:{fs};text-align:{align};direction:{dir};">…</div></div>`. A single-column section has no column scaffolding: column padding merges into the inner div and the MSO cell (section `24px 0` plus column `0 24px` gives `24px`), and `{fs}` is the column's own reset, `16px`; a section that holds inline-block columns has `font-size:0` (R-LAY-04). Content placed directly in a section is that single column, with the default column padding. `{align}` defaults to the start of the direction (left for `ltr`, right for `rtl`); `{dir}` defaults to the document's and is omitted for `auto`. A radius goes on the outer div (`border-radius:{r};` last) and on the border frame. A border is drawn by a frame `div` between the two that Word does not see: `<!--[if !mso]><!--><div style="border:{border};border-radius:{r};"><!--<![endif]-->` … `<!--[if !mso]><!--></div><!--<![endif]-->` (a plain `div` when `outlookWord` is off); Word draws the border on the ghost cell, and its div borders are unreliable (caniemail css-border note 2). Centring in Word comes from `align="center"` on the ghost table (R-LAY-06), never from `margin:auto` alone. No class is emitted: no rule targets the section. | lower/section | all | goodemailcode.com container; caniemail css-margin note 4 (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-LAY-09 | `full_width` section: an outer `<div style="background-color:{bg};">` plus ⟪mso⟫ `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td bgcolor="{bg}" style="background-color:{bg};">` around the section (closed like a ghost table). The inner container is unchanged. | lower/section | all | mjml-section full-width; Cerberus full-bleed section (read) | ✓ |
 | R-LAY-10 | **Group** (`mailGroup`): columns inside keep their desktop percentage on mobile. Their inline width is the percentage, not 100%, and they get no media-query class. The group itself is one inline-block with the `e-mso-group-fix` class (R-DOC, `lte mso 11`). | lower/group | all | mjml-column getMobileWidth (read) | ✓ |
 | R-LAY-11 | **Mobile reversal** (`reverse_on_mobile`): the section cell gets `dir="rtl"` and every column gets `dir="ltr"` (its content direction). Authoring order stays reading order for screen readers and the text part. | lower/section | all | community practice | ◐ (to be confirmed by a real-client capture) |
 | R-LAY-12 | Thunderbird copy: when `thunderbirdMq`, every rule of R-LAY-02 is duplicated with the selector prefixed by `.moz-text-html `, in the same block. | P6 | thunderbird | MJML mediaQueries.js (read) | ✓ |
@@ -221,7 +233,7 @@ group                   = like a section inside a column: its B is the group's p
 | R-LAY-14 | Gutters follow the MJML 5 model: half-gutter padding on inner sides, none on outer edges, mirrored into the ghost cells. When stacked, a media query (`max-width:{bp-1}px`) replaces them with `padding-top:{gutter}` on every column but the first. Without CSS the half-gutters remain (a declared degradation). | lower/column, P6 | all | mjml-column source (read) | ✓ |
 | R-LAY-15 | Every layout `<table>` has `role="presentation"`, `border="0"`, `cellpadding="0"`, `cellspacing="0"`, and an HTML `width` attribute alongside CSS width (R-OL-09). | P7, lower/* | all | Email Markup Consortium Accessibility Report 2026; Cerberus (read) | ✓ |
 | R-LAY-16 | Max nesting: `mailSection` cannot nest in `mailSection` (use `mailWrapper`); `mailColumn` only in `mailSection`/`mailGroup`/`mailColumns`; `mailGroup` only in `mailSection`. These are compile-time errors. | vocabulary | — | MJML structure (read) | ✓ |
-| R-LAY-17 | `mailWrapper` gives several sections one shared background and padding. It lowers like a `full_width` section whose children are sections. Its inner sections use `W − wrapper padding` as their container width. | lower/wrapper | all | MJML mj-wrapper docs | ✓ |
+| R-LAY-17 | `mailWrapper` gives several sections one shared background, padding and border. It lowers like a section (R-LAY-06, R-LAY-08: ghost table, outer div, inner div carrying only the padding, the border frame), its inner div holding sections. Its inner sections use `W − wrapper padding − wrapper borders` as their container width, so their own ghost tables are that wide, nested in the wrapper's ghost cell. A wrapper has no default padding. | lower/wrapper | all | MJML mj-wrapper docs | ✓ |
 
 ## 4b. TBL — Table and scaffolding construction
 
@@ -230,12 +242,12 @@ scaffolding, table-layout semantics, and data.**
 
 | ID | Rule | Where | Source | Status |
 |---|---|---|---|---|
-| R-TBL-01 | Outside MSO comments, a layout table is emitted only by these constructs: `mailBox`; `mailColumns(cells\|cellsStacking)`; `mailSidebar(switch_below = 0)`; `mailKeyValue`; steppers, timelines and labelled dividers; `mailTable`; the button; the document wrapper. P10 flags any other non-MSO layout table (`W-TBL-UNEXPECTED`). | P10 | goodemailcode.com; Blocks Edit, "No more tables for email"; Litmus, "Email design with HTML tables" (read) | ✓ (decision) |
+| R-TBL-01 | Outside MSO comments, a layout table is emitted only by these constructs: `mailBox`; `mailColumns(cells\|cellsStacking)`; `mailSidebar(switch_below = 0)`; `mailKeyValue`; steppers, timelines and labelled dividers; `mailTable`; the button; the document wrapper. P10 flags any other non-MSO layout table (`W-TBL-UNEXPECTED`): in the authoring tree, every `table` outside a `mailTable` (the constructs emit theirs in lowering). | P10 | goodemailcode.com; Blocks Edit, "No more tables for email"; Litmus, "Email design with HTML tables" (read) | ✓ (decision) |
 | R-TBL-02 | **Mirroring.** Any padding, background colour, border or width that Word must honour on a div is repeated on the enclosing MSO ghost cell (`padding`, `bgcolor` + `background-color`, `border`, `width` attr + CSS). The div keeps its own copy for everyone else. | mso/ghost | Blocks Edit, "No more tables for email": Outlook ignores div padding and mis-paints div backgrounds (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-TBL-03 | **One padded cell per row.** Word equalises vertical padding across all cells of a row to the largest value. A row whose cells need different vertical padding gets a nested single-cell table per cell instead. | lower/*, mso/* | caniemail css-padding note (read) | ✓ |
 | R-TBL-04 | Gaps are padding on cells or divs, or ⟪mso⟫ spacer rows. Never `gap`, never negative margins, never `margin:auto` alone. | P5 | caniemail css-gap, css-margin (read) | ✓ |
 | R-TBL-05 | **Spacer cells are never empty.** They carry explicit `height`/`width` attributes and CSS, `font-size:0;line-height:0;mso-line-height-rule:exactly;`, a `&nbsp;`, and `aria-hidden="true"`. Unsized empty cells are dropped by about 25–90% of clients. | mso/ghost, lower/* | Email on Acid empty-cells study (read); Cerberus spacer (read) | ✓ |
-| R-TBL-06 | No `rowspan` anywhere. No `colspan` in layout tables; data tables may use `colspan` in header rows. | vocabulary, P10 | inference: Email on Acid lists them only as alternatives to empty cells (read); no current source recommends them for layout | ✓ (decision) |
+| R-TBL-06 | No `rowspan` anywhere. No `colspan` in layout tables; data tables may use `colspan` in header rows. P10 reports either as `W-TBL-SPAN`. | vocabulary, P10 | inference: Email on Acid lists them only as alternatives to empty cells (read); no current source recommends them for layout | ✓ (decision) |
 | R-TBL-07 | A cell containing only an image, beside a cell containing text, gets `&zwnj;` after the image, so that Word applies `valign` correctly. | lower/sidebar, lower/* | kontent.ai, Outlook vertical alignment in tables (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-TBL-08 | Dashed or dotted borders: the bordered cell **and** its parent carry the same background colour (Outlook 2007/2010 paints the parent's colour between dashes). | lower/box | hteumeuleu/email-bugs #34 (via search) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-TBL-09 | `box-shadow` is decoration only and is always paired with a 1px border one step darker than the background, because the shadow is missing in Gmail web, Word and Yahoo, and invisible in dark mode. | lower/box | caniemail box-shadow (read) | ✓ |
@@ -244,7 +256,7 @@ scaffolding, table-layout semantics, and data.**
 | R-TBL-12 | Interactive items in a row (links, buttons, rating targets) keep ≥ 8px between hit areas and ≥ 44px hit height. | P10 | Mailchimp, mobile-friendliness guide (read) | ✓ |
 | R-TBL-13 | Tables or cells containing only images get `font-size:0;line-height:0;` on the cell. This prevents the Outlook 2013–2019 1px line under images. | lower/image | hteumeuleu/email-bugs #99 (via search) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-TBL-14 | Alignment is emitted as attribute **and** CSS (`align` + `text-align`, `valign` + `vertical-align`). Horizontal centring of a block in Word is `align="center"` on its (ghost) table. | P5 | caniemail css-margin note 4; goodemailcode.com container (read) | ✓ |
-| R-TBL-15 | Non-MSO layout-table nesting stays ≤ 3 levels per construct (P10 `W-TBL-DEEP`). Deeper structure lives inside MSO comments, where only Word pays for it. | P10 | inference: Blocks Edit byte measurements; Outlook per-level margin quirks | ✓ (design rule) |
+| R-TBL-15 | Non-MSO layout-table nesting stays ≤ 3 levels per construct (P10 `W-TBL-DEEP`). Deeper structure lives inside MSO comments, where only Word pays for it. Counted over the lowered document: tables with `role="presentation"` outside Outlook conditionals, below the document's wrapper table; a fourth level warns. | P10 | inference: Blocks Edit byte measurements; Outlook per-level margin quirks | ✓ (design rule) |
 | R-TBL-16 | Rounded boxes: `border-radius` on the cell with `border-collapse:separate` on its table (radius does not render on collapsed tables). Square in Word, unless the opt-in 3×3 VML-corner Box is used (☐). General `v:roundrect` containers are never used; they distort and cannot nest. | lower/box | mjml-column renderGutter; kontent.ai (read) | ✓ / ☐ 3×3 variant (to be settled by a Word-engine Outlook capture) |
 
 ## 5. OL — Word-engine Outlook
@@ -268,7 +280,7 @@ and is removed by P9 when `outlookWord = false`.
 | R-OL-12 | `border-radius` is ignored by Word, so corners are square. Accepted as a declared degradation unless the component emits VML (R-BTN-04). | lower/button, P10 | caniemail css-border-radius (◐) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-OL-13 | Images: PNG, JPEG and GIF only. No WebP, SVG, `<picture>` or `data:` (R-IMG-08). Animated GIFs show only the first frame in Outlook 2007–2016, so the first frame must carry the message. | P10, lower/image | caniemail image-webp, html-svg, html-picture, image-base64 (read); GIF first-frame behaviour ◐ | ✓ / ◐ GIF |
 | R-OL-14 | `mso-hide:all` is emitted on every element that must not render in Word and is not already inside a `NotMso` comment (preheader, dark-swap images, hidden captions). | P5 | Cerberus (read) | ✓ |
-| R-OL-15 | **The closed list of `mso-*` properties** the library may emit is: `mso-line-height-rule`, `mso-table-lspace`, `mso-table-rspace`, `mso-padding-alt`, `mso-hide`, `mso-font-alt`. Adding one requires a backend-C capture that shows its effect, recorded here. Candidates awaiting evidence: `mso-text-raise`, `mso-font-width` (R-BTN-05), `mso-generic-font-family`, `mso-special-format` (R-TXT-09), `mso-border-alt`, `mso-color-alt`, `mso-ansi-font-size`. | P5, P10 | community lists of `mso-*` properties; caniemail notes (list flagged "verify") | ☐ per candidate, each settled by a Word-engine Outlook capture |
+| R-OL-15 | **The closed list of `mso-*` properties** the library may emit is: `mso-line-height-rule`, `mso-table-lspace`, `mso-table-rspace`, `mso-padding-alt`, `mso-hide`, `mso-font-alt`. Adding one requires a Word-engine Outlook capture that shows its effect, recorded here. P10 checks the lowered document (inline styles, `style` attributes, MSO payloads, head blocks) and reports any other `mso-*` property, author-written or emitted, as `W-CSS-MSO-UNLISTED`. Candidates awaiting evidence: `mso-text-raise`, `mso-font-width` (R-BTN-05), `mso-generic-font-family`, `mso-special-format` (R-TXT-09), `mso-border-alt`, `mso-color-alt`, `mso-ansi-font-size`. | P5, P10 | community lists of `mso-*` properties; caniemail notes (list flagged "verify") | ☐ per candidate, each settled by a Word-engine Outlook capture |
 | R-OL-16 | 120-DPI rendering is part of backend C: classic Outlook is captured at 96 and at 120 DPI for every story that contains images or fixed-width elements. | capture | Cerberus (read) | ✓ (process rule) |
 
 ## 6. VML — Background images and shapes
@@ -544,3 +556,14 @@ unsized cells (R-TBL-01, R-TBL-05).
   R-TXT-02 gives text elements without a colour the colour they
   would have inherited (the nearest coloured ancestor's, else
   `color.text.primary`), dark-paired under `darkMode = designed`.
+- 2026-10-02: Div-first scaffolding built and checked against MJML 5's
+  Outlook geometry. §4.1 follows MJML's rounding (each column on its
+  own; no remainder on the last column), truncates lengths, reads
+  percentages at full precision and names the implicit single column.
+  R-LAY-08 drops the unused `e-sec` class, gives the inner div the
+  merged column's `font-size:16px` and an `align` attribute, defaults
+  the alignment to the start of the direction, and moves the div border
+  to a frame Word does not see. R-LAY-06 adds the cell's border and
+  alignment; R-LAY-09's table carries the R-LAY-15 attributes; R-LAY-17
+  lowers a wrapper as a section band. R-TBL-01, R-TBL-06, R-TBL-15 and
+  R-OL-15 name what P10 checks and the codes it reports.

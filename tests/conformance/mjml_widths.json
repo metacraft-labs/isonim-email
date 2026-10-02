@@ -1,0 +1,267 @@
+{
+  "section-default": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-column": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 560.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-border": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 596.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-asymmetric": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 548.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-full-width": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "sections-stacked": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    },
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 568.0,
+      "responsive": "100%"
+    }
+  ],
+  "wrapper-sections": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "table",
+      "px": 560.0
+    },
+    {
+      "kind": "cell",
+      "px": 560.0,
+      "responsive": "100%"
+    },
+    {
+      "kind": "table",
+      "px": 560.0
+    },
+    {
+      "kind": "cell",
+      "px": 560.0,
+      "responsive": "100%"
+    }
+  ],
+  "wrapper-border": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "table",
+      "px": 578.0
+    },
+    {
+      "kind": "cell",
+      "px": 578.0,
+      "responsive": "100%"
+    }
+  ],
+  "document-width": [
+    {
+      "kind": "table",
+      "px": 640.0
+    },
+    {
+      "kind": "cell",
+      "px": 640.0,
+      "responsive": "100%"
+    }
+  ],
+  "columns-mixed": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 224.0,
+      "responsive": "40%"
+    },
+    {
+      "kind": "cell",
+      "px": 200.0,
+      "responsive": "200px"
+    },
+    {
+      "kind": "cell",
+      "px": 140.0,
+      "responsive": "25%"
+    },
+    {
+      "kind": "cell",
+      "px": 70.0,
+      "responsive": "50%"
+    },
+    {
+      "kind": "cell",
+      "px": 42.0,
+      "responsive": "30%"
+    }
+  ],
+  "columns-thirds": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 200.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 200.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 200.0,
+      "responsive": "33.333333333333336%"
+    }
+  ],
+  "columns-thirds-rounded": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 197.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 197.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 197.0,
+      "responsive": "33.333333333333336%"
+    }
+  ],
+  "columns-border": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 287.0,
+      "responsive": "50%"
+    },
+    {
+      "kind": "cell",
+      "px": 287.0,
+      "responsive": "50%"
+    }
+  ],
+  "group-px": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 300.0,
+      "responsive": "300px"
+    },
+    {
+      "kind": "cell",
+      "px": 100.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 100.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 100.0,
+      "responsive": "33.333333333333336%"
+    },
+    {
+      "kind": "cell",
+      "px": 300.0,
+      "responsive": "50%"
+    }
+  ],
+  "wrapper-columns": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "table",
+      "px": 540.0
+    },
+    {
+      "kind": "cell",
+      "px": 135.0,
+      "responsive": "25%"
+    },
+    {
+      "kind": "cell",
+      "px": 405.0,
+      "responsive": "75%"
+    }
+  ]
+}

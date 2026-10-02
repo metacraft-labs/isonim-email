@@ -15,6 +15,7 @@ import std/[os, json, times]
 import isonim_email
 import stories/email_stories
 import stories/seed_broken
+import stories/seed_layout
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -61,6 +62,10 @@ proc main(): int =
     registerOverflowStories()
     registerSanitiserProbeStory()
     registerBrokenStories()
+  if getEnv("ISONIM_CAPTURE_LAYOUT") == "1":
+    # The layout reference stories (tests/stories/seed_layout.nim):
+    # iterated on in the capture loop, outside the regression matrix.
+    registerLayoutStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

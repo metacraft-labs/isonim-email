@@ -101,6 +101,11 @@
             tar -xzf ${undiciTypes} -C $out/node_modules/undici-types --strip-components=1
             ln -s ${pkgs.playwright-driver} $out/node_modules/playwright-core
           '';
+          # MJML, pinned (nix/mjml/), for `just test-conformance`:
+          # the Outlook geometry this library emits is checked against
+          # MJML's. Built from the lockfile's registry tarballs in a
+          # fixed-output derivation; the check never fetches anything.
+          mjml = pkgs.callPackage ./nix/mjml { };
           # The linux-desktop provider's accessibility client: Python
           # with PyGObject and the AT-SPI typelib, run outside the
           # capture session against the session's own accessibility bus
@@ -426,6 +431,10 @@
               # tsc's declaration tree (see tsTypes); `just lint-ts`
               # links build/ts-types to it.
               ISONIM_EMAIL_TS_TYPES = "${tsTypes}";
+
+              # The pinned MJML CLI `just test-conformance` compiles the
+              # conformance fixtures with (see mjml above).
+              ISONIM_EMAIL_MJML = "${mjml}/bin/mjml";
 
               shellHook = ''
                 echo "isonim-email dev shell — nim $(nim --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'), node $(node --version)"

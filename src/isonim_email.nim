@@ -10,9 +10,14 @@
 import isonim_email/[renderer, ir, serialize, vocabulary, target, diagnostics,
   render]
 import isonim_email/mso/cond
+import isonim_email/mso/ghost
 import isonim_email/lower/document
 import isonim_email/lower/elements
 import isonim_email/lower/image
+import isonim_email/lower/section
+import isonim_email/lower/wrapper
+import isonim_email/lower/stack
+import isonim_email/passes/layout
 import isonim_email/support/[caniemail_data, families]
 import isonim_email/passes/lint
 import isonim_email/passes/styles
@@ -49,9 +54,14 @@ export target
 export diagnostics
 export render
 export cond
+export ghost
 export document
 export elements
 export image
+export section
+export wrapper
+export stack
+export layout
 export caniemail_data
 export families
 export lint

@@ -1,0 +1,10 @@
+{
+  "name": "isonim-email-mjml",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MJML pinned for the Outlook-geometry conformance check",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "mjml": "5.4.1"
+  }
+}

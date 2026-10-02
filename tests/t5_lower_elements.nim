@@ -2,7 +2,7 @@
 ##
 ## - The invariant: a vocabulary element with no lowering is an error
 ##   (`E-LOWER-MISSING`), never emitted as a raw custom tag. Mail
-##   clients strip unknown tags, so a raw `<mailSection>` or
+##   clients strip unknown tags, so a raw `<mailHero>` or
 ##   `<mailButton>` would silently lose its box or its link. The
 ##   element's content survives (it is replaced by its children), the
 ##   error blocks sending, `strict` raises it, and the story pipeline
@@ -20,7 +20,7 @@
 ##
 ## Backend-independent (tree building + pure passes + the in-memory
 ## asset store), so `just test` also runs it on JS.
-import std/[strutils, unittest]
+import std/[algorithm, strutils, unittest]
 import isonim_email
 import stories/email_stories
 import stories/fixture_images
@@ -64,39 +64,48 @@ const altStyle = "font-family:Helvetica, Arial, sans-serif;" &
 
 suite "elements without a lowering are errors, never raw tags":
   test "test_unlowered_elements_error_and_keep_their_content":
+    # `mailHero` and `mailButton` have no lowering yet (the section that
+    # stood here has one now: tests/t5_scaffolding.nim).
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      let section = r.createElement("mailSection")
+      let hero = r.createElement("mailHero")
       let p = r.createElement("p")
       r.setTextContent(p, "Inside the section")
-      r.appendChild(section, p)
+      r.appendChild(hero, p)
       let button = r.createElement("mailButton")
       r.setAttribute(button, "href", "https://app.example.com/")
       r.setTextContent(button, "Open dashboard")
-      r.appendChild(section, button)
-      r.appendChild(doc, section))
+      r.appendChild(hero, button)
+      r.appendChild(doc, hero))
     let res = renderTree(doc)
     check codesOf(res.diagnostics) == @[codeLowerMissing, codeLowerMissing]
     check hasErrors(res.diagnostics)
-    check "<mailSection>" in res.diagnostics[0].message
+    check "<mailHero>" in res.diagnostics[0].message
     check "<mailButton>" in res.diagnostics[1].message
     # Never a raw custom tag, in any spelling.
-    check "<mailsection" notin res.html.toLowerAscii()
+    check "<mailhero" notin res.html.toLowerAscii()
     check "<mailbutton" notin res.html.toLowerAscii()
     # The content survives, so the output stays inspectable.
     check "Inside the section" in res.html
     check "Open dashboard" in res.html
     # The semantic tree is the authoring tree, untouched by lowering.
-    check res.semantic.children[1].tag == "mailSection"
+    check res.semantic.children[1].tag == "mailHero"
 
   test "test_every_vocabulary_element_without_a_lowering_errors":
-    # Every non-leaf vocabulary element other than the two with a
+    # Every non-leaf vocabulary element other than the ones with a
     # lowering, plus a pattern-shaped tag the vocabulary does not know.
+    let lowered = @loweredHere & @loweredElsewhere
+    check lowered.sorted() == @["mailDocument", "mailImage", "mailSection",
+      "mailStack", "mailWrapper"]
+    var nonLeaf = 0
     var tags: seq[string] = @[]
     for t in buildEmailVocabulary().tags:
-      if not t.allowAnyStyle and t.name notin ["mailDocument", "mailImage"]:
-        tags.add(t.name)
+      if not t.allowAnyStyle:
+        inc nonLeaf
+        if t.name notin lowered:
+          tags.add(t.name)
     tags.add("mailCard")
-    check tags.len >= 25
+    check nonLeaf >= 27
+    check tags.len == nonLeaf - lowered.len + 1
     for tag in tags:
       let res = renderTree(docWith(proc(r: EmailRenderer; doc: EmailNode) =
         let el = r.createElement(tag)

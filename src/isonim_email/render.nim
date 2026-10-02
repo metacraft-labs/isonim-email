@@ -1,8 +1,9 @@
 ## isonim_email/render.nim — the render entries.
 ##
 ## `renderEmail` runs a template once inside a fresh reactive root and
-## carries the tree through the whole pipeline — validate, styles, head,
-## a11y, lint, document lowering, serialisation — returning the
+## carries the tree through the whole pipeline — validate, layout,
+## styles, head, a11y, lint, element and document lowering,
+## serialisation — returning the
 ## `RenderedEmail` record: HTML, plain text, diagnostics, sizes, assets
 ## and the resolved semantic tree. `renderTree` runs the same pipeline
 ## over a hand-built tree, and `renderAuthoringTree` runs only the
@@ -28,6 +29,7 @@ import ./style/tokens
 import ./lower/document
 import ./lower/elements
 import ./passes/validate
+import ./passes/layout
 import ./passes/styles
 import ./passes/head
 import ./passes/a11y
@@ -116,6 +118,7 @@ proc cloneTree(node: EmailNode; parent: EmailNode = nil): EmailNode =
     origin: node.origin,
     cond: node.cond,
     priority: node.priority,
+    layout: node.layout,
   )
   for c in node.children:
     result.children.add(cloneTree(c, result))
@@ -251,6 +254,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
   var diags = validate(doc)
+  # P3 reads the authoring values (P5 rounds percentages to two
+  # decimals; the width maths needs them whole) and annotates the tree,
+  # so the semantic tree carries the widths too.
+  diags.add(solveLayout(doc, theme, target))
   let styled = applyStyles(doc, theme, target, profile)
   diags.add(styled.diagnostics)
   let headRes = assembleHead(styled.head, target)
@@ -278,7 +285,7 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   # size from the assets just published) and collects an error for
   # any element with no lowering; the document shell then wraps it.
   let work = cloneTree(doc)
-  diags.add(lowerElements(work, theme, found.assets))
+  diags.add(lowerElements(work, theme, found.assets, target))
   let r = EmailRenderer()
   let sections = r.createElement("div")
   let kids =
@@ -286,10 +293,14 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
     else: work.children # Copy: appendChild detaches as it moves.
   for c in kids:
     r.appendChild(sections, c)
+  let lowered = lowerDocument(work, sections, headRes.blocks, target)
+  # P10 over what is emitted: the closed mso-* list (R-OL-15) and the
+  # layout-table depth outside Outlook conditionals (R-TBL-15).
+  diags.add(lintMsoProperties(lowered))
+  diags.add(lintTableDepth(lowered))
   # The breakdown is counted while the bytes are written (R-SIZE-02),
   # so it partitions the document exactly.
-  let (html, sizeBreakdown) = serializeDocumentMeasured(lowerDocument(
-    work, sections, headRes.blocks, target))
+  let (html, sizeBreakdown) = serializeDocumentMeasured(lowered)
 
   var headCssBytes = 0
   for blk in headRes.blocks:

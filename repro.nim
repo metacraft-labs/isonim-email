@@ -128,6 +128,8 @@ const emailTestSpecs = @[
   "t5_ganga_strip",
   "t5_media_queries",
   "t5_lower_elements",
+  "t5_layout",
+  "t5_scaffolding",
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",

@@ -155,6 +155,26 @@ const
     ## A `mailImage` with no px width and no known intrinsic size, so
     ## the required `width` attribute cannot be emitted (R-IMG-01).
     ## Collected from `lower/image.nim`.
+  codeStructNesting* = "E-STRUCT-NESTING"
+    ## An illegal parent/child pairing the static check cannot see in a
+    ## hand-built tree or a composed one: a section that mixes columns
+    ## with other content, anything but columns in a group (R-LAY-16).
+    ## Collected from `passes/layout.nim`.
+
+  codeTblUnexpected* = "W-TBL-UNEXPECTED"
+    ## A layout `table` outside the constructs allowed to emit one
+    ## (R-TBL-01): in the authoring tree, any `table` that is not inside
+    ## a `mailTable`. Collected from `passes/lint.nim`.
+  codeTblDeep* = "W-TBL-DEEP"
+    ## More than three levels of layout tables outside Outlook
+    ## conditionals in the lowered document (R-TBL-15). Collected from
+    ## `passes/lint.nim`.
+  codeTblSpan* = "W-TBL-SPAN"
+    ## `rowspan` anywhere, or `colspan` outside a data table's header
+    ## row (R-TBL-06). Collected from `passes/lint.nim`.
+  codeCssMsoUnlisted* = "W-CSS-MSO-UNLISTED"
+    ## An `mso-*` property outside the closed list (R-OL-15): its effect
+    ## in Word is unverified. Collected from `passes/lint.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

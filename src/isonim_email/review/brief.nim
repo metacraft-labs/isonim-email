@@ -382,6 +382,20 @@ proc columnsLine(node: EmailNode; width, breakpoint: int): string =
   "Columns (" & $columnCount(node) & "): " &
     (if stacked: "stacked" else: "side-by-side") & " at this width."
 
+proc sectionDirection(node: EmailNode): string =
+  ## A section's direction: its own, else the nearest ancestor's
+  ## `dir` (the document's).
+  let own = attrValue(node, "direction").toLowerAscii()
+  if own.len > 0:
+    return own
+  var p = node.parent
+  while p != nil:
+    let d = attrValue(p, "dir").toLowerAscii()
+    if d.len > 0:
+      return d
+    p = p.parent
+  "ltr"
+
 proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
                items: var seq[string]; images: var seq[string];
                firstH1: var bool; align = "center") =
@@ -408,6 +422,12 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     curAlign = ownAlign.toLowerAscii()
   elif ownText.len > 0:
     curAlign = ownText.toLowerAscii()
+  elif tagLower(node) in ["mailsection", "mailstack"]:
+    # A section aligns its content to the start of its direction and a
+    # stack to its own `align`, both left by default: they set the
+    # alignment of what they hold whatever the skeleton's cell says.
+    curAlign = if tagLower(node) == "mailsection" and
+        sectionDirection(node) == "rtl": "right" else: "left"
   case tagLower(node)
   of "h1", "h2", "h3", "h4", "h5", "h6":
     items.add(headingLine(node, firstH1))

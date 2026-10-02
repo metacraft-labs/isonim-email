@@ -80,7 +80,13 @@ suite "lint flags flex layout as harmful":
     for tag in ["mailSection", "mailColumn", "mailGroup", "mailDocument",
         "mailStack", "table", "td"]:
       for profile in [consumer, business, developer]:
-        let diags = lintTree(handBuilt(tag, "display", "flex"), profile)
+        var diags = lintTree(handBuilt(tag, "display", "flex"), profile)
+        if tag == "table":
+          # A bare layout table is also outside the constructs that
+          # emit one (R-TBL-01): that warning comes second, and only it.
+          check diags.len == 2
+          check diags[^1].code == codeTblUnexpected
+          diags.setLen(diags.len - 1)
         check diags.len == 1
         check diags[0].severity == sevError
         check diags[0].code == "E-CSS-HARMFUL"

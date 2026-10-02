@@ -25,6 +25,7 @@ import stories/seed_receipt
 import stories/seed_alert
 import stories/seed_overflow
 import stories/seed_sanitiser_probe
+import stories/seed_layout
 
 proc splitMatrix(s: string): seq[string] =
   for part in s.split(','):
@@ -54,6 +55,10 @@ proc registerAll() =
     registerBrokenStories()
     registerStoryTree("receiptB",
       proc(): EmailNode = seedReceipt())
+  if getEnv("ISONIM_CAPTURE_LAYOUT") == "1":
+    # The layout reference stories (see build_stories.nim).
+    registerLayoutStories()
+    registerStoryTree("layoutOneColumn", layoutOneColumnDoc)
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>

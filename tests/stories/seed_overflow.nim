@@ -38,8 +38,9 @@ proc seedOverflow*(fluid: bool): EmailNode =
   r.appendChild(tr, td)
   r.appendChild(table, tr)
   r.appendChild(doc, table)
-  # A plain `p` footer: the fixture needs only elements that lower
-  # (a `mailSection` has no lowering yet and would fail the render).
+  # A plain `p` footer, and no section: the fixture's table must sit
+  # directly in the skeleton's full-width content cell, so that the
+  # 700px twin overflows the viewport rather than a 600px section.
   let foot = r.createElement("p")
   let unsub = r.createElement("a")
   r.setAttribute(unsub, "href", "https://x.test/unsubscribe")

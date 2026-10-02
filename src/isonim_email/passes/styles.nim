@@ -149,7 +149,7 @@ proc isSideProp(prop, suffix: string): bool =
   prop == "border-" & suffix or
     (prop.startsWith("border-") and prop.endsWith("-" & suffix))
 
-proc compressBox(sides: array[4, string]): string =
+proc compressBox*(sides: array[4, string]): string =
   ## Minimal CSS shorthand for 4 sides (top, right, bottom, left).
   let (t, r, b, l) = (sides[0], sides[1], sides[2], sides[3])
   if t == r and t == b and t == l:

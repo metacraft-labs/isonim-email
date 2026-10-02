@@ -29,6 +29,7 @@ import ./diagnostics
 import ./lower/document
 import ./lower/elements
 import ./passes/validate
+import ./passes/layout
 import ./passes/styles
 import ./passes/head
 import ./passes/a11y
@@ -138,7 +139,8 @@ proc getStory*(name: string): Story =
 
 proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
   ## The current render path (lower/document.nim over the passes):
-  ## validate → P5 styles → P6 head → P7 a11y → P4 element lowering,
+  ## validate → P3 layout → P5 styles → P6 head → P7 a11y → P4 element
+  ## lowering,
   ## then the document shell and the serialiser. The `mailDocument`
   ## node's own children become the wrapper-cell sections. Raises
   ## `StoryError` when the tree fails validation or holds an element
@@ -149,10 +151,14 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
     raise newException(StoryError,
       "story tree failed validation: " & $found.len &
         " diagnostic(s), first: " & found[0].message)
+  let laid = solveLayout(doc, defaultTheme(), target)
+  if hasErrors(laid):
+    raise newException(StoryError,
+      "story tree failed layout: " & laid[0].code & ": " & laid[0].message)
   let styled = applyStyles(doc, defaultTheme(), target)
   let headRes = assembleHead(styled.head, target)
   discard applyA11y(doc)
-  let lowered = lowerElements(doc, defaultTheme())
+  let lowered = lowerElements(doc, defaultTheme(), target = target)
   if hasErrors(lowered):
     var first = lowered[0]
     for d in lowered:

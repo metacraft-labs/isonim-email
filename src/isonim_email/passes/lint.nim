@@ -35,6 +35,17 @@
 ## to the IR when the pipeline lands. `enHeadStyle` blocks are linted
 ## through `lintHeadCss`; `raw` payloads are not parsed (unaudited).
 ##
+## Construction checks (catalogue §4b, §5): a layout `table` outside
+## the constructs allowed to emit one (`W-TBL-UNEXPECTED`, R-TBL-01; in
+## the authoring tree, any `table` outside a `mailTable`), `rowspan`
+## anywhere or `colspan` outside a data table's header row
+## (`W-TBL-SPAN`, R-TBL-06), and, over the lowered document, more than
+## three levels of layout tables outside Outlook conditionals
+## (`W-TBL-DEEP`, R-TBL-15) and any `mso-*` property outside the closed
+## list (`W-CSS-MSO-UNLISTED`, R-OL-15). Layout props of the vocabulary
+## that are not CSS (a stack's `gap`) are not linted as CSS: the
+## lowering turns them into padding and spacer rows.
+##
 ## The a11y lint covers meaningless link text (R-A11Y-06),
 ## light-scheme text/background contrast (R-A11Y-07), and the
 ## R-IMG-04 alt-length heuristic. All three are warnings.
@@ -889,6 +900,136 @@ proc lintAltLength(node: EmailNode): seq[EmailDiagnostic] =
     )]
   @[]
 
+# ----------------------------------------------------------------------------
+# Construction checks (R-TBL-01, R-TBL-06, R-TBL-15, R-OL-15)
+# ----------------------------------------------------------------------------
+
+const msoClosedList* = ["mso-line-height-rule", "mso-table-lspace",
+  "mso-table-rspace", "mso-padding-alt", "mso-hide", "mso-font-alt"]
+  ## R-OL-15: the only `mso-*` properties the library may emit. A new
+  ## one joins only with a Word-engine capture that shows its effect.
+
+const nonCssProps = [("mailstack", "gap")]
+  ## Vocabulary props that arrive as style keywords but are lowered to
+  ## other markup, never emitted as the CSS property of that name.
+
+proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
+    seq[EmailDiagnostic] =
+  ## R-TBL-01 and R-TBL-06 over one authoring element.
+  let tag = node.tag.toLowerAscii()
+  var inDataTable, inHead = false
+  for a in ancestors:
+    if a.kind != enElement:
+      continue
+    case a.tag.toLowerAscii()
+    of "mailtable": inDataTable = true
+    of "thead": inHead = true
+    else: discard
+  if tag == "table" and not inDataTable:
+    result.add(EmailDiagnostic(severity: sevWarning,
+      code: codeTblUnexpected,
+      message: "a layout <table> outside the constructs that emit one: " &
+        "use mailTable for data, or the layout primitives (R-TBL-01)",
+      origin: node.origin, rules: @["R-TBL-01"]))
+  if "rowspan" in node.attrs:
+    result.add(EmailDiagnostic(severity: sevWarning, code: codeTblSpan,
+      message: "<" & tag & "> has rowspan, which no layout uses " &
+        "(R-TBL-06)", origin: node.origin, rules: @["R-TBL-06"]))
+  if "colspan" in node.attrs and
+      not (inDataTable and (inHead or tag == "th")):
+    result.add(EmailDiagnostic(severity: sevWarning, code: codeTblSpan,
+      message: "<" & tag & "> has colspan outside a data table's " &
+        "header row (R-TBL-06)", origin: node.origin,
+      rules: @["R-TBL-06"]))
+
+proc msoNamesIn*(text: string): seq[string] =
+  ## Every `mso-*` property name declared in a CSS or markup fragment
+  ## (`mso-hide:all`, `mso-text-raise: 4px`), in order. A name counts
+  ## only as a declaration (a `:` follows) and only at a word start, so
+  ## class names such as `e-mso-group-fix` and conditions such as
+  ## `[if mso]` are not property names.
+  var i = text.find("mso-")
+  while i >= 0:
+    let atStart = i == 0 or text[i - 1] notin
+      {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '-', '_'}
+    var j = i + 4
+    while j < text.len and text[j] in {'a' .. 'z', 'A' .. 'Z', '-'}:
+      inc j
+    var k = j
+    while k < text.len and text[k] in {' ', '\t'}:
+      inc k
+    if atStart and k < text.len and text[k] == ':':
+      result.add(text[i ..< j].toLowerAscii())
+    i = text.find("mso-", j)
+
+proc msoDiag(name: string; origin: SourceSpan): EmailDiagnostic =
+  EmailDiagnostic(severity: sevWarning, code: codeCssMsoUnlisted,
+    message: "'" & name & "' is not on the closed list of mso-* " &
+      "properties (" & msoClosedList.join(", ") & "): its effect in " &
+      "Word is unverified (R-OL-15)",
+    origin: origin, families: {cfOutlookWord}, rules: @["R-OL-15"])
+
+proc lintMsoImpl(node: EmailNode; origin: SourceSpan;
+    acc: var seq[EmailDiagnostic]) =
+  if node == nil:
+    return
+  let here = if node.origin.file.len > 0: node.origin else: origin
+  case node.kind
+  of enElement, enVml:
+    for k, _ in node.styles.pairs:
+      let (_, base) = splitVariantKey(k)
+      let name = base.toLowerAscii()
+      if name.startsWith("mso-") and name notin msoClosedList:
+        acc.add(msoDiag(name, here))
+    let styleAttr = node.attrs.getOrDefault("style", "")
+    for name in msoNamesIn(styleAttr):
+      if name notin msoClosedList:
+        acc.add(msoDiag(name, here))
+  of enRaw, enHeadStyle:
+    for name in msoNamesIn(node.text):
+      if name notin msoClosedList:
+        acc.add(msoDiag(name, here))
+  of enText, enMsoIf, enNotMso:
+    discard
+  for c in node.children:
+    lintMsoImpl(c, here, acc)
+
+proc lintMsoProperties*(root: EmailNode): seq[EmailDiagnostic] =
+  ## R-OL-15, lint side: every `mso-*` property anywhere in a tree (the
+  ## styles tables, `style` attributes, raw MSO payloads and head
+  ## blocks) must be on the closed list. Runs over the lowered document,
+  ## so it sees what the library emits as well as what the author wrote.
+  lintMsoImpl(root, SourceSpan(), result)
+
+proc lintDepthImpl(node: EmailNode; depth: int; wrapperSeen: bool;
+    acc: var seq[EmailDiagnostic]) =
+  if node == nil or node.kind in {enMsoIf, enVml}:
+    # What only Word sees is Word's to pay for (R-TBL-15).
+    return
+  var d = depth
+  var seen = wrapperSeen
+  if node.kind == enElement and node.tag.toLowerAscii() == "table" and
+      node.attrs.getOrDefault("role", "") == "presentation":
+    if not seen:
+      # The document's wrapper table is the skeleton, not a construct.
+      seen = true
+    else:
+      inc d
+      if d == 4:
+        acc.add(EmailDiagnostic(severity: sevWarning, code: codeTblDeep,
+          message: "layout tables nest " & $d & " levels deep outside " &
+            "Outlook conditionals; keep a construct within 3 and move " &
+            "deeper structure into its ghost tables (R-TBL-15)",
+          origin: node.origin, rules: @["R-TBL-15"]))
+  for c in node.children:
+    lintDepthImpl(c, d, seen, acc)
+
+proc lintTableDepth*(root: EmailNode): seq[EmailDiagnostic] =
+  ## R-TBL-15 over a lowered document: more than three levels of
+  ## layout tables (`role="presentation"`) outside Outlook conditionals,
+  ## below the document's wrapper table, warn once per too-deep chain.
+  lintDepthImpl(root, 0, false, result)
+
 proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
                   expected: openArray[ExpectedDegradation];
                   ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
@@ -907,9 +1048,13 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
         result.add(checkFeature(aus, attr.toLowerAscii() & " attribute",
           lkAttribute, attr, profile, expected, node.origin))
     var decls: seq[(string, string)] = @[]
+    let lowerTag = node.tag.toLowerAscii()
     for prop, value in node.styles.pairs:
+      if (lowerTag, prop.toLowerAscii()) in nonCssProps:
+        continue
       decls.add((prop, value))
     result.add(lintStyles(node.tag, decls, profile, expected, node.origin))
+    result.add(lintTables(node, ancestors))
     result.add(lintLinkText(node))
     result.add(lintContrast(node, ancestors))
     result.add(lintAltLength(node))

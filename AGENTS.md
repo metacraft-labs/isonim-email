@@ -31,6 +31,7 @@ just test-serial     # the same recipes one at a time, output streamed
 just test-file tests/t4_styles.nim  # one Nim test file on the C backend
 just email-shots     # screenshot captures through the capture providers
 just email-capture-ci # capture regression checks (part of just test)
+just test-conformance # Outlook geometry and widths against the pinned MJML
 just lint            # nim check, tsc, capture-CLI gate, nixfmt, markdownlint
 just format          # nimpretty + nixfmt (alias: just fmt)
 just bench           # benchmarks (none yet; they land later)
@@ -57,6 +58,15 @@ Sibling repos (`../isonim`, `../nim-everywhere`, `../nim-faststreams`,
 `../nim-stew`) must be checked out next to this repo; `config.nims`
 and the Justfile resolve them. In CI they are cloned at the SHAs in
 `.github/sibling-repos`.
+
+`just test-conformance` (not part of `just test`) checks the Outlook
+geometry this library emits (ghost tables, the boxes Word lays text
+into, responsive class widths) and the layout pass's widths against
+MJML 5's for the fixtures in `tests/conformance/`; MJML is pinned in
+`nix/mjml/` and nothing is fetched. The layout reference stories
+(`tests/stories/seed_layout.nim`) are captured with
+`ISONIM_CAPTURE_LAYOUT=1 just email-shots layoutOneColumn …`; they are
+outside the regression matrix.
 
 `just test-vm` (not part of `just test`; needs KVM) runs the hermetic
 capture check, `checks.x86_64-linux.capture-linux-desktop`
