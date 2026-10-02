@@ -39,10 +39,15 @@ Strip every `<style>` and `<link>`, then gmailWeb steps
 4–5 (R-CSS-11, R-IMG-08). The strip itself cites caniemail html-style
 note 2 (no `<style>` for non-Google accounts).
 
-## outlookWeb (`outlookWeb.ts`, version 2)
+## outlookWeb (`outlookWeb.ts`, version 3)
 
 `x_` prefix plus `rps_xxxx` wrapper (documented Outlook.com behaviour;
-the wrapper class is measured against real clients later). Dark
+the wrapper class is measured against real clients later). Every
+declaration whose value uses `calc()` or `max()` is dropped, inline and
+in `<style>` blocks (caniemail `css-unit-calc` and `css-function-max`:
+Outlook.com supports neither; R-LAY-18, R-CSS-19), so a Fab Four column
+keeps only its `min-width`/`max-width` and the wrapper's
+`font-size:medium` fallback holds. Dark
 recolours with the R-DRK-04 partial-inversion model — inline text
 colours with luminance < 0.5 and inline or `bgcolor` backgrounds with
 luminance > 0.5 get OKLCH lightness L → 1 − L, chroma and hue kept —
@@ -55,12 +60,13 @@ No catalogue rule; models images blocked by default: empty `img[src]`/`srcset`,
 drop CSS `background-image`. `--images off` applies it after any
 family's own transform, and blocks image requests to the fixture host.
 
-## wordApprox (`wordApprox.ts`, version 3)
+## wordApprox (`wordApprox.ts`, version 4)
 
 Lint-grade (emulation steps 1–5): reveal mso conditionals; strip
 `max-width` (R-OL-03), `display:flex|grid|inline-block`, declarations
 using `calc()` (caniemail `css-unit-calc`: no support in Outlook for
-Windows; the Fab Four width, R-LAY-18), CSS
+Windows; the Fab Four width, R-LAY-18), `box-shadow` (caniemail
+`box-shadow`: no support in Outlook for Windows; R-TBL-09), CSS
 `background-image` (R-OL-11), `border-radius` (R-OL-12), `margin:auto`
 (R-LAY-08) and non-`td`/`th` padding (R-OL-05, R-TBL-02); strip
 `<style>` media queries (R-LAY-02 excludes outlookWord); stand VML

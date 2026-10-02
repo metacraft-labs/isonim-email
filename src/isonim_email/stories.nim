@@ -34,6 +34,8 @@ import ./passes/styles
 import ./passes/head
 import ./passes/a11y
 import ./style/tokens
+import ./patterns
+import ./primitives
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -139,14 +141,15 @@ proc getStory*(name: string): Story =
 
 proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
   ## The current render path (lower/document.nim over the passes):
-  ## validate → P3 layout → P5 styles → P6 head → P7 a11y → P4 element
+  ## pattern expansion → validate → P3 layout → P5 styles → P6 head → P7 a11y → P4 element
   ## lowering,
   ## then the document shell and the serialiser. The `mailDocument`
   ## node's own children become the wrapper-cell sections. Raises
   ## `StoryError` when the tree fails validation or holds an element
   ## with no lowering (`E-LOWER-MISSING`): stories are fixed, so
   ## either is a bug in the story.
-  let found = validate(doc)
+  var found = expandPatterns(doc, defaultTheme(), target)
+  found.add(validate(doc))
   if hasErrors(found):
     raise newException(StoryError,
       "story tree failed validation: " & $found.len &

@@ -392,3 +392,36 @@ proc emitColorDecls*(prop, value, background: string):
     return @[(prop, fg.toHex())]
   let bg = parseColor(background)
   @[(prop, fg.blendOver(bg).toHex()), (prop, fg.toRgba())]
+
+proc rgbToOklch*(c: Rgba): tuple[l, c, h: float] =
+  ## sRGB→OKLCH (Björn Ottosson's OKLab matrices, the inverse of the
+  ## `oklch()` parser's conversion): lightness 0..1, chroma, hue in
+  ## degrees. Alpha is ignored.
+  proc linear(v: int): float =
+    let u = float(v) / 255.0
+    if u <= 0.04045: u / 12.92 else: pow((u + 0.055) / 1.055, 2.4)
+  let r = linear(c.r)
+  let g = linear(c.g)
+  let b = linear(c.b)
+  let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+  let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+  let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+  let lab = (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+  let chroma = sqrt(lab[1] * lab[1] + lab[2] * lab[2])
+  var hue = arctan2(lab[2], lab[1]) * 180.0 / PI
+  if hue < 0.0:
+    hue += 360.0
+  (lab[0], chroma, hue)
+
+const colourStep* = 0.1
+  ## One step of lightness, in OKLCH L: the same 0.1 that tells two
+  ## adjacent bands apart.
+
+proc darkerStep*(value: string; step = colourStep): string =
+  ## `value` one step darker (OKLCH lightness less `step`, chroma and hue
+  ## kept), as 6-digit hex: the border a shadowed box gets (R-TBL-09).
+  let (l, ch, h) = rgbToOklch(parseColor(value))
+  let (r, g, b) = oklchToRgb(max(0.0, l - step), ch, h)
+  Rgba(r: r, g: g, b: b, a: 1.0).toHex()

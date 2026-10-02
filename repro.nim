@@ -131,6 +131,7 @@ const emailTestSpecs = @[
   "t5_layout",
   "t5_scaffolding",
   "t5_columns",
+  "t5_primitives",
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",
@@ -143,6 +144,7 @@ const emailTestSpecs = @[
   "t6_roundtrip",
   "t7_stories",
   "t7_brief",
+  "t7_patterns",
   # WAIVER (2026-09-28): `repro test` is 76/80 — the 4 e2e EXECUTE actions
   # below fail ONLY under engine-monitored execution (`node: pthread_create:
   # Invalid argument` + browser launch failure; the io-monitor interposer
@@ -163,6 +165,10 @@ const emailTestSpecs = @[
   # above, so it is expected to meet the same engine defect; `repro test`
   # was not re-run for it.
   "e2e_local_columns",
+  # Added with the layout primitives: spawns node and the pinned
+  # Chromium like the e2e actions above (same expected engine defect;
+  # `repro test` was not re-run for it).
+  "e2e_local_primitives",
 ]
 
 package isonim_email:

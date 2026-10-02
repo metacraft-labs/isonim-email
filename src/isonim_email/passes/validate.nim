@@ -96,17 +96,21 @@ proc checkReversal(node: EmailNode; diags: var seq[EmailDiagnostic]) =
   if node.attrs.getOrDefault("reverse_on_mobile", "").toLowerAscii() !=
       "true":
     return
-  if node.tag == "mailColumns" and
-      node.attrs.getOrDefault("strategy", "") == "cells":
+  let switchBelow = node.attrs.getOrDefault("switch_below", "").strip()
+  if (node.tag == "mailColumns" and
+      node.attrs.getOrDefault("strategy", "") == "cells") or
+      (node.tag == "mailSidebar" and switchBelow in ["", "0", "0px"]):
     diags.add(EmailDiagnostic(severity: sevError, code: codeVocabBadValue,
-      message: "reverse_on_mobile on a cells row, which never stacks: " &
-        "order its columns as they should show (R-LAY-11)",
+      message: "reverse_on_mobile on a " & (if node.tag == "mailSidebar":
+        "mailSidebar that never switches" else: "cells row") &
+        ", which never stacks: order its " & (if node.tag == "mailSidebar":
+        "sides" else: "columns") & " as they should show (R-LAY-11)",
       origin: node.origin, rules: @["R-LAY-11"]))
     return
   var textual = 0
   for c in node.children:
-    if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"] and
-        holdsText(c):
+    if c.kind == enElement and (node.tag == "mailSidebar" or
+        c.tag in ["mailColumn", "mailGroup"]) and holdsText(c):
       inc textual
   if textual > 1:
     diags.add(EmailDiagnostic(severity: sevError,
@@ -122,6 +126,28 @@ proc checkReversal(node: EmailNode; diags: var seq[EmailDiagnostic]) =
       message: "reverse_on_mobile in a right-to-left row: the reversal " &
         "is itself a right-to-left row and cannot be expressed in one " &
         "(R-LAY-11)", origin: node.origin, rules: @["R-LAY-11"]))
+
+proc checkGrid(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## A grid lays out 2, 3 or 4 items per row, and one or two per row on
+  ## a phone; three with two on a phone leaves an orphan item every
+  ## second row (layout-patterns.md §3.4).
+  let cols = node.attrs.getOrDefault("columns", "2").strip()
+  let mobile = node.attrs.getOrDefault("mobile_columns", "1").strip()
+  if cols notin ["2", "3", "4"]:
+    diags.add(EmailDiagnostic(severity: sevError, code: codeVocabBadValue,
+      message: "mailGrid columns '" & cols & "' is not 2, 3 or 4",
+      origin: node.origin))
+  if mobile notin ["1", "2"]:
+    diags.add(EmailDiagnostic(severity: sevError, code: codeVocabBadValue,
+      message: "mailGrid mobile_columns '" & mobile & "' is not 1 or 2",
+      origin: node.origin))
+  if cols == "3" and mobile == "2":
+    diags.add(EmailDiagnostic(severity: sevError,
+      code: codePatternGridOrphan,
+      message: "mailGrid with 3 columns and 2 on a phone leaves an " &
+        "orphan item in every second row: use 2 or 4 columns, or one " &
+        "per row on a phone (layout-patterns.md §3.4)",
+      origin: node.origin))
 
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
@@ -166,8 +192,11 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
           "and content patterns, which add landmark roles themselves",
         origin: node.origin, rules: @["R-A11Y-10"],
       ))
-    if node.kind == enElement and node.tag in ["mailSection", "mailColumns"]:
+    if node.kind == enElement and node.tag in ["mailSection", "mailColumns",
+        "mailSidebar"]:
       checkReversal(node, result)
+    if node.kind == enElement and node.tag == "mailGrid":
+      checkGrid(node, result)
     if node.kind == enRaw and not insideMailRaw(node):
       let within =
         if node.parent != nil and node.parent.kind == enElement:

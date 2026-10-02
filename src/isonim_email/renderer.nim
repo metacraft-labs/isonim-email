@@ -74,6 +74,13 @@ type
     gutterClass*: string  ## Columns: the desktop gutter class, "" without a gutter
     gutterCss*: string    ## Columns: the desktop gutter class's padding value
     mobileGap*: int       ## Columns: inline `padding-top` while stacked (the gutter, every column but the first)
+    # Layout primitives (`mailBox`, `mailGrid`, `mailCluster`, `mailSidebar`):
+    columns*: int         ## Grids: items per desktop row
+    items*: int           ## Grids and clusters: the item count
+    lastRow*: string      ## Grids: `left`, `center` or `stretch`
+    fixedIndex*: int      ## Sidebars: which child (0 or 1) is the fixed side
+    fixedPx*: int         ## Sidebars: the fixed side's width (px)
+    switchPx*: int        ## Sidebars: `switch_below` (px; 0 = never switches)
 
   EmailNode* = ref object
     kind*: EmailNodeKind
@@ -88,6 +95,7 @@ type
     cond*: string                 ## enMsoIf condition (`mso`, `gte mso 9`, …)
     priority*: int                ## enHeadStyle block priority (head-block assembly order)
     layout*: LayoutBox            ## P3 widths (layout elements only; see `LayoutBox`)
+    expanded*: bool               ## A pattern element whose expansion replaced its children (`patterns.nim`)
 
   EmailAsyncResource* = ref object
     ## One async load a template started. Created pending (`asLoading`)

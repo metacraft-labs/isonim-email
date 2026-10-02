@@ -909,7 +909,9 @@ const msoClosedList* = ["mso-line-height-rule", "mso-table-lspace",
   ## R-OL-15: the only `mso-*` properties the library may emit. A new
   ## one joins only with a Word-engine capture that shows its effect.
 
-const nonCssProps = [("mailstack", "gap")]
+const nonCssProps = [("mailstack", "gap"), ("mailcluster", "gap"),
+  ("mailcluster", "row-gap"), ("mailcluster", "row_gap"),
+  ("mailsidebar", "gap"), ("mailbox", "shadow")]
   ## Vocabulary props that arrive as style keywords but are lowered to
   ## other markup, never emitted as the CSS property of that name.
 
@@ -941,6 +943,119 @@ proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
       message: "<" & tag & "> has colspan outside a data table's " &
         "header row (R-TBL-06)", origin: node.origin,
       rules: @["R-TBL-06"]))
+
+# ----------------------------------------------------------------------------
+# Rows whose items do not share a height (R-TBL-10) and tap-target
+# spacing in clusters (R-TBL-12)
+# ----------------------------------------------------------------------------
+
+proc paintsBox(node: EmailNode): bool =
+  ## True when `node` paints a box of its own: a background or a border
+  ## (either spelling: P5 may or may not have run).
+  if node.kind != enElement:
+    return false
+  for k, v in node.styles.pairs:
+    let key = k.toLowerAscii().replace("_", "-")
+    if (key == "background-color" or key.startsWith("border")) and
+        not key.startsWith("border-radius") and
+        v.strip().toLowerAscii() notin ["", "none", "0", "transparent"]:
+      return true
+  "bgcolor" in node.attrs or "background_color" in node.attrs
+
+proc isRaggedRow(node: EmailNode): bool =
+  ## A row whose items keep their own heights side by side: a `hybrid`
+  ## or `fabFour` `mailColumns`, a section's own columns, a grid.
+  if node.kind != enElement:
+    return false
+  case node.tag
+  of "mailColumns":
+    node.attrs.getOrDefault("strategy", "hybrid") in ["", "hybrid",
+      "fabFour"]
+  of "mailSection":
+    var cols = 0
+    for c in node.children:
+      if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:
+        inc cols
+    cols >= 2
+  of "mailGrid":
+    true
+  else:
+    false
+
+proc lintRagged(node: EmailNode): seq[EmailDiagnostic] =
+  ## R-TBL-10: equal heights are promised only by table cells. A bordered
+  ## or background-carrying item in a hybrid row or a grid ends where its
+  ## content does, so the design is flagged (information) to be chosen
+  ## knowingly: once per row, naming how many items paint a box.
+  if not isRaggedRow(node):
+    return
+  var boxedItems = 0
+  var items = 0
+  for c in node.children:
+    if c.kind != enElement:
+      continue
+    inc items
+    var target = c
+    # A grid item boxed by a mailBox, or a column whose single child
+    # is one, paints the item's box.
+    if paintsBox(target) or (target.children.len == 1 and
+        paintsBox(target.children[0])):
+      inc boxedItems
+  if boxedItems > 0 and items > 1:
+    result.add(EmailDiagnostic(severity: sevInfo, code: codeTblRagged,
+      message: $boxedItems & " of the " & $items & " items of this " &
+        node.tag & " paint a background or a border, and the row does " &
+        "not give its items one height: their bottoms will be ragged " &
+        "where their content differs (a declared degradation). Use a " &
+        "cells row, or a shared band background, for a shared bottom " &
+        "edge (R-TBL-10)", origin: node.origin, rules: @["R-TBL-10"]))
+
+const interactiveTags = ["a", "mailbutton", "mailnavlink", "mailsocialitem"]
+
+proc holdsInteractive(node: EmailNode): bool =
+  if node.kind == enElement and node.tag.toLowerAscii() in interactiveTags:
+    return true
+  for c in node.children:
+    if holdsInteractive(c):
+      return true
+  false
+
+proc pxOf(value: string): float =
+  try:
+    toPx(value.strip())
+  except StyleError, ValueError:
+    -1.0
+
+proc lintTapSpacing(node: EmailNode): seq[EmailDiagnostic] =
+  ## R-TBL-12: interactive items of a cluster keep at least 8px between
+  ## their hit areas, across a line (`gap`) and between wrapped lines
+  ## (`row_gap`).
+  if node.kind != enElement or node.tag != "mailCluster":
+    return
+  var interactive = 0
+  for c in node.children:
+    if holdsInteractive(c):
+      inc interactive
+  if interactive < 2:
+    return
+  var gap = node.styles.getOrDefault("gap",
+    node.attrs.getOrDefault("gap", ""))
+  if gap.len == 0 or gap.startsWith("tok:"):
+    gap = "12px" # the default, space.3, resolves to 12px in every theme
+  var rowGap = node.styles.getOrDefault("row-gap",
+    node.styles.getOrDefault("row_gap", node.attrs.getOrDefault("row_gap",
+      "")))
+  if rowGap.len == 0 or rowGap.startsWith("tok:"):
+    rowGap = gap
+  for (what, value) in [("gap", gap), ("row_gap", rowGap)]:
+    let px = pxOf(value)
+    if px >= 0 and px < 8:
+      result.add(EmailDiagnostic(severity: sevWarning,
+        code: codeA11yTapTarget,
+        message: "mailCluster " & what & " " & value & " leaves less " &
+          "than 8px between the hit areas of its " & $interactive &
+          " links or buttons: a thumb hits the neighbour (R-TBL-12)",
+        origin: node.origin, rules: @["R-TBL-12"]))
 
 proc msoNamesIn*(text: string): seq[string] =
   ## Every `mso-*` property name declared in a CSS or markup fragment
@@ -1058,6 +1173,8 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     result.add(lintLinkText(node))
     result.add(lintContrast(node, ancestors))
     result.add(lintAltLength(node))
+    result.add(lintRagged(node))
+    result.add(lintTapSpacing(node))
   of enHeadStyle:
     result.add(lintHeadCss(node.text, profile, expected, node.origin))
   of enText, enRaw, enMsoIf, enNotMso, enVml:

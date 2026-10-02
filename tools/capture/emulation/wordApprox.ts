@@ -9,7 +9,8 @@
 
 // 2: inline styles are re-escaped after rewriting.
 // 3: declarations whose value uses calc() are stripped (step 2).
-export const WORD_APPROX_TRANSFORM_VERSION = 3;
+// 4: box-shadow is stripped (step 2).
+export const WORD_APPROX_TRANSFORM_VERSION = 4;
 
 import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
 import { stripBackgroundImageFromCss } from "./imagesOff.ts";
@@ -64,7 +65,8 @@ export function revealMsoConditionals(html: string): string {
 // Step 2: strip what Word ignores — max-width (R-OL-03),
 // display:flex|grid|inline-block, any declaration whose value uses
 // calc() (caniemail css-unit-calc: unsupported in Outlook for Windows;
-// the Fab Four column width), CSS background-image (R-OL-11),
+// the Fab Four column width), box-shadow (caniemail box-shadow: no
+// support in Outlook for Windows; R-TBL-09), CSS background-image (R-OL-11),
 // border-radius (R-OL-12), margin:auto (R-LAY-08: centring in Word
 // comes from align="center" on the ghost table, never from
 // margin:auto), and padding on anything but td/th (R-OL-05) — from
@@ -86,6 +88,7 @@ const BAD_DISPLAY_RE =
 const MAX_WIDTH_RE = /(?:^|(?<=[;{]))\s*max-width\s*:[^;{}]*;?/gi;
 const CALC_RE = /(?:^|(?<=[;{]))\s*[a-z-]+\s*:[^;{}]*\bcalc\([^;{}]*;?/gi;
 const BORDER_RADIUS_RE = /(?:^|(?<=[;{]))\s*border-radius\s*:[^;{}]*;?/gi;
+const BOX_SHADOW_RE = /(?:^|(?<=[;{]))\s*box-shadow\s*:[^;{}]*;?/gi;
 const PADDING_RE = /(?:^|(?<=[;{]))\s*padding(?:-[a-z-]+)?\s*:[^;{}]*;?/gi;
 
 function stripNonPaddingDecls(css: string): string {
@@ -95,6 +98,7 @@ function stripNonPaddingDecls(css: string): string {
       .replace(CALC_RE, "")
       .replace(BAD_DISPLAY_RE, "")
       .replace(BORDER_RADIUS_RE, "")
+      .replace(BOX_SHADOW_RE, "")
       .replace(MARGIN_AUTO_RE, ""),
   );
 }

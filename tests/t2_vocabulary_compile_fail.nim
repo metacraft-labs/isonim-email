@@ -42,7 +42,7 @@ const fixtures = ["unknown_mail_tag.nim", "forbidden_script.nim",
   "forbidden_iframe.nim", "forbidden_form.nim", "forbidden_video.nim",
   "forbidden_svg.nim", "proc_as_element.nim", "forbidden_sectioning.nim",
   "forbidden_sectioning_top.nim", "bare_table.nim",
-  "column_outside_row.nim"]
+  "column_outside_row.nim", "pattern_unknown_attr.nim"]
   ## Every fixture a test below reads (a test naming one missing here
   ## fails on the table lookup).
 
@@ -151,6 +151,21 @@ suite "vocabulary compile failures":
     check exitCode != 0
     check want in output
     check "mailColumn" in output
+    check cited in output
+    let first = firstErrorLine(output)
+    check first.startsWith(testsDir / "compile_fail" / cited)
+    check ("Error: " & want) in first
+
+  test "test_defined_pattern_attributes_are_checked":
+    # A pattern defined with defineMailPattern joins the static
+    # vocabulary: its props are its attributes, and any other is an
+    # error at the element, with the nearest prop suggested.
+    let (output, exitCode, want, cited) = checkFixture(
+      testsDir / "compile_fail" / "pattern_unknown_attr.nim")
+    check exitCode != 0
+    check want in output
+    check "'mailBadge' has no attribute 'colour'" in output
+    check "Did you mean 'label'?" in output
     check cited in output
     let first = firstErrorLine(output)
     check first.startsWith(testsDir / "compile_fail" / cited)

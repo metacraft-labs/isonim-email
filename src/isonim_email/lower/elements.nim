@@ -6,8 +6,12 @@
 ## lowering with its email HTML: the div-first scaffolding
 ## (`mailSection`, `mailWrapper`, `mailStack`: `lower/section.nim`,
 ## `lower/wrapper.nim`, `lower/stack.nim`), rows of columns
-## (`mailColumn`, `mailGroup` and `mailColumns`: `lower/column.nim`) and
-## `mailImage` (`lower/image.nim`). `mailDocument` is lowered separately, around
+## (`mailColumn`, `mailGroup` and `mailColumns`: `lower/column.nim`),
+## the layout primitives (`mailBox`, `mailGrid`, `mailCluster`,
+## `mailSidebar`: `lower/box.nim`, `grid.nim`, `cluster.nim`,
+## `sidebar.nim`), `mailImage` (`lower/image.nim`), and every expanded
+## pattern (`patterns.nim`), which leaves its expansion in its place.
+## `mailDocument` is lowered separately, around
 ## the result, by `lower/document.nim`.
 ##
 ## The scaffolding reads P3's widths (`passes/layout.nim`); a tree that
@@ -44,7 +48,12 @@ import ./section
 import ./wrapper
 import ./stack
 import ./column
+import ./box
+import ./grid
+import ./cluster
+import ./sidebar
 import ../passes/layout
+import ../patterns
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -52,8 +61,10 @@ import ../target
 const affects*: set[ClientFamily] = allFamilies
 
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
-  "mailStack", "mailColumns", "mailColumn", "mailGroup"]
-  ## Elements this pass lowers.
+  "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
+  "mailGrid", "mailCluster", "mailSidebar"]
+  ## Elements this pass lowers (plus every expanded pattern, which it
+  ## replaces by its expansion).
 const loweredElsewhere* = ["mailDocument"]
   ## Elements lowered by the render entries themselves (the document
   ## shell wraps the lowered tree).
@@ -125,6 +136,33 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       replaceChild(parent, c, nodes)
       for w in wrappers:
         walk(w, ctx, assets, diags)
+    elif c.kind == enElement and c.expanded and isPattern(c.tag):
+      # An expanded pattern (`patterns.nim`) leaves its expansion behind.
+      walk(c, ctx, assets, diags)
+      replaceChild(parent, c, c.children)
+    elif c.kind == enElement and c.tag == "mailBox":
+      let (nodes, inner, found) = lowerBox(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      walk(inner, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailGrid":
+      let (nodes, holders, found) = lowerGrid(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      for h in holders:
+        walk(h, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailCluster":
+      let (nodes, holders, found) = lowerCluster(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      for h in holders:
+        walk(h, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailSidebar":
+      let (nodes, holders, found) = lowerSidebar(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      for h in holders:
+        walk(h, ctx, assets, diags)
     elif c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:
       # A column is lowered by its row; one anywhere else is misplaced
       # (a hand-built tree: templates cannot express it).

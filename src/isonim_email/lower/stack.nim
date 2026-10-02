@@ -8,7 +8,8 @@
 ## elements keep their own margins; the gap is added to them, never
 ## collapsed with them, and a gap of 0 adds nothing at all.
 ##
-## `align` (default left) is emitted as attribute and CSS on every
+## `align` (default: the start of the direction the stack's content
+## runs in, left or right) is emitted as attribute and CSS on every
 ## child wrapper (R-TBL-14), so the stack's alignment holds whatever its
 ## container's is.
 ##
@@ -44,6 +45,21 @@ proc stackGap*(node: EmailNode; theme: EmailTheme): int =
     v = theme.lightFor(v[4 .. ^1])
   int(trunc(toPx(v)))
 
+proc startOf*(node: EmailNode; ctx: LowerCtx): string =
+  ## The start edge of the direction `node`'s content runs in: the
+  ## nearest enclosing element's `direction` (its own, or one a lowered
+  ## container set) or `dir`, else the document's.
+  var n = node
+  while n != nil:
+    if n.kind == enElement:
+      var d = n.styles.getOrDefault("direction", "").strip().toLowerAscii()
+      if d.len == 0:
+        d = n.attrs.getOrDefault("dir", "").strip().toLowerAscii()
+      if d in ["ltr", "rtl"]:
+        return if d == "rtl": "right" else: "left"
+    n = n.parent
+  if ctx.dir.toLowerAscii() == "rtl": "right" else: "left"
+
 proc lowerStack*(node: EmailNode; ctx: LowerCtx):
     tuple[nodes: seq[EmailNode]; wrappers: seq[EmailNode];
           diagnostics: seq[EmailDiagnostic]] =
@@ -64,7 +80,9 @@ proc lowerStack*(node: EmailNode; ctx: LowerCtx):
         "px is negative (R-TBL-04: gaps are padding, never negative)",
       origin: node.origin, rules: @["R-TBL-04"]))
     gap = 0
-  var align = node.attrs.getOrDefault("align", "left").strip().toLowerAscii()
+  var align = node.attrs.getOrDefault("align", "").strip().toLowerAscii()
+  if align.len == 0:
+    align = startOf(node, ctx)
   if align notin ["left", "center", "right"]:
     result.diagnostics.add(EmailDiagnostic(severity: sevError,
       code: codeVocabBadValue, message: "mailStack align '" & align &

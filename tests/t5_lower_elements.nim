@@ -94,8 +94,9 @@ suite "elements without a lowering are errors, never raw tags":
     # Every non-leaf vocabulary element other than the ones with a
     # lowering, plus a pattern-shaped tag the vocabulary does not know.
     let lowered = @loweredHere & @loweredElsewhere
-    check lowered.sorted() == @["mailColumn", "mailColumns", "mailDocument",
-      "mailGroup", "mailImage", "mailSection", "mailStack", "mailWrapper"]
+    check lowered.sorted() == @["mailBox", "mailCluster", "mailColumn",
+      "mailColumns", "mailDocument", "mailGrid", "mailGroup", "mailImage",
+      "mailSection", "mailSidebar", "mailStack", "mailWrapper"]
     var nonLeaf = 0
     var tags: seq[string] = @[]
     for t in buildEmailVocabulary().tags:

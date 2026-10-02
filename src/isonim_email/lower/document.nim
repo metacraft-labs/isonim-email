@@ -15,14 +15,13 @@
 ## preheader, `#ffffff` background): P1 validates the required ones,
 ## but lowering itself never fails on an incomplete tree.
 ##
-## The shell is P5-final. P5 reads the styles table only, so the
-## `style`-attribute literals (preheader hiding stacks, wrapper
-## background plus R-DOC-11's doubled `font-size`) bypass it by
-## construction — and must: the table cannot hold the doubled
-## declaration (P5's own R-CSS-14 note), `max()`/`medium` would draw
-## spurious diagnostics, and the catalogue §9 style-before-`aria-hidden` order
-## would be lost. The one `bg` value is stamped in all four places,
-## so the triple background stays coherent whatever its spelling;
+## The shell is P5-final: it is built after P5 runs. The preheader's
+## hiding stacks are `style`-attribute literals, so the catalogue §9
+## style-before-`aria-hidden` order holds. The wrapper's R-DOC-11
+## doubled `font-size` is a fallback pair set with
+## `setStyleWithFallback` (R-CSS-19), which only the serialiser
+## writes. The one `bg` value is stamped in all four places, so the
+## triple background stays coherent whatever its spelling;
 ## colour normalisation is P5's uniform tree-wide job (P2 spelling
 ## pending, pre-existing). The `style`-attribute nodes keep empty
 ## styles tables (a second style source would serialise two `style`
@@ -184,16 +183,23 @@ proc lowerDocument*(doc: EmailNode; sections: EmailNode;
     raw(target.preheaderPad.repeat(preheaderPaddingUnits(preheader))))
   r.appendChild(body, pre2)
 
-  # The wrapper style is likewise an attribute: the styles table
-  # cannot hold the doubled `font-size` declaration (catalogue §1 line 73).
+  # The wrapper's doubled `font-size` (R-DOC-11) is a fallback pair
+  # (R-CSS-19): `medium` for a client without `max()`, then
+  # `max(16px, 1rem)`. The serialiser writes the styles table after the
+  # attributes, where the `style` attribute stood.
   let wrap = r.createElement("div")
   r.setAttribute(wrap, "role", "article")
   r.setAttribute(wrap, "aria-roledescription", "email")
   r.setAttribute(wrap, "aria-label", title)
   r.setAttribute(wrap, "lang", lang)
   r.setAttribute(wrap, "dir", dir)
-  r.setAttribute(wrap, "style", "background-color:" & bg &
-    ";font-size:medium;font-size:max(16px, 1rem);")
+  r.setStyle(wrap, "background-color", bg)
+  r.setStyleWithFallback(wrap, "font-size", "medium", "max(16px, 1rem)")
+  # The document's own head rules (its `@dark:` background) reach the
+  # wrapper and its table, which paint the canvas.
+  let docClass = if doc != nil: doc.attrs.getOrDefault("class", "") else: ""
+  if docClass.len > 0:
+    r.setAttribute(wrap, "class", docClass)
   r.appendChild(body, wrap)
   let table = r.createElement("table")
   r.setAttribute(table, "role", "presentation")
@@ -202,6 +208,8 @@ proc lowerDocument*(doc: EmailNode; sections: EmailNode;
   r.setAttribute(table, "cellpadding", "0")
   r.setAttribute(table, "cellspacing", "0")
   r.setStyle(table, "background-color", bg)
+  if docClass.len > 0:
+    r.setAttribute(table, "class", docClass)
   r.appendChild(wrap, table)
   let tr = r.createElement("tr")
   r.appendChild(table, tr)

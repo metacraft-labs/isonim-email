@@ -184,6 +184,20 @@ const
     ## `reverse_on_mobile` on a row where more than one column holds
     ## text, or in a right-to-left row (R-LAY-11). Collected from
     ## `passes/validate.nim`.
+  codeTblRagged* = "I-TBL-RAGGED"
+    ## A bordered or background-carrying item in a row whose items do
+    ## not share a height: a `hybrid` or `fabFour` row's column, a
+    ## section's own column, a `mailGrid` item (R-TBL-10). Information:
+    ## the ragged bottoms are a declared degradation, and the code makes
+    ## the choice a visible one. Collected from `passes/lint.nim`.
+  codePatternGridOrphan* = "E-PATTERN-GRID-ORPHAN"
+    ## `mailGrid(columns = 3, mobile_columns = 2)`: two per row on a
+    ## phone leaves an orphan item in every second row. Collected from
+    ## `passes/validate.nim`.
+  codeA11yTapTarget* = "W-A11Y-TAP-TARGET"
+    ## A tap target too small or too close: interactive items of a
+    ## `mailCluster` closer than 8px (R-TBL-12). Collected from
+    ## `passes/lint.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

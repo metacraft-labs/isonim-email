@@ -76,6 +76,20 @@ describe("wordApprox step 2: CSS Word ignores is stripped", () => {
     assert.ok(out.includes(`<div style="">y</div>`), `grid kept:\n${out}`);
   });
 
+  it("strips box-shadow, which Word does not draw, and keeps the box's border", () => {
+    const out = wordApprox(
+      doc(
+        `<style>.s{box-shadow:0 1px 3px #000;color:red}</style>`,
+        `<table><tr><td style="padding:24px;border:1px solid #dedede;box-shadow:0 1px 3px rgba(0,0,0,0.12);">x</td></tr></table>`,
+      ),
+    );
+    assert.ok(out.includes(`.s{color:red}`), `unexpected output:\n${out}`);
+    assert.ok(
+      out.includes(`<td style="padding:24px;border:1px solid #dedede;">x</td>`),
+      `unexpected output:\n${out}`,
+    );
+  });
+
   it("strips calc() declarations, which Word does not support, and keeps the rest", () => {
     const out = wordApprox(
       doc(

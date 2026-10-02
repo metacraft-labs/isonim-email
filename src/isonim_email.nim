@@ -17,6 +17,12 @@ import isonim_email/lower/image
 import isonim_email/lower/section
 import isonim_email/lower/wrapper
 import isonim_email/lower/stack
+import isonim_email/lower/box
+import isonim_email/lower/grid
+import isonim_email/lower/cluster
+import isonim_email/lower/sidebar
+import isonim_email/patterns
+import isonim_email/primitives
 import isonim_email/passes/layout
 import isonim_email/support/[caniemail_data, families]
 import isonim_email/passes/lint
@@ -61,6 +67,12 @@ export image
 export section
 export wrapper
 export stack
+export box
+export grid
+export cluster
+export sidebar
+export patterns
+export primitives
 export layout
 export caniemail_data
 export families

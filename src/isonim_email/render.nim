@@ -1,7 +1,8 @@
 ## isonim_email/render.nim — the render entries.
 ##
 ## `renderEmail` runs a template once inside a fresh reactive root and
-## carries the tree through the whole pipeline — validate, layout,
+## carries the tree through the whole pipeline — pattern expansion,
+## validate, layout,
 ## styles, head, a11y, lint, element and document lowering,
 ## serialisation — returning the
 ## `RenderedEmail` record: HTML, plain text, diagnostics, sizes, assets
@@ -34,6 +35,8 @@ import ./passes/styles
 import ./passes/head
 import ./passes/a11y
 import ./passes/lint
+import ./patterns
+import ./primitives
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -100,9 +103,10 @@ proc renderAuthoringTree*[T](tpl: EmailTemplate[T]; data: T): EmailNode =
       disposeRoot()
   tree
 
-proc cloneTree(node: EmailNode; parent: EmailNode = nil): EmailNode =
-  ## A deep copy of one tree: kinds, tags, payloads, attributes and
-  ## styles in insertion order, origins and IR fields. The clone feeds
+proc cloneTree*(node: EmailNode; parent: EmailNode = nil): EmailNode =
+  ## A deep copy of one tree: kinds, tags, payloads, attributes,
+  ## styles and fallback pairs in insertion order, origins, IR fields,
+  ## P3's annotations and the pattern expansion mark. The clone feeds
   ## lowering (which moves children into the wrapper cell) while the
   ## original stays whole as the `semantic` tree.
   if node == nil:
@@ -120,6 +124,7 @@ proc cloneTree(node: EmailNode; parent: EmailNode = nil): EmailNode =
     cond: node.cond,
     priority: node.priority,
     layout: node.layout,
+    expanded: node.expanded,
   )
   for c in node.children:
     result.children.add(cloneTree(c, result))
@@ -255,7 +260,9 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## a lossy guess. MIME packaging then sends the HTML alone, never an
   ## empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
-  var diags = validate(doc)
+  # Patterns expand first, so their expansions go through every pass.
+  var diags = expandPatterns(doc, theme, target)
+  diags.add(validate(doc))
   # P3 reads the authoring values (P5 rounds percentages to two
   # decimals; the width maths needs them whole) and annotates the tree,
   # so the semantic tree carries the widths too.

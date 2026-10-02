@@ -363,15 +363,49 @@ proc columnMinimum(col, row: EmailNode; s: Solve): float =
         discard
   if hasText(col): 160.0 else: 120.0
 
+proc gridItemWidths*(box, columns, gutter, count: int;
+    lastRow: string): seq[int]
+
+proc narrowBox(node: EmailNode; s: Solve): float =
+  ## The width `node` (a laid-out row or box) has at a 320px document.
+  ## Paddings and borders stay fixed while the document narrows, so a
+  ## box shrinks by exactly what the document loses, unless it sits in
+  ## something that stacks on a phone: a column of a stacking row, or
+  ## an item of a one-up mobile grid, is then the full width of its own
+  ## row (its gutter goes to the top), and the box inside it is that
+  ## less what lies between them on the desktop.
+  let own = node.layout.boxExact
+  var n = node.parent
+  while n != nil:
+    if n.kind == enElement and n.parent != nil:
+      let p = n.parent
+      if n.tag in columnTags and n.layout.solved and n.layout.stacks and
+          p.layout.solved:
+        let desk = float(n.layout.outer - n.layout.gutter[1] -
+          n.layout.gutter[3])
+        return max(0.0, narrowBox(p, s) - (desk - own))
+      if p.kind == enElement and p.tag == "mailGrid" and not p.expanded and
+          p.layout.solved:
+        var idx = 0
+        for c in p.children:
+          if c == n:
+            break
+          if c.kind == enElement:
+            inc idx
+        let widths = gridItemWidths(p.layout.box, p.layout.columns,
+          p.layout.gutterPx, p.layout.items, p.layout.lastRow)
+        let desk = if idx < widths.len: float(widths[idx]) else: own
+        return max(0.0, narrowBox(p, s) - (desk - own))
+    n = n.parent
+  max(0.0, own - float(s.docWidth - 320))
+
 proc checkMinColumns(row: EmailNode; cols: seq[EmailNode]; s: Solve;
     diags: var seq[EmailDiagnostic]) =
   ## R-TBL-11: a cell row shows its desktop layout whenever CSS is lost
   ## (`cellsStacking`) or always (`cells`), so each cell's content box
-  ## at a 320px document must reach its minimum. Paddings and borders
-  ## stay fixed while the document narrows, so the row's box shrinks by
-  ## exactly what the document loses.
-  let rowBox = row.layout.boxExact
-  let box320 = max(0.0, rowBox - float(s.docWidth - 320))
+  ## at a 320px document must reach its minimum (`narrowBox` gives the
+  ## row's box there).
+  let box320 = narrowBox(row, s)
   for c in cols:
     let lb = c.layout
     # The cell's desktop share (the gutter is a cell of its own).
@@ -555,12 +589,218 @@ proc solveColumns(node: EmailNode; context: float; s: Solve; rtl: bool;
   node.layout = lb
   solveRow(node, context, "", s, diags)
 
+# --- Layout primitives (catalogue §4b; layout-patterns.md §3.2-§3.6) ----------
+
+const
+  boxPaddingToken* = "space.5"
+    ## `mailBox(padding)` default (24px).
+  gridGutterToken* = "space.5"
+    ## `mailGrid(gutter)` default (24px, as `mailColumns`).
+  clusterGapToken* = "space.3"
+    ## `mailCluster(gap)` default (12px).
+  sidebarGapToken* = "space.4"
+    ## `mailSidebar(gap)` default (16px).
+  gridLastRows* = ["left", "center", "stretch"]
+
+proc itemsOf*(node: EmailNode): seq[EmailNode] =
+  ## The items of a grid or a cluster, or the sides of a sidebar: every
+  ## element child and every non-blank text child, in order.
+  for c in node.children:
+    if c.kind == enElement or
+        (c.kind == enText and c.text.strip().len > 0) or c.kind == enRaw:
+      result.add(c)
+
+proc lengthProp(node: EmailNode; name, defaultToken: string; s: Solve;
+    diags: var seq[EmailDiagnostic]; rule: string): int =
+  ## A px length prop (whole px), or the theme default; a `%` or a bad
+  ## value is `E-VOCAB-BAD-VALUE` (and the default is used).
+  var v = rawValue(node, name)
+  if v.len == 0:
+    if defaultToken.len == 0:
+      return 0
+    v = "tok:" & defaultToken
+  try:
+    let r = resolveTok(v, s.theme).strip()
+    if r.endsWith("%"):
+      raise newException(StyleError, "E-VOCAB-BAD-VALUE: " & node.tag &
+        " " & name & " '" & r & "' must be a px length")
+    result = truncPx(r)
+    if result < 0:
+      raise newException(StyleError, "E-VOCAB-BAD-VALUE: " & node.tag &
+        " " & name & " '" & r & "' is negative")
+  except StyleError, ThemeError, ValueError:
+    let msg = getCurrentExceptionMsg()
+    diags.add(layoutDiag(node, codeVocabBadValue,
+      (if msg.startsWith("E-VOCAB-BAD-VALUE: "): msg[19 .. ^1] else: msg),
+      @[rule]))
+    if defaultToken.len > 0:
+      try:
+        result = max(0, truncPx(resolveTok("tok:" & defaultToken, s.theme)))
+      except StyleError, ThemeError:
+        result = 0
+    else:
+      result = 0
+
+proc solveBox(node: EmailNode; context: float; s: Solve; rtl: bool;
+    diags: var seq[EmailDiagnostic]) =
+  ## `mailBox`: a single-cell table as wide as its context, its content
+  ## boxed in by its padding (`space.5` by default) and border.
+  let w = int(trunc(context))
+  var lb = LayoutBox(solved: true, container: w, outer: w)
+  try:
+    lb.padding = paddingOf(node, s.theme, boxPaddingToken)
+    lb.border = borderOf(node, s.theme)
+  except StyleError, ThemeError:
+    diags.add(layoutDiag(node, codeVocabBadValue,
+      getCurrentExceptionMsg(), @["R-TBL-09"]))
+  lb.boxExact = context - float(lb.padding[1] + lb.padding[3] +
+    lb.border[1] + lb.border[3])
+  lb.box = int(trunc(lb.boxExact))
+  lb.rtl = rtl
+  node.layout = lb
+  for c in node.children:
+    solveNode(c, lb.boxExact, s, rtl, diags)
+
+proc gridItemWidths*(box, columns, gutter, count: int;
+    lastRow: string): seq[int] =
+  ## The px width of each of `count` grid items in a `box`-px row of
+  ## `columns` with `gutter` px between items: `(B − (N−1)·g)/N`, whole
+  ## px, the remainder to the first items of each row, one each (as a px
+  ## row of `mailColumns` hands it out). With `lastRow = stretch` the
+  ## items of an incomplete last row share its whole width instead.
+  let n = max(columns, 1)
+  proc share(width, k: int): seq[int] =
+    let free = max(0, width - (k - 1) * gutter)
+    let base = free div k
+    let extra = free - base * k
+    for i in 0 ..< k:
+      result.add(base + (if i < extra: 1 else: 0))
+  let full = share(box, n)
+  let rest = count mod n
+  for i in 0 ..< count:
+    if lastRow == "stretch" and rest > 0 and i >= count - rest:
+      result.add(share(box, rest)[i - (count - rest)])
+    else:
+      result.add(full[i mod n])
+
+proc solveGrid(node: EmailNode; context: float; s: Solve; rtl: bool;
+    diags: var seq[EmailDiagnostic]) =
+  ## `mailGrid`: N items per desktop row, as wide as the content box it
+  ## sits in, `gutter` px between items and between rows.
+  let w = int(trunc(context))
+  var lb = LayoutBox(solved: true, container: w, outer: w, box: w,
+    boxExact: context, rtl: rowDirection(node, s, rtl), strategy: "grid")
+  var n = 2
+  let given = rawValue(node, "columns")
+  if given.len > 0:
+    try:
+      n = parseInt(given)
+    except ValueError:
+      n = 0
+  # P1 reports a count outside 2..4; the solver lays out the nearest.
+  n = clamp(n, 2, 4)
+  lb.columns = n
+  lb.gutterPx = lengthProp(node, "gutter", gridGutterToken, s, diags,
+    "R-TBL-04")
+  var lastRow = rawValue(node, "last_row").toLowerAscii()
+  if lastRow.len == 0:
+    lastRow = "left"
+  if lastRow notin gridLastRows:
+    diags.add(layoutDiag(node, codeVocabBadValue, "mailGrid last_row '" &
+      lastRow & "' is not " & gridLastRows.join(", ")))
+    lastRow = "left"
+  lb.lastRow = lastRow
+  let items = itemsOf(node)
+  lb.items = items.len
+  lb.siblings = n
+  node.layout = lb
+  let widths = gridItemWidths(w, n, lb.gutterPx, items.len, lastRow)
+  for i, c in items:
+    solveNode(c, float(widths[i]), s, lb.rtl, diags)
+
+proc solveCluster(node: EmailNode; context: float; s: Solve; rtl: bool;
+    diags: var seq[EmailDiagnostic]) =
+  ## `mailCluster`: inline items in the content box it sits in, `gap`
+  ## px apart (`space.3`), `row_gap` between wrapped lines (the gap).
+  let w = int(trunc(context))
+  var lb = LayoutBox(solved: true, container: w, outer: w, box: w,
+    boxExact: context, rtl: rowDirection(node, s, rtl), strategy: "cluster")
+  lb.gutterPx = lengthProp(node, "gap", clusterGapToken, s, diags,
+    "R-TBL-04")
+  let rowGap = rawValue(node, "row_gap")
+  lb.mobileGap = if rowGap.len == 0: lb.gutterPx
+    else: lengthProp(node, "row_gap", clusterGapToken, s, diags, "R-TBL-04")
+  let items = itemsOf(node)
+  lb.items = items.len
+  node.layout = lb
+  for c in items:
+    solveNode(c, context, s, lb.rtl, diags)
+
+proc solveSidebar(node: EmailNode; context: float; s: Solve; rtl: bool;
+    diags: var seq[EmailDiagnostic]) =
+  ## `mailSidebar`: two sides, one `fixed` px wide (the first with
+  ## `side = left`, the second with `side = right`), the other taking
+  ## the rest less the `gap` (`space.4`).
+  let w = int(trunc(context))
+  var lb = LayoutBox(solved: true, container: w, outer: w, box: w,
+    boxExact: context, rtl: rowDirection(node, s, rtl), strategy: "sidebar")
+  let side = rawValue(node, "side").toLowerAscii()
+  if side notin ["", "left", "right"]:
+    diags.add(layoutDiag(node, codeVocabBadValue, "mailSidebar side '" &
+      side & "' is not left or right"))
+  lb.fixedIndex = if side == "right": 1 else: 0
+  if rawValue(node, "fixed").len == 0:
+    diags.add(layoutDiag(node, codeVocabBadValue, "mailSidebar needs " &
+      "fixed, the px width of its fixed side (layout-patterns.md §3.6)"))
+  lb.fixedPx = lengthProp(node, "fixed", "", s, diags, "R-TBL-07")
+  lb.gutterPx = lengthProp(node, "gap", sidebarGapToken, s, diags,
+    "R-TBL-04")
+  lb.switchPx = lengthProp(node, "switch_below", "", s, diags, "R-TBL-07")
+  lb.reversed = isTrue(node, "reverse_on_mobile")
+  lb.stacks = lb.switchPx > 0
+  let sides = itemsOf(node)
+  if sides.len != 2:
+    diags.add(layoutDiag(node, codeStructNesting, "mailSidebar holds " &
+      $sides.len & " children: it lays out exactly two, a fixed side " &
+      "and a fluid one (layout-patterns.md §3.6)", @["R-LAY-16"]))
+  let fluid = w - lb.fixedPx - lb.gutterPx
+  if lb.fixedPx > 0 and fluid <= 0:
+    diags.add(layoutDiag(node, codeVocabBadValue, "mailSidebar fixed " &
+      $lb.fixedPx & "px plus gap " & $lb.gutterPx & "px leaves nothing " &
+      "of its " & $w & "px box for the fluid side"))
+  node.layout = lb
+  for i, c in sides:
+    let box = if i == lb.fixedIndex: lb.fixedPx else: max(0, fluid)
+    solveNode(c, float(box), s, lb.rtl, diags)
+  if not lb.stacks and sides.len == 2 and fluid > 0:
+    # R-TBL-11: a sidebar that never switches keeps both sides on one
+    # line at every width, so its fluid side is checked at 320px.
+    let fluidSide = sides[1 - lb.fixedIndex]
+    let content = narrowBox(node, s) - float(lb.fixedPx + lb.gutterPx)
+    let minimum = if hasText(fluidSide): 160.0 else: 120.0
+    if content < minimum:
+      diags.add(EmailDiagnostic(severity: sevWarning,
+        code: codeLayoutMinColumn,
+        message: "the fluid side of a mailSidebar that never switches is " &
+          formatFloat(content, ffDecimal, 1) & "px wide at a 320px " &
+          "document, below its " & $int(minimum) & "px minimum: give it " &
+          "switch_below, or a narrower fixed side (R-TBL-11)",
+        origin: node.origin, rules: @["R-TBL-11"]))
+
 proc solveNode(node: EmailNode; context: float; s: Solve; rtl: bool;
     diags: var seq[EmailDiagnostic]) =
   if node == nil or node.kind != enElement:
     return
   let tag = node.tag
-  if tag in sectionTags:
+  if tag == "mailBox":
+    solveBox(node, context, s, rtl, diags)
+  elif tag == "mailGrid" and not node.expanded:
+    solveGrid(node, context, s, rtl, diags)
+  elif tag == "mailCluster":
+    solveCluster(node, context, s, rtl, diags)
+  elif tag == "mailSidebar":
+    solveSidebar(node, context, s, rtl, diags)
+  elif tag in sectionTags:
     solveBand(node, context, s, rtl, sectionPaddingToken, diags)
   elif tag in wrapperTags:
     solveBand(node, context, s, rtl, "", diags)
@@ -630,6 +870,14 @@ const
     ## `cellsStacking`: a cell that turns into a full-width block below
     ## the breakpoint.
 
+const gridItemClass* = "e-grid-item"
+  ## `mailGrid`: an item that takes its row's full width below the
+  ## breakpoint.
+
+const sidebarStackClass* = "e-sb-stack"
+  ## `mailSidebar(switch_below > 0)`: a side that takes the full width
+  ## below the breakpoint.
+
 const cellsGutterClass* = "e-cells-gutter"
   ## `cellsStacking`: the gutter cell between two cells, hidden once the
   ## row stacks.
@@ -698,6 +946,23 @@ proc collectRules(node: EmailNode; acc: var seq[ColumnRule];
       let st = fabStackedPadding(lb)
       add(acc, seen, ColumnRule(desktop: false, cls: stackPadClass(st),
         decls: @[("padding", pxSides(st), true)]))
+  if lb.solved and ((node.tag == "mailGrid" and not node.expanded and
+      lb.items > 0) or (node.tag == "mailSidebar" and lb.switchPx > 0)):
+    # A one-up mobile grid and a switching sidebar stack below the
+    # breakpoint: each item (side) the full width of its row, the gap
+    # moved to the top of every one but the first.
+    let cls = if node.tag == "mailGrid": gridItemClass else: sidebarStackClass
+    let key = "m:" & cls
+    if key notin seen:
+      seen.add(key)
+      acc.add(ColumnRule(desktop: false, cls: cls,
+        decls: @[("max-width", "100%", true), ("width", "100%", true)]))
+    for sides in [[0, 0, 0, 0], [lb.gutterPx, 0, 0, 0]]:
+      let pad = stackPadClass(sides)
+      if "m:" & pad notin seen:
+        seen.add("m:" & pad)
+        acc.add(ColumnRule(desktop: false, cls: pad,
+          decls: @[("padding", pxSides(sides), true)]))
   for c in node.children:
     collectRules(c, acc, seen)
 

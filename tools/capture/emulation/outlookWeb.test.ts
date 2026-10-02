@@ -1,6 +1,7 @@
 // tools/capture/emulation/outlookWeb.test.ts — fixtures for the
 // outlookWeb emulation: x_ prefixing in markup and CSS, attribute selectors
-// kept, the rps_xxxx wrap, and dark-only data-ogsc/data-ogsb. Run with:
+// kept, the rps_xxxx wrap, calc()/max() declarations dropped, and
+// dark-only data-ogsc/data-ogsb. Run with:
 //   node --test tools/capture/emulation/
 
 import { describe, it } from "node:test";
@@ -38,6 +39,26 @@ describe("outlookWeb: class and id prefix in markup and CSS", () => {
       doc(
         `<style>.x_a{color:#aabbcc;background:url(foo.png)}</style>`,
         `<div class="rps_xxxx"><p class="x_a" id="x_p" data-id="p">x</p></div>`,
+      ),
+    );
+  });
+});
+
+describe("outlookWeb: calc() and max() are dropped", () => {
+  it("drops declarations using calc() or max(), inline and in style blocks, and keeps the rest", () => {
+    const input = doc(
+      `<style>.f{width:calc(480px - 100%);color:red}.g{font-size:max(16px, 1rem)}</style>`,
+      // The Fab Four's fallback pair loses both halves; the document
+      // wrapper's font size keeps its fallback.
+      `<div style="display:inline-block;width:calc((480px - 100%) * 480);width:max(50%, calc((480px - 100%) * 480));min-width:50%;max-width:100%">a</div>` +
+        `<div style="font-size:medium;font-size:max(16px, 1rem);">b</div>`,
+    );
+    assert.equal(
+      outlookWeb(input, "light"),
+      doc(
+        `<style>.x_f{color:red}.x_g{}</style>`,
+        `<div class="rps_xxxx"><div style="display:inline-block;min-width:50%;max-width:100%">a</div>` +
+          `<div style="font-size:medium;">b</div></div>`,
       ),
     );
   });

@@ -392,7 +392,9 @@ proc cellRow(row: EmailNode; ctx: LowerCtx; r: EmailRenderer):
     if radiusOf(c).len > 0:
       anyRadius = true
   if anyRadius:
-    r.setStyle(table, "border-collapse", "separate")
+    # `!important`: the reset collapses every table with `!important`
+    # (R-TBL-16).
+    r.setStyle(table, "border-collapse", "separate !important")
   let tr = r.createElement("tr")
   r.appendChild(table, tr)
   var sameV = true

@@ -26,7 +26,10 @@ import ../passes/lint
 import ../passes/validate
 import ../passes/styles
 import ../passes/a11y
+import ../passes/layout
 import ../style/tokens
+import ../patterns
+import ../primitives
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -437,10 +440,22 @@ proc sectionDirection(node: EmailNode): string =
     p = p.parent
   "ltr"
 
+proc patternLines(node: EmailNode; view: BriefView;
+    expected: bool): seq[string] =
+  ## A pattern's own declaration for `view` (`patterns.nim`): its
+  ## expected elements, or its degradations. A pattern whose props do
+  ## not parse says so instead of failing the brief.
+  let def = patternOf(node.tag)
+  try:
+    if expected: def.expectedElements(node, view)
+    else: def.degradations(node, view)
+  except PatternError as e:
+    @["(" & node.tag & ": " & e.msg & ")"]
+
 proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
                items: var seq[string]; images: var seq[string];
                firstH1: var bool; align = "center";
-               mode = cmHeadCss) =
+               mode = cmHeadCss; view = BriefView()) =
   ## Present-list lines plus image alts, in document order. Containers
   ## recurse silently; only `mailColumns` (and multi-column
   ## `mailSection`) add an arrangement line of their own. `align` is
@@ -452,7 +467,7 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
   if node.kind != enElement:
     for c in node.children:
       walkItems(c, bg, width, breakpoint, items, images, firstH1, align,
-        mode)
+        mode, view)
     return
   var curBg = bg
   let nodeBg = styleValue(node, "background-color")
@@ -471,6 +486,13 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     # alignment of what they hold whatever the skeleton's cell says.
     curAlign = if tagLower(node) == "mailsection" and
         sectionDirection(node) == "rtl": "right" else: "left"
+  if isPattern(node.tag):
+    # A primitive or pattern: its own declaration, then its content.
+    items.add(patternLines(node, view, expected = true))
+    for c in node.children:
+      walkItems(c, curBg, width, breakpoint, items, images, firstH1,
+        curAlign, mode, view)
+    return
   case tagLower(node)
   of "h1", "h2", "h3", "h4", "h5", "h6":
     items.add(headingLine(node, firstH1))
@@ -488,7 +510,7 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     items.add(columnsLine(node, width, breakpoint, mode))
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign, mode)
+        curAlign, mode, view)
   of "mailsection":
     var cols = 0
     for c in node.children:
@@ -498,11 +520,11 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
       items.add(columnsLine(node, width, breakpoint, mode))
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign, mode)
+        curAlign, mode, view)
   else:
     for c in node.children:
       walkItems(c, curBg, width, breakpoint, items, images, firstH1,
-        curAlign, mode)
+        curAlign, mode, view)
 
 proc linksUnder(node: EmailNode; acc: var seq[tuple[text, href: string]]) =
   ## (text, href) of every `a`/`mailNavLink` in document order.
@@ -653,24 +675,37 @@ proc declarationApplies(doc: EmailNode; d: ExpectedDegradation): bool =
     # (None is declared yet.)
     false
 
+proc patternDegradations(node: EmailNode; view: BriefView;
+    acc: var seq[string]) =
+  ## Every pattern's declared degradations for `view`, once each, in
+  ## document order.
+  if node == nil:
+    return
+  if node.kind == enElement and isPattern(node.tag):
+    for line in patternLines(node, view, expected = false):
+      if line notin acc:
+        acc.add(line)
+  for c in node.children:
+    patternDegradations(c, view, acc)
+
 proc degradationLines(family: string; doc: EmailNode;
-                      images: seq[string]): seq[string] =
+                      images: seq[string];
+                      view = BriefView()): seq[string] =
   ## `imagesOff` names the alt texts replacing images; every other
   ## family lists the declared degradations whose construct the tree
-  ## carries.
+  ## carries, then the patterns' own for this client.
   if family == "imagesOff":
     for alt in images:
       result.add("\"" & (if alt.len > 0: alt else: "(no alt)") &
         "\" shown as alt text (images off)")
-    if result.len == 0:
-      result.add("(none)")
-    return
-  let (found, fam) = familyLintFamily(family)
-  if found:
-    for d in declaredDegradations():
-      if fam in d.families and declarationApplies(doc, d):
-        result.add(if d.note.len > 0: d.note
-                   else: d.name & " degrades as declared")
+  else:
+    let (found, fam) = familyLintFamily(family)
+    if found:
+      for d in declaredDegradations():
+        if fam in d.families and declarationApplies(doc, d):
+          result.add(if d.note.len > 0: d.note
+                     else: d.name & " degrades as declared")
+  patternDegradations(doc, view, result)
   if result.len == 0:
     result.add("(none)")
 
@@ -709,9 +744,20 @@ proc renderedTree(story: Story): tuple[doc: EmailNode;
     raise newException(BriefError, "story '" & story.name &
       "' tree failed validation: " & $found.len &
       " diagnostic(s), first: " & found[0].message)
+  # Widths for the patterns' declarations (how many items fit a row).
+  discard solveLayout(doc, defaultTheme(), defaultTarget())
   discard applyStyles(doc, defaultTheme(), defaultTarget())
   discard applyA11y(doc)
   (doc, dark)
+
+proc familyView*(family, viewport: string): BriefView =
+  ## The `BriefView` of a backend-A family at `viewport`.
+  let mode = familyCssMode(family)
+  let (found, fam) = familyLintFamily(family)
+  BriefView(client: family, audience: found, family: fam,
+    headCss: mode != cmNoCss, mediaQueries: mode == cmHeadCss,
+    word: mode == cmWord, width: viewportWidth(viewport),
+    breakpoint: defaultTarget().breakpoint)
 
 proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   ## The expected-screenshot block for one (story, family, viewport,
@@ -725,8 +771,9 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   var items: seq[string] = @[]
   var images: seq[string] = @[]
   var firstH1 = false
+  let view = familyView(family, viewport)
   walkItems(doc, docBackground(doc), width, breakpoint, items, images,
-    firstH1, mode = familyCssMode(family))
+    firstH1, mode = familyCssMode(family), view = view)
   items.add(footerLine(doc))
   if familyHonoursDark(family) and scheme != "light":
     let note = familyDarkNote(family)
@@ -743,7 +790,7 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   for i, item in items:
     result.add($(i + 1) & ". " & item & "\n")
   result.add("\nExpected degradations in this client:\n")
-  for d in degradationLines(family, doc, images):
+  for d in degradationLines(family, doc, images, view):
     result.add("- " & d & "\n")
   result.add("\nNot expected here: " & notExpectedLine(family, images) &
     ".\n")
@@ -930,10 +977,17 @@ const realClients*: array[7, RealClient] = [
       "rows of columns arranged as without head CSS: litehtml applies " &
         "no media query, so columns that take their desktop width from " &
         "one stack at every width; a Fab Four row, sized by calc(), may " &
-        "wrap early"],
+        "wrap early",
+      "a width litehtml cannot parse (max(), calc()) does not cap its " &
+        "box: a grid's items take the full row, one per row, and a " &
+        "switching sidebar stacks",
+      "an unbroken word longer than its box is not broken: the box " &
+        "widens to hold it"],
     rtlDegradation: "right-to-left text: litehtml has no bidirectional " &
       "reordering, so the words of an Arabic or Hebrew line appear in " &
-      "left-to-right order (each word itself is shaped correctly)",
+      "left-to-right order (each word itself is shaped correctly), and a " &
+      "two-cell row (a sidebar) is not mirrored: its first cell stays on " &
+      "the left",
     notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
       "(this client stands in for none of them)",
       "dark colours (Claws Mail is captured in light only)"]),
@@ -981,9 +1035,15 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   var items: seq[string] = @[]
   var images: seq[string] = @[]
   var firstH1 = false
+  let (aud, audFam) =
+    if c.audience.len > 0: familyLintFamily(c.audience)
+    else: (false, cfApple)
+  let view = BriefView(client: c.id, audience: aud, family: audFam,
+    headCss: c.headCss, mediaQueries: c.headCss and not c.noMediaQueries,
+    word: false, width: width, breakpoint: breakpoint)
   walkItems(doc, docBackground(doc), width, breakpoint, items, images,
     firstH1, mode = if c.headCss and not c.noMediaQueries: cmHeadCss
-      else: cmNoCss)
+      else: cmNoCss, view = view)
   items.add(footerLine(doc))
   if scheme != "light":
     if c.darkRules and c.headCss:
@@ -1018,8 +1078,14 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   if c.rtlDegradation.len > 0 and directionLine(doc).len > 0:
     degr.add(c.rtlDegradation)
   if c.audience.len > 0:
-    for d in degradationLines(c.audience, doc, images):
-      if d != "(none)":
+    for d in degradationLines(c.audience, doc, images, view):
+      if d != "(none)" and d notin degr:
+        degr.add(d)
+  else:
+    var own: seq[string] = @[]
+    patternDegradations(doc, view, own)
+    for d in own:
+      if d notin degr:
         degr.add(d)
   if degr.len == 0:
     degr.add("(none)")

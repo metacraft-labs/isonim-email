@@ -161,3 +161,69 @@ proc msoBoxOpen*(cell: GhostCell): EmailNode =
     ("width", "100%"), ("border", "0"), ("cellpadding", "0"),
     ("cellspacing", "0")])
   newMsoIf("mso", @[raw(table & "<tr>" & cellTag(cell))])
+
+proc ghostRowBreak*(next: GhostColumn): EmailNode =
+  ## `<!--[if mso]></td></tr><tr><td …><![endif]-->`: the next row of a
+  ## chunked ghost table. Word's tables never wrap, so a grid's ghost
+  ## table is cut into rows of N cells (R-LAY-07).
+  newMsoIf("mso", @[raw("</td></tr><tr>" & columnCellTag(next))])
+
+proc ghostSpacerCell*(width: int): EmailNode =
+  ## `<!--[if mso]></td><td width="{w}" aria-hidden="true" style="…">&nbsp;<![endif]-->`:
+  ## a sized cell that stands for an item a grid's last row does not
+  ## have, so the row keeps its cells' widths (R-TBL-05: explicit size,
+  ## hidden, never empty). It is closed by whatever follows it.
+  let td = tagText("td", [("width", $width), ("aria-hidden", "true"),
+    ("style", "width:" & $width & "px;font-size:0;line-height:0;" &
+      "mso-line-height-rule:exactly;")])
+  newMsoIf("mso", @[raw("</td>" & td & "&nbsp;")])
+
+proc ghostRowSwitch*(first: GhostColumn; centred: bool;
+    rtl = false): EmailNode =
+  ## `<!--[if mso]></td></tr></table><table …><tr><td …><![endif]-->`:
+  ## closes a chunked ghost table and opens one of its own for a last
+  ## row whose cells differ from the rows above (a centred or stretched
+  ## grid row): centred by `align="center"`, or filling its box.
+  var attrs = @[("role", "presentation")]
+  if centred:
+    attrs.add(("align", "center"))
+  attrs.add([("border", "0"), ("cellpadding", "0"), ("cellspacing", "0")])
+  if not centred:
+    attrs.add(("width", "100%"))
+  if rtl:
+    attrs.add(("dir", "rtl"))
+  newMsoIf("mso", @[raw("</td></tr></table>" & tagText("table", attrs) &
+    "<tr>" & columnCellTag(first))])
+
+proc ghostClusterOpen*(padding, align: string; rtl = false): EmailNode =
+  ## A cluster's single-row ghost table (MJML `mj-social`, `mj-navbar`):
+  ## `<!--[if mso]><table role="presentation" [align] border="0"
+  ## cellpadding="0" cellspacing="0"><tr><td style="padding:{gap}"><![endif]-->`.
+  ## The cells carry no width, only the gap; Word lays the items out on
+  ## one line, which it never wraps.
+  var attrs = @[("role", "presentation")]
+  if align in ["center", "right"]:
+    attrs.add(("align", align))
+  attrs.add([("border", "0"), ("cellpadding", "0"), ("cellspacing", "0")])
+  if rtl:
+    attrs.add(("dir", "rtl"))
+  newMsoIf("mso", @[raw(tagText("table", attrs) & "<tr>" &
+    cellTag(GhostCell(padding: padding)))])
+
+proc ghostClusterNext*(padding: string): EmailNode =
+  ## `<!--[if mso]></td><td style="padding:{gap}"><![endif]-->`.
+  newMsoIf("mso", @[raw("</td>" & cellTag(GhostCell(padding: padding)))])
+
+proc msoSpace*(): EmailNode =
+  ## `<!--[if mso]>&nbsp;&nbsp;&nbsp;<![endif]-->`: about 12px of space
+  ## only Word sees, where everyone else gets padding Word ignores (the
+  ## gap before a cluster's separator).
+  newMsoIf("mso", @[raw("&nbsp;&nbsp;&nbsp;")])
+
+proc msoZwnj*(): EmailNode =
+  ## `<!--[if mso]>&zwnj;<![endif]-->` after the image of a cell that
+  ## holds only an image beside a cell of text (R-TBL-07): with a text
+  ## character in the cell, Word applies the cell's `valign` to the
+  ## image. Only Word needs it; elsewhere a character after a block
+  ## image would open a line of its own under it.
+  newMsoIf("mso", @[raw("&zwnj;")])

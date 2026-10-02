@@ -11,11 +11,13 @@ import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
 import {
   decodeQuoteEntities,
   escapeForQuote,
+  mapStyleAttributes,
   START_TAG_RE,
 } from "./style_attr.ts";
 
 // 2: dark recolours (partial inversion) instead of only marking.
-export const OUTLOOK_WEB_TRANSFORM_VERSION = 2;
+// 3: declarations whose value uses calc() or max() are dropped.
+export const OUTLOOK_WEB_TRANSFORM_VERSION = 3;
 
 const STYLE_BLOCK_RE = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
@@ -307,10 +309,35 @@ function recolourDark(html: string): string {
   });
 }
 
+// Outlook.com has neither calc() (caniemail css-unit-calc) nor max()
+// (css-function-max) and drops a declaration that uses either, inline
+// and in style blocks alike (catalogue R-LAY-18, R-CSS-19). A fallback
+// pair (`width:calc(…);width:max(…)`) therefore loses both halves here,
+// and `font-size:medium;font-size:max(…)` keeps `medium`. Declaration
+// spelling as wordApprox's: a declaration starts after the start, `;`
+// or `{`, so a URL cannot match as a property.
+const UNSUPPORTED_FN_RE =
+  /(?:^|(?<=[;{]))\s*[a-z-]+\s*:[^;{}]*\b(?:calc|max)\([^;{}]*;?/gi;
+
+function stripUnsupportedFunctions(html: string): string {
+  const blocks = html.replace(
+    STYLE_BLOCK_RE,
+    (match: string, css: string): string => {
+      const open = /<style\b[^>]*>/i.exec(match)?.[0] ?? "<style>";
+      return `${open}${css.replace(UNSUPPORTED_FN_RE, "")}</style>`;
+    },
+  );
+  return mapStyleAttributes(blocks, (css: string): string =>
+    css.replace(UNSUPPORTED_FN_RE, ""),
+  );
+}
+
 // OutlookWeb: the full pipeline. Pure: the output
 // depends only on the input HTML and the scheme. forced-dark adds no
 // attributes: that inversion is left to Chromium's WebContentsForceDark.
 export function outlookWeb(html: string, scheme: string): string {
-  const wrapped = wrapRps(prefixStyles(prefixMarkupNames(html)));
+  const wrapped = wrapRps(
+    prefixStyles(prefixMarkupNames(stripUnsupportedFunctions(html))),
+  );
   return scheme === "dark" ? recolourDark(wrapped) : wrapped;
 }

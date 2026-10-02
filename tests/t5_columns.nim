@@ -235,7 +235,9 @@ suite "hybrid columns":
     r.para(r.child(g, "mailColumn", [("padding", "0")]), "G2")
     r.para(r.child(s, "mailColumn", [("width", "50%")]), "Solo")
     let res = renderTree(doc)
-    check res.diagnostics.len == 0
+    # Only the information that the grey group is ragged beside its
+    # neighbour (R-TBL-10).
+    check codesOf(res.diagnostics) == @[codeTblRagged]
     let html = res.html
     # No line-height of its own: its columns' text keeps its own.
     check "<div class=\"e-col-50 e-mso-group-fix\" style=\"display:" &
@@ -449,6 +451,29 @@ suite "strategies":
     check d.fallbacks.len == 0
     check d.styles["width"] == "10px"
 
+  test "test_clone_tree_copies_fallback_pairs":
+    # R-CSS-19: the render lowers a deep copy of the tree (`cloneTree`),
+    # so a fallback pair must survive the copy, as its own value: the
+    # clone serialises the pair, and editing it leaves the original.
+    let r = EmailRenderer()
+    let root = r.createElement("div")
+    let d = r.createElement("div")
+    r.setStyle(d, "display", "inline-block")
+    r.setStyleWithFallback(d, "width", "calc(1px + 1%)", "max(1px, 2%)")
+    r.setStyle(d, "min-width", "1px")
+    r.appendChild(root, d)
+    root.expanded = true
+    let copy = cloneTree(root)
+    check copy.expanded
+    let c = copy.children[0]
+    check c.fallbacks.len == 1
+    check c.fallbacks["width"] == "calc(1px + 1%)"
+    check serialize(c) == serialize(d)
+    check "width:calc(1px + 1%);width:max(1px, 2%);min-width:1px;" in
+      serialize(c)
+    r.setStyle(c, "width", "10px")
+    check d.fallbacks["width"] == "calc(1px + 1%)"
+
   test "test_cells_stacking_row":
     # R-LAY-19: one row of cells, the gutter a cell of its own, stacked
     # below the breakpoint by classes.
@@ -498,7 +523,8 @@ suite "strategies":
       @[@[("background-color", "#e5e7eb"), ("padding", "8px"),
         ("border", "1px solid #9ca3af"), ("border-radius", "4px")]])
     let res = renderTree(doc)
-    check res.diagnostics.len == 0
+    # Only the information that the boxed column is ragged (R-TBL-10).
+    check codesOf(res.diagnostics) == @[codeTblRagged]
     let html = res.html
     # Word: the unpadded ghost cell, the half-gutter table, then the
     # column's box table (so the background stays out of the gutter).

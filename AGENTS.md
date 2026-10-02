@@ -64,9 +64,10 @@ geometry this library emits (ghost tables, the boxes Word lays text
 into, responsive class widths) and the layout pass's widths against
 MJML 5's for the fixtures in `tests/conformance/`; MJML is pinned in
 `nix/mjml/` and nothing is fetched. The layout reference stories
-(`tests/stories/seed_layout.nim`) are captured with
-`ISONIM_CAPTURE_LAYOUT=1 just email-shots layoutOneColumn …`; they are
-outside the regression matrix.
+(`tests/stories/seed_layout.nim`) and the layout primitives' story set
+(`tests/stories/seed_primitives.nim`: `boxMinimal` … `sidebarInContext`)
+are captured with `ISONIM_CAPTURE_LAYOUT=1 just email-shots
+layoutOneColumn …`; they are outside the regression matrix.
 
 `just test-vm` (not part of `just test`; needs KVM) runs the hermetic
 capture check, `checks.x86_64-linux.capture-linux-desktop`

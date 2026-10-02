@@ -17,8 +17,8 @@
 ## Value types ride along as informational `typ` strings for P2; the static
 ## check covers names only, so E-VOCAB-BAD-VALUE and E-VOCAB-DUPLICATE-ATTR
 ## stay out (owner: the P2 cascade check, not built yet).
-## Application-registered patterns need a registration seam on top of
-## this fixed proc (owner: the first content patterns).
+## Patterns defined with `defineMailPattern` (`patterns.nim`) join the
+## cached instance at compile time through `registerPatternTag`.
 ##
 ## `buildEmailVocabulary` is a plain proc so tests can call it at runtime;
 ## the hook caches one instance in a compile-time var (the schema is big
@@ -456,3 +456,13 @@ proc staticVocabulary*(T: typedesc[EmailRenderer]): VocabularyRef
   if vocabCache == nil:
     vocabCache = buildEmailVocabulary()
   vocabCache
+
+proc registerPatternTag*(def: TagDef) {.compileTime.} =
+  ## The registration seam for patterns (`patterns.defineMailPattern`):
+  ## adds `def` to the static vocabulary, so templates compiled after the
+  ## definition may use the element. A name the vocabulary already has
+  ## (the layout primitives) keeps its entry.
+  if vocabCache == nil:
+    vocabCache = buildEmailVocabulary()
+  if not vocabCache.hasTag(def.name):
+    vocabCache.tags.add(def)
