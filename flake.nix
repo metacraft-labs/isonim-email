@@ -6,6 +6,33 @@
     nixpkgs.follows = "nixos-modules/nixpkgs-unstable";
     flake-parts.follows = "nixos-modules/flake-parts";
     git-hooks.follows = "nixos-modules/git-hooks-nix";
+
+    # The sibling repositories the Nim code compiles against (the
+    # Justfile's and config.nims' `../<repo>` paths), as plain sources
+    # for the hermetic capture check (nix/capture-vm.nix), which builds
+    # the story drivers in the sandbox. Each is pinned at the SHA its
+    # .github/sibling-repos entry pins for CI, and the check refuses to
+    # evaluate when the two disagree: a pin changes in both places.
+    isonim = {
+      url = "github:metacraft-labs/isonim/acf1bd345d6c4a25d82e1de3dccd924fff6fd21e";
+      flake = false;
+    };
+    nim-everywhere = {
+      url = "github:metacraft-labs/nim-everywhere/fee7a232a337ded10932366626962b9b869a228e";
+      flake = false;
+    };
+    nim-faststreams = {
+      url = "github:metacraft-labs/nim-faststreams/82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503";
+      flake = false;
+    };
+    nim-stew = {
+      url = "github:metacraft-labs/nim-stew/cc405401637dc7a32bea708374e26e33f6deca44";
+      flake = false;
+    };
+    isonim-docs = {
+      url = "github:metacraft-labs/isonim-docs/4719b9820004fda250bc272877bd579e419b4783";
+      flake = false;
+    };
   };
 
   outputs =
@@ -43,7 +70,12 @@
       ];
 
       perSystem =
-        { pkgs, config, ... }:
+        {
+          pkgs,
+          config,
+          system,
+          ...
+        }:
         let
           # Type definitions for `just lint-ts` (tsc over tools/**/*.ts),
           # assembled as a node_modules tree without any npm install:
@@ -132,6 +164,177 @@
             } > $out/bin/isonim-email-kde
             chmod +x $out/bin/isonim-email-kde
           '';
+
+          # What a capture run needs at run time: the tools the providers
+          # find on PATH and the variables that locate the pinned browsers,
+          # fonts, webmail trees and locales. The dev shell and the
+          # hermetic VM check (nix/capture-vm.nix) both use these two, so
+          # the VM runs the providers with the very store paths the host's
+          # captures use.
+          captureTools =
+            with pkgs;
+            [
+              # Node, the Playwright browsers and Mailpit.
+              nodejs_22
+              playwright-driver
+              mailpit
+              # The capture harness's `imap` service: Dovecot run as
+              # the current user on loopback (dovecot -F, doveadm save),
+              # holding the one-message mailboxes real clients open.
+              dovecot
+              # The selfhosted-webmail capture provider: Roundcube and
+              # SnappyMail (located through the variables in captureEnv)
+              # on php-fpm behind caddy, run as the current user on
+              # loopback. nixpkgs' default php carries every extension
+              # both need (pdo_sqlite, mbstring, intl, dom, curl,
+              # sodium, zip).
+              php
+              caddy
+              # fc-list for inspecting the pinned font set below
+              # (also used by tests/e2e_local_capture_deterministic.nim).
+              fontconfig
+              # The independent RFC 2047 / MIME oracle for the header
+              # fuzz test (Python's `email` package, stdlib only).
+              python3
+            ]
+            # `setpriv --pdeathsig` (util-linux) starts the imap
+            # service's Dovecot and the webmail's caddy so that they die
+            # with the capture run even when the run is killed with
+            # SIGKILL; `unshare --pid --kill-child` gives php-fpm a PID
+            # namespace of its own, so its forked workers die with it
+            # too. iproute2's `ip` brings loopback up in the network
+            # namespace a desktop-client session runs in (loopback
+            # only), and util-linux's `mount` sets up the session's own
+            # name resolution in its mount namespace. `setsid` gives each
+            # of `just test`'s concurrent recipes a session and process
+            # group of its own (tools/test/run-recipes.sh), so a
+            # timed-out recipe is killed whole. Only these five
+            # binaries are put on PATH, so util-linux's and iproute2's
+            # other tools do not shadow the host's.
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              (pkgs.runCommand "setpriv-unshare" { } ''
+                mkdir -p $out/bin
+                ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
+                ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
+                ln -s ${pkgs.iproute2}/bin/ip $out/bin/ip
+                ln -s ${pkgs.util-linux}/bin/mount $out/bin/mount
+                ln -s ${pkgs.util-linux}/bin/setsid $out/bin/setsid
+              '')
+              # The linux-desktop capture provider: real mail clients in
+              # a headless sway (wlroots' headless backend and its
+              # software renderer, no GPU), each instance with a private
+              # D-Bus session bus (dbus-run-session); grim captures the
+              # output, wtype types into it, swaymsg drives it.
+              pkgs.sway
+              pkgs.grim
+              pkgs.wtype
+              pkgs.dbus
+              pkgs.thunderbird
+              # The other desktop clients (verification clients):
+              # Evolution and Geary (WebKitGTK), KMail with Akonadi on
+              # SQLite (QtWebEngine; through the isonim-email-kde
+              # wrapper above) and Claws Mail (its litehtml viewer),
+              # with the helper daemons and the accessibility client
+              # their drivers use. getent checks the sessions' name
+              # resolution in the tests.
+              pkgs.evolution
+              pkgs.geary
+              pkgs.claws-mail
+              desktopDaemons
+              kdeMailEnv
+              atspiHelper
+              pkgs.getent
+              # OCR for the desktop end-to-end tests: the capture of a
+              # story must show the story's own heading. English only
+              # (the full language set is about ten times larger).
+              (pkgs.tesseract.override { enableLanguages = [ "eng" ]; })
+            ];
+
+          captureEnv = {
+            # The webmail trees the selfhosted-webmail provider serves
+            # (read-only store paths; configs and data are generated per
+            # run under build/).
+            ISONIM_EMAIL_ROUNDCUBE = "${pkgs.roundcube}";
+            ISONIM_EMAIL_SNAPPYMAIL = "${pkgs.snappymail}";
+
+            # Breeze's colour schemes, which the KMail driver writes into
+            # the session's kdeglobals (as applying a scheme does).
+            ISONIM_EMAIL_KDE_COLOR_SCHEMES =
+              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.kdePackages.breeze}/share/color-schemes" else "";
+
+            # The locale archive the desktop clients run with (a fixed
+            # en_US.UTF-8, whatever the host's locale): the provider
+            # passes <dir>/locale-archive as LOCALE_ARCHIVE to the client
+            # only. glibc locales exist on Linux alone, as does the
+            # provider; elsewhere this names nothing and the provider is
+            # unavailable.
+            ISONIM_EMAIL_LOCALES =
+              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.glibcLocales}/lib/locale" else "";
+
+            # Playwright must use the Nix-provided browsers, never download.
+            PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+            PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+            # Capture CLI: the playwright-core node module matching
+            # those browsers (same package, so the revisions agree).
+            PLAYWRIGHT_CORE_PATH = "${pkgs.playwright-driver}";
+            # Pinned fonts: fontconfig
+            # sees ONLY these store paths, so captures render identical
+            # text on every host. impureFontDirectories/includes are
+            # emptied to exclude host /usr/share/fonts and
+            # /etc/fonts/conf.d; makeFontsConf still appends
+            # dejavu_fonts.minimal, which is nixpkgs-pinned and therefore
+            # deterministic too (recorded, not fought).
+            FONTCONFIG_FILE = "${pkgs.makeFontsConf {
+              fontDirectories = with pkgs; [
+                liberation_ttf
+                carlito
+                roboto
+                noto-fonts
+              ];
+              impureFontDirectories = [ ];
+              includes = [ ];
+            }}";
+          };
+
+          # The sibling pins CI clones (.github/sibling-repos:
+          # `<repo>=<40-hex sha>  # comment` lines).
+          siblingPins = builtins.listToAttrs (
+            map
+              (
+                line:
+                let
+                  m = builtins.match "([A-Za-z0-9_.-]+)=([0-9a-f]{40}).*" line;
+                in
+                {
+                  name = builtins.elemAt m 0;
+                  value = builtins.elemAt m 1;
+                }
+              )
+              (
+                builtins.filter (line: builtins.match "[A-Za-z0-9_.-]+=[0-9a-f]{40}.*" line != null) (
+                  pkgs.lib.splitString "\n" (builtins.readFile ./.github/sibling-repos)
+                )
+              )
+          );
+          captureVm = import ./nix/capture-vm.nix {
+            inherit
+              pkgs
+              captureTools
+              captureEnv
+              siblingPins
+              ;
+            inherit (pkgs) lib;
+            src = ./.;
+            siblings = {
+              inherit (inputs)
+                isonim
+                nim-everywhere
+                nim-faststreams
+                nim-stew
+                isonim-docs
+                ;
+            };
+          };
         in
         {
           # The mcl-standard-hooks set (large-file ban, .ct ban, hygiene)
@@ -193,167 +396,65 @@
             };
           };
 
-          devShells.default = pkgs.mkShell {
-            inputsFrom = [ config.pre-commit.devShell ];
-            packages =
-              with pkgs;
-              [
-                nim
-                nimble
-                just
-                git
-                nixfmt
-                # Dev-shell tooling: Nim, Node,
-                # Playwright browsers, Mailpit. (mjml, axe-core and
-                # fonttools arrive with the work that uses them; the
-                # pinned fonts are pinned below.)
-                nodejs_22
-                # The Tailwind v4 CLI for `just build-tailwind`: the
-                # standalone build, which bundles the `tailwindcss`
-                # stylesheet itself, so the extraction needs no
-                # node_modules here or in the isonim checkout.
-                tailwindcss_4
-                playwright-driver
-                mailpit
-                # The capture harness's `imap` service: Dovecot run as
-                # the current user on loopback (dovecot -F, doveadm save),
-                # holding the one-message mailboxes real clients open.
-                dovecot
-                # The selfhosted-webmail capture provider: Roundcube and
-                # SnappyMail (located through the two variables below)
-                # on php-fpm behind caddy, run as the current user on
-                # loopback. nixpkgs' default php carries every extension
-                # both need (pdo_sqlite, mbstring, intl, dom, curl,
-                # sodium, zip).
-                php
-                caddy
-                # fc-list for inspecting the pinned font set below
-                # (also used by tests/e2e_local_capture_deterministic.nim).
-                fontconfig
-                # Markdown linting (`just lint-markdown`).
-                markdownlint-cli2
-                # The independent RFC 2047 / MIME oracle for the header
-                # fuzz test (Python's `email` package, stdlib only).
-                python3
-                # The type checker for tools/**/*.ts (`just lint-ts`);
-                # its declarations come from tsTypes above.
-                typescript
-              ]
-              # `setpriv --pdeathsig` (util-linux) starts the imap
-              # service's Dovecot and the webmail's caddy so that they die
-              # with the capture run even when the run is killed with
-              # SIGKILL; `unshare --pid --kill-child` gives php-fpm a PID
-              # namespace of its own, so its forked workers die with it
-              # too. iproute2's `ip` brings loopback up in the network
-              # namespace a desktop-client session runs in (loopback
-              # only), and util-linux's `mount` sets up the session's own
-              # name resolution in its mount namespace. `setsid` gives each
-              # of `just test`'s concurrent recipes a session and process
-              # group of its own (tools/test/run-recipes.sh), so a
-              # timed-out recipe is killed whole. Only these five
-              # binaries are put on PATH, so util-linux's and iproute2's
-              # other tools do not shadow the host's.
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                (pkgs.runCommand "setpriv-unshare" { } ''
-                  mkdir -p $out/bin
-                  ln -s ${pkgs.util-linux}/bin/setpriv $out/bin/setpriv
-                  ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
-                  ln -s ${pkgs.iproute2}/bin/ip $out/bin/ip
-                  ln -s ${pkgs.util-linux}/bin/mount $out/bin/mount
-                  ln -s ${pkgs.util-linux}/bin/setsid $out/bin/setsid
-                '')
-                # The linux-desktop capture provider: real mail clients in
-                # a headless sway (wlroots' headless backend and its
-                # software renderer, no GPU), each instance with a private
-                # D-Bus session bus (dbus-run-session); grim captures the
-                # output, wtype types into it, swaymsg drives it.
-                sway
-                grim
-                wtype
-                dbus
-                thunderbird
-                # The other desktop clients (verification clients):
-                # Evolution and Geary (WebKitGTK), KMail with Akonadi on
-                # SQLite (QtWebEngine; through the isonim-email-kde
-                # wrapper above) and Claws Mail (its litehtml viewer),
-                # with the helper daemons and the accessibility client
-                # their drivers use. getent checks the sessions' name
-                # resolution in the tests.
-                evolution
-                geary
-                claws-mail
-                desktopDaemons
-                kdeMailEnv
-                atspiHelper
-                getent
-                # OCR for the desktop end-to-end tests: the capture of a
-                # story must show the story's own heading. English only
-                # (the full language set is about ten times larger).
-                (tesseract.override { enableLanguages = [ "eng" ]; })
-              ];
+          devShells.default = pkgs.mkShell (
+            captureEnv
+            // {
+              inputsFrom = [ config.pre-commit.devShell ];
+              packages =
+                with pkgs;
+                [
+                  nim
+                  nimble
+                  just
+                  git
+                  nixfmt
+                  # The Tailwind v4 CLI for `just build-tailwind`: the
+                  # standalone build, which bundles the `tailwindcss`
+                  # stylesheet itself, so the extraction needs no
+                  # node_modules here or in the isonim checkout.
+                  tailwindcss_4
+                  # Markdown linting (`just lint-markdown`).
+                  markdownlint-cli2
+                  # The type checker for tools/**/*.ts (`just lint-ts`);
+                  # its declarations come from tsTypes above.
+                  typescript
+                ]
+                # Node, the Playwright browsers, the local mail stack and
+                # the desktop clients (see captureTools above).
+                ++ captureTools;
 
-            # The webmail trees the selfhosted-webmail provider serves
-            # (read-only store paths; configs and data are generated per
-            # run under build/).
-            ISONIM_EMAIL_ROUNDCUBE = "${pkgs.roundcube}";
-            ISONIM_EMAIL_SNAPPYMAIL = "${pkgs.snappymail}";
+              # tsc's declaration tree (see tsTypes); `just lint-ts`
+              # links build/ts-types to it.
+              ISONIM_EMAIL_TS_TYPES = "${tsTypes}";
 
-            # Breeze's colour schemes, which the KMail driver writes into
-            # the session's kdeglobals (as applying a scheme does).
-            ISONIM_EMAIL_KDE_COLOR_SCHEMES =
-              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.kdePackages.breeze}/share/color-schemes" else "";
+              shellHook = ''
+                echo "isonim-email dev shell — nim $(nim --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'), node $(node --version)"
+              ''
+              + config.mcl.gitHooks.installationScript;
+            }
+          );
 
-            # tsc's declaration tree (see tsTypes); `just lint-ts`
-            # links build/ts-types to it.
-            ISONIM_EMAIL_TS_TYPES = "${tsTypes}";
-
-            # The locale archive the desktop clients run with (a fixed
-            # en_US.UTF-8, whatever the host's locale): the provider
-            # passes <dir>/locale-archive as LOCALE_ARCHIVE to the client
-            # only. glibc locales exist on Linux alone, as does the
-            # provider; elsewhere this names nothing and the provider is
-            # unavailable.
-            ISONIM_EMAIL_LOCALES =
-              if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.glibcLocales}/lib/locale" else "";
-
-            # Playwright must use the Nix-provided browsers, never download.
-            PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-            PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
-            # Capture CLI: the playwright-core node module matching
-            # those browsers (same package, so the revisions agree).
-            PLAYWRIGHT_CORE_PATH = "${pkgs.playwright-driver}";
-            # Pinned fonts: fontconfig
-            # sees ONLY these store paths, so captures render identical
-            # text on every host. impureFontDirectories/includes are
-            # emptied to exclude host /usr/share/fonts and
-            # /etc/fonts/conf.d; makeFontsConf still appends
-            # dejavu_fonts.minimal, which is nixpkgs-pinned and therefore
-            # deterministic too (recorded, not fought).
-            FONTCONFIG_FILE = "${pkgs.makeFontsConf {
-              fontDirectories = with pkgs; [
-                liberation_ttf
-                carlito
-                roboto
-                noto-fonts
-              ];
-              impureFontDirectories = [ ];
-              includes = [ ];
-            }}";
-
-            shellHook = ''
-              echo "isonim-email dev shell — nim $(nim --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'), node $(node --version)"
-            ''
-            + config.mcl.gitHooks.installationScript;
+          # The hermetic capture check (nix/capture-vm.nix): the capture
+          # providers in a NixOS VM, checked against the committed
+          # baselines. x86_64-linux only, the system those baselines are
+          # pinned to (a macOS developer builds it on a Linux builder).
+          checks = pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            capture-linux-desktop = captureVm.check;
           };
-
-          packages.default = pkgs.stdenvNoCC.mkDerivation {
-            pname = "isonim-email";
-            version = "0.1.0";
-            src = ./.;
-            installPhase = ''
-              mkdir -p $out
-              cp -R src isonim_email.nimble README.md LICENSE $out/
-            '';
+          packages = {
+            default = pkgs.stdenvNoCC.mkDerivation {
+              pname = "isonim-email";
+              version = "0.1.0";
+              src = ./.;
+              installPhase = ''
+                mkdir -p $out
+                cp -R src isonim_email.nimble README.md LICENSE $out/
+              '';
+            };
+          }
+          // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            # The story and brief drivers as the capture check builds them.
+            capture-drivers = captureVm.drivers;
           };
         };
     };

@@ -78,8 +78,14 @@ build:
 # them per the one-breakpoint rule (only sm: ships). The Tailwind CLI
 # comes from the dev shell; isonim's extractor is run read-only, and
 # every output stays under build/ (see tools/tailwind/build-tailwind.mjs).
+# With ISONIM_EMAIL_PREBUILT_DRIVERS set (prebuilt story drivers, below)
+# nothing is compiled, so the map is not needed and not built.
 build-tailwind:
-    node tools/tailwind/build-tailwind.mjs
+    @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then \
+      echo "build-tailwind: skipped (prebuilt drivers from $ISONIM_EMAIL_PREBUILT_DRIVERS)"; \
+    else \
+      node tools/tailwind/build-tailwind.mjs; \
+    fi
 
 # Regenerate src/isonim_email/support/caniemail_data.nim from the pinned
 # caniemail snapshot. Verifies the vendored
@@ -226,14 +232,26 @@ email-calibrate *args:
 # when a Nim source or a story fixture image (compiled in) is newer
 # than its binary, so plain iterations
 # stay fast; `just email-shots` and the e2e tests depend on this.
+#
+# ISONIM_EMAIL_PREBUILT_DRIVERS names a directory holding both drivers
+# already built (`build-stories`, `brief-driver`; the hermetic capture
+# check builds them with Nix, see `test-vm`): they are copied into place
+# and nothing is compiled.
 email-shots-build: build-tailwind
     @mkdir -p build/capture build/review test-logs
-    @if [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/capture/build-stories 2>/dev/null)" ]; then \
+    @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then \
+      install -m755 "$ISONIM_EMAIL_PREBUILT_DRIVERS/build-stories" build/capture/build-stories; \
+      install -m755 "$ISONIM_EMAIL_PREBUILT_DRIVERS/brief-driver" build/review/brief-driver; \
+      echo "build/capture/build-stories, build/review/brief-driver: prebuilt, from $ISONIM_EMAIL_PREBUILT_DRIVERS"; \
+    fi
+    @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then :; \
+    elif [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/capture/build-stories 2>/dev/null)" ]; then \
       echo "build/capture/build-stories up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/capture/build-stories --nimcache:build/nimcache-build-stories tools/capture/build_stories.nim 2>&1 | tee test-logs/email-shots-build.log; \
     fi
-    @if [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/review/brief-driver 2>/dev/null)" ]; then \
+    @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then :; \
+    elif [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/review/brief-driver 2>/dev/null)" ]; then \
       echo "build/review/brief-driver up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/review/brief-driver --nimcache:build/nimcache-brief-driver tools/review/brief_driver.nim 2>&1 | tee test-logs/brief-driver-build.log; \
@@ -296,6 +314,31 @@ email-review-broken-check run:
 email-capture-ci *args: email-shots-build
     out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; node tools/capture/email-shots.ts --backends a --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" && node tools/capture/email-capture-ci.ts "$out" {{args}}
 
+# The hermetic capture check: the capture providers in a NixOS VM
+# (nix/capture-vm.nix). The story drivers are built in the Nix sandbox
+# against the sibling repositories pinned as flake inputs (the SHAs of
+# .github/sibling-repos); inside a VM with no network, the same tools and
+# variables as this dev shell run `just email-capture-ci` (backend a's
+# matrix against the committed baselines: the canary's exact hashes, every
+# story's perceptual threshold) and capture the canary in Thunderbird,
+# Claws Mail, Roundcube and SnappyMail through the local mail stack (every
+# capture must succeed). The run directories are the build output (its
+# store path is printed last). Needs KVM and an x86_64-linux builder (on
+# another host, a remote builder of that system). Not part of `just
+# test`: about 5 min on a loaded host, nearly all of it the VM. The full
+# log, VM console included, goes to test-logs/test-vm.log; the console
+# lines are left out of what is printed here.
+#
+# Run the hermetic capture check (a NixOS VM, about 5 min).
+test-vm:
+    @mkdir -p test-logs
+    @grep -E '^[A-Za-z0-9_.-]+=[0-9a-f]{40}' .github/sibling-repos | while IFS== read -r repo rest; do \
+      pin="${rest%%[[:space:]]*}"; \
+      head=$(git -C "../$repo" rev-parse HEAD 2>/dev/null || echo none); \
+      [ "$head" = "$pin" ] || echo "test-vm: note: ../$repo is at $head, the check builds against the pinned $pin"; \
+    done
+    nix build --no-link --print-out-paths -L .#checks.x86_64-linux.capture-linux-desktop 2>&1 | tee test-logs/test-vm.log | grep -v ' # \['
+
 # Lint everything.
 lint: lint-nim lint-ts lint-nix lint-markdown
 
@@ -341,7 +384,7 @@ lint-ts:
     node --input-type=module -e "await import('./tools/review/broken_story.ts')"
 
 lint-nix:
-    nixfmt --check flake.nix
+    nixfmt --check flake.nix nix/*.nix
 
 lint-markdown:
     @if command -v markdownlint-cli2 >/dev/null 2>&1; then \
@@ -365,7 +408,7 @@ format-nim:
     fi
 
 format-nix:
-    nixfmt flake.nix
+    nixfmt flake.nix nix/*.nix
 
 # Benchmarks placeholder: no benchmarks exist until the
 # rendering pipeline they measure lands (after the components).

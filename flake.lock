@@ -2425,6 +2425,40 @@
         "type": "github"
       }
     },
+    "isonim": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790764902,
+        "narHash": "sha256-O28Xw5sfCKgd1jiprxsskshkljP6q8lDRA0zMDtJ3Rs=",
+        "owner": "metacraft-labs",
+        "repo": "isonim",
+        "rev": "acf1bd345d6c4a25d82e1de3dccd924fff6fd21e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "isonim",
+        "rev": "acf1bd345d6c4a25d82e1de3dccd924fff6fd21e",
+        "type": "github"
+      }
+    },
+    "isonim-docs": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790455239,
+        "narHash": "sha256-prZe9poSURNFzEIhUBtinItaUq+rK5QtRXV0H7Ic+QU=",
+        "owner": "metacraft-labs",
+        "repo": "isonim-docs",
+        "rev": "4719b9820004fda250bc272877bd579e419b4783",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "isonim-docs",
+        "rev": "4719b9820004fda250bc272877bd579e419b4783",
+        "type": "github"
+      }
+    },
     "llm-agents": {
       "inputs": {
         "blueprint": "blueprint",
@@ -2567,6 +2601,40 @@
         "type": "github"
       }
     },
+    "nim-everywhere": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790422976,
+        "narHash": "sha256-gieSeC+G1sTXd4K+iV+MOcwlynwfxxPY9vugDxVTPoM=",
+        "owner": "metacraft-labs",
+        "repo": "nim-everywhere",
+        "rev": "fee7a232a337ded10932366626962b9b869a228e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "nim-everywhere",
+        "rev": "fee7a232a337ded10932366626962b9b869a228e",
+        "type": "github"
+      }
+    },
+    "nim-faststreams": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1775212500,
+        "narHash": "sha256-l+dvcwIdpJdX3sekhdCsOx4I35sBwKBdEnnbFIgqcd4=",
+        "owner": "metacraft-labs",
+        "repo": "nim-faststreams",
+        "rev": "82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "nim-faststreams",
+        "rev": "82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503",
+        "type": "github"
+      }
+    },
     "nim-fork-src": {
       "flake": false,
       "locked": {
@@ -2683,6 +2751,23 @@
         "owner": "metacraft-labs",
         "repo": "nim-stackable-hooks",
         "rev": "512586916384f27614c2b28f6c256d33d451daa5",
+        "type": "github"
+      }
+    },
+    "nim-stew": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782116232,
+        "narHash": "sha256-3qUWpPHgLt785QgPHXbC8eu8A7d9645uu+sJCMTl9RQ=",
+        "owner": "metacraft-labs",
+        "repo": "nim-stew",
+        "rev": "cc405401637dc7a32bea708374e26e33f6deca44",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "nim-stew",
+        "rev": "cc405401637dc7a32bea708374e26e33f6deca44",
         "type": "github"
       }
     },
@@ -4639,6 +4724,11 @@
           "nixos-modules",
           "git-hooks-nix"
         ],
+        "isonim": "isonim",
+        "isonim-docs": "isonim-docs",
+        "nim-everywhere": "nim-everywhere",
+        "nim-faststreams": "nim-faststreams",
+        "nim-stew": "nim-stew",
         "nixos-modules": "nixos-modules",
         "nixpkgs": [
           "nixos-modules",

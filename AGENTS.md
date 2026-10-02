@@ -58,6 +58,26 @@ Sibling repos (`../isonim`, `../nim-everywhere`, `../nim-faststreams`,
 and the Justfile resolve them. In CI they are cloned at the SHAs in
 `.github/sibling-repos`.
 
+`just test-vm` (not part of `just test`; needs KVM) runs the hermetic
+capture check, `checks.x86_64-linux.capture-linux-desktop`
+(`nix/capture-vm.nix`): the capture providers in a NixOS VM with no
+network, against the committed baselines. It does not use the `../<repo>`
+checkouts: the siblings are `flake = false` inputs in `flake.nix`, each
+pinned at the same SHA as its `.github/sibling-repos` line, and
+evaluation fails when `flake.lock` and that file disagree. To move a pin,
+change both together:
+
+1. edit the SHA in `.github/sibling-repos`;
+2. edit the same SHA in that input's `url` in `flake.nix`;
+3. `nix flake lock` (records the new revision in `flake.lock`);
+4. `nix flake check --no-build`, then `just test-vm`.
+
+A new sibling needs a line in `.github/sibling-repos`, an input in
+`flake.nix`, and an entry in `siblings` where `flake.nix` imports
+`nix/capture-vm.nix` (a pin with no input is not checked). `just test-vm`
+prints a note for each `../<repo>` checkout that is not at its pin: the
+host build then compiles against different sources than the VM.
+
 ## Project structure
 
 ```text
