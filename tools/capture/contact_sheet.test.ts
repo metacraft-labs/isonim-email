@@ -4,7 +4,7 @@
 // fake-run composeStorySheets end-to-end. Run with:
 //   node --test tools/capture/contact_sheet.test.ts
 
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
 import {
@@ -31,6 +31,11 @@ import {
   type RgbImage,
   type SheetCell,
 } from "./contact_sheet.ts";
+
+// Every scratch directory this file makes is under one temp dir, removed
+// when the file's tests are done.
+const scratch = mkdtempSync(join(tmpdir(), "contact-test-"));
+after(() => rmSync(scratch, { recursive: true, force: true }));
 
 function solidRgb(w: number, h: number, c: [number, number, number]): RgbImage {
   const data = new Uint8Array(w * h * 3);
@@ -326,7 +331,7 @@ describe("scale and compose", () => {
 
 describe("composeStorySheets", () => {
   function fakeRun(): string {
-    const run = mkdtempSync(join(tmpdir(), "contact-"));
+    const run = mkdtempSync(join(scratch, "contact-"));
     const storyDir = join(run, "canary");
     mkdirSync(storyDir, { recursive: true });
     const families: [string, [number, number, number], boolean][] = [
@@ -419,7 +424,7 @@ describe("composeStorySheets", () => {
     // thunderbird: backend a's emulation and the real client;
     // verification: two clients of two providers. One cell each, in
     // family order, backend a first, then by backend and client.
-    const run = mkdtempSync(join(tmpdir(), "contact-clients-"));
+    const run = mkdtempSync(join(scratch, "contact-clients-"));
     const storyDir = join(run, "receipt");
     mkdirSync(storyDir, { recursive: true });
     const cells: [string, string, string, [number, number, number]][] = [
@@ -488,7 +493,7 @@ describe("composeStorySheets", () => {
   });
 
   it("fails loudly without an index.json", () => {
-    const empty = mkdtempSync(join(tmpdir(), "contact-empty-"));
+    const empty = mkdtempSync(join(scratch, "contact-empty-"));
     assert.throws(() => composeStorySheets(empty, "canary"));
   });
 });

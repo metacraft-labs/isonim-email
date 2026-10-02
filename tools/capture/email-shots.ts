@@ -918,7 +918,44 @@ async function main(): Promise<void> {
   // its reason — never a silent skip.
   for (const l of providerSummaryLines(reports))
     process.stderr.write(`email-shots: ${l}\n`);
+  // Every failed capture on a line of its own — provider, client,
+  // request and the provider's reason — so a failure is diagnosable from
+  // the run's output alone (a test that runs the CLI in a scratch
+  // directory removes the run before anyone can open its files).
+  for (const l of failedCaptureLines(runDir, index))
+    process.stderr.write(`email-shots: ${l}\n`);
   if (failed > 0) fail(`${failed} capture(s) failed (see ${indexPath})`);
+}
+
+// One summary line per failed entry of a run:
+//   FAILED <story> <family> <viewport>/<scheme> images <on|off>,
+//   provider <provider>, client <client>: <fail_reason>
+// read from each entry's provenance (a provenance that cannot be read is
+// said so, never skipped).
+function failedCaptureLines(runDir: string, index: Entry[]): string[] {
+  const lines: string[] = [];
+  for (const e of index) {
+    if (e.status !== "failed") continue;
+    let provider = "?";
+    let reason = "(no fail_reason recorded)";
+    if (e.meta === null) reason = "(no provenance written)";
+    else
+      try {
+        const m: unknown = JSON.parse(
+          readFileSync(join(runDir, e.meta), "utf8"),
+        );
+        if (isRecord(m)) {
+          if (typeof m.provider === "string") provider = m.provider;
+          if (typeof m.fail_reason === "string") reason = m.fail_reason;
+        }
+      } catch (err) {
+        reason = `(provenance ${e.meta} unreadable: ${err instanceof Error ? err.message : String(err)})`;
+      }
+    lines.push(
+      `FAILED ${e.story} ${e.family} ${e.viewport}/${e.scheme} images ${e.images}, provider ${provider}, client ${e.client}: ${reason}`,
+    );
+  }
+  return lines;
 }
 
 main().catch((err) => {

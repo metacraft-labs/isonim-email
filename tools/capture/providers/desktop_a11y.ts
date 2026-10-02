@@ -158,8 +158,19 @@ export class A11yClient {
     }
   }
 
-  async act(node: A11yNode, action?: string): Promise<void> {
-    await this.request({ op: "act", path: node.path, action });
+  // Runs the node's action; true when the toolkit says it performed it
+  // (GTK refuses, answering false, an action on an insensitive widget).
+  async act(node: A11yNode, action?: string): Promise<boolean> {
+    return (
+      (await this.request({ op: "act", path: node.path, action })) === true
+    );
+  }
+
+  // The names of an app's top-level windows as the app reports them now:
+  // a window is listed as soon as the app created it, before the
+  // compositor shows it.
+  async windows(app: string): Promise<string[]> {
+    return (await this.request({ op: "windows", app })) as string[];
   }
 
   async focus(node: A11yNode): Promise<void> {
@@ -202,7 +213,8 @@ export class A11yClient {
 // Answers a client's password prompt: the prompt's password field gets
 // the password (written through the accessibility tree, never typed or
 // echoed), then its confirming button is pressed. Returns false when
-// no prompt is showing.
+// no prompt is showing, or when the toolkit refused the press (the
+// button not yet sensitive): the caller asks again.
 export async function answerPasswordPrompt(
   a11y: A11yClient,
   app: string,
@@ -220,8 +232,7 @@ export async function answerPasswordPrompt(
   });
   if (ok === undefined)
     throw new Error(`${app}: the password prompt has no '${button}' button`);
-  await a11y.act(ok);
-  return true;
+  return a11y.act(ok);
 }
 
 // Whether the client's chrome is dark, from the pixels of a region of

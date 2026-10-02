@@ -10,10 +10,13 @@
 ## vocabulary module ahead of it).
 ##
 ## C backend only: shells out to `nim check` (dev shell / CI provide it).
-import std/[os, osproc, strutils, unittest]
+## Every fixture this file names is checked once, all at once, before the
+## first test (tests/compile_fail_checks.nim); each test then asserts on
+## its fixtures' recorded output.
+import std/[os, strutils, tables, unittest]
+import compile_fail_checks
 
 const testsDir = parentDir(currentSourcePath())
-const repoRoot = parentDir(testsDir)
 
 type FixtureExpect = object
   want: string
@@ -28,16 +31,6 @@ proc readExpect(path: string): FixtureExpect =
   doAssert result.want.len > 0, path & ": missing '# expect:' header"
   doAssert result.wantLine > 0, path & ": missing '# expect-line:' header"
 
-proc nimCheck(path: string): tuple[output: string, exitCode: int] =
-  let nim = findExe("nim")
-  doAssert nim.len > 0, "nim not on PATH (run under nix develop)"
-  # `nim check` writes diagnostics to stderr; merge it to capture them.
-  # `config.nims` is found by walking up from the fixture, so no --path
-  # flags are needed; style checks are off so only semantic errors show.
-  result = execCmdEx(
-    nim & " check --hints:off " & quoteShell(path) & " 2>&1",
-    workingDir = repoRoot)
-
 proc firstErrorLine*(output: string): string =
   ## The first compiler line containing `Error:` ("" when there is none).
   for line in output.splitLines():
@@ -45,13 +38,28 @@ proc firstErrorLine*(output: string): string =
       return line
   ""
 
+const fixtures = ["unknown_mail_tag.nim", "forbidden_script.nim",
+  "forbidden_iframe.nim", "forbidden_form.nim", "forbidden_video.nim",
+  "forbidden_svg.nim", "proc_as_element.nim", "forbidden_sectioning.nim",
+  "forbidden_sectioning_top.nim", "bare_table.nim"]
+  ## Every fixture a test below reads (a test naming one missing here
+  ## fails on the table lookup).
+
+var checked: Table[string, NimCheckResult]
+block:
+  var paths: seq[string]
+  for f in fixtures:
+    paths.add testsDir / "compile_fail" / f
+  checked = nimCheckAll(paths)
+
 proc checkFixture(path: string): tuple[output: string, exitCode: int,
     want: string, cited: string] =
-  ## Runs `nim check` and returns everything the test asserts on. Returns
-  ## data instead of checking: `check` inside a helper proc prints but does
-  ## not fail the test, so every `check` below sits in a test body.
+  ## The fixture's `nim check` result and everything the test asserts
+  ## on. Returns data instead of checking: `check` inside a helper proc
+  ## prints but does not fail the test, so every `check` below sits in a
+  ## test body.
   let exp = readExpect(path)
-  let (output, exitCode) = nimCheck(path)
+  let (output, exitCode) = checked[path]
   # The violation line is cited as `basename(line, col)` in the
   # instantiation trace ("on the expected line").
   (output, exitCode, exp.want, extractFilename(path) & "(" & $exp.wantLine & ",")

@@ -4,9 +4,9 @@
 // null, and corrupt-JSON → null. Run with:
 //   node --test tools/capture/cache.test.ts
 
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,6 +27,11 @@ import {
   BROWSER_EMULATION_ID as PROVIDER_ID,
   BROWSER_EMULATION_VERSION as PROVIDER_VERSION,
 } from "./providers/browser_emulation.ts";
+
+// Every scratch directory this file makes is under one temp dir, removed
+// when the file's tests are done.
+const scratch = mkdtempSync(join(tmpdir(), "cache-test-"));
+after(() => rmSync(scratch, { recursive: true, force: true }));
 
 function parts(): CacheKeyParts {
   return {
@@ -105,7 +110,7 @@ describe("the transform version in the key", () => {
   });
 
   it("a bumped transform misses; an unchanged one hits", () => {
-    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const root = mkdtempSync(join(scratch, "cache-test-"));
     const cases: [family: string, images: string, transform: string][] = [
       ["gmailWeb", "on", "gmailWeb"],
       ["ganga", "on", "ganga"],
@@ -160,7 +165,7 @@ describe("the transform version in the key", () => {
 
 describe("readCache/writeCache", () => {
   it("roundtrips png bytes + meta through a tmp dir", () => {
-    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const root = mkdtempSync(join(scratch, "cache-test-"));
     const key = cacheKey(parts());
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]);
     const meta = { story: "invoiceReady/typical", cache: "miss" };
@@ -172,12 +177,12 @@ describe("readCache/writeCache", () => {
   });
 
   it("read-missing → null", () => {
-    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const root = mkdtempSync(join(scratch, "cache-test-"));
     assert.equal(readCache(root, cacheKey(parts())), null);
   });
 
   it("corrupt-JSON → null", () => {
-    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const root = mkdtempSync(join(scratch, "cache-test-"));
     const key = cacheKey(parts());
     const paths = cachePaths(root, key);
     mkdirSync(paths.dir, { recursive: true });
@@ -187,7 +192,7 @@ describe("readCache/writeCache", () => {
   });
 
   it("valid JSON that is not an object → null", () => {
-    const root = mkdtempSync(join(tmpdir(), "cache-test-"));
+    const root = mkdtempSync(join(scratch, "cache-test-"));
     const key = cacheKey(parts());
     const paths = cachePaths(root, key);
     mkdirSync(paths.dir, { recursive: true });

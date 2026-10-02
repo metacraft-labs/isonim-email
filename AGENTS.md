@@ -25,7 +25,10 @@ Enter the dev shell first (`direnv allow`, or prefix with
 
 ```sh
 just build           # compile the library and every test (no run)
-just test            # full suite: C, JS, the TS tooling tests, capture checks
+just test            # full suite: C, JS, the TS tooling tests, the webmail and
+                     # desktop end-to-end tests, capture checks (concurrently)
+just test-serial     # the same recipes one at a time, output streamed
+just test-file tests/t4_styles.nim  # one Nim test file on the C backend
 just email-shots     # screenshot captures through the capture providers
 just email-capture-ci # capture regression checks (part of just test)
 just lint            # nim check, tsc, capture-CLI gate, nixfmt, markdownlint
@@ -33,6 +36,22 @@ just format          # nimpretty + nixfmt (alias: just fmt)
 just bench           # benchmarks (none yet; they land later)
 just t               # alias for test
 ```
+
+`just test` builds the shared prerequisites, then runs its six recipes
+(`test-c`, `test-js`, `test-ts`, `test-webmail`, `test-desktop`,
+`test-capture-ci`) at the same time, and `test-c`/`test-js` compile and
+run their files several at a time (`ISONIM_EMAIL_TEST_JOBS` sets how
+many; by default it follows the host's cores and load). Output goes to
+`test-logs/<recipe>.log` and `test-logs/<file>-<c|js>.log`; the terminal
+gets a PASS/FAIL line per recipe (per file when `just test-c` or
+`just test-js` runs alone), then each failure's log, naming the failing
+file and test. A test must therefore keep its processes,
+ports and scratch state to itself and scope any "nothing left behind"
+check to what it started: other tests run beside it. Each recipe runs
+in a process group of its own; one still running after
+`ISONIM_EMAIL_RECIPE_TIMEOUT` seconds (default 1800) fails as timed out,
+and one that exits leaving processes behind fails too; either way all
+of its processes are killed.
 
 Sibling repos (`../isonim`, `../nim-everywhere`, `../nim-faststreams`,
 `../nim-stew`) must be checked out next to this repo; `config.nims`
@@ -58,6 +77,8 @@ tools/capture/                     # email-shots CLI, emulation transforms,
   providers/                       # capture provider interface, routing,
                                    # requirement checks, providers
 tools/review/                      # review briefs and the findings list
+tools/test/                        # the concurrent test runners behind
+                                   # `just test`, `test-c` and `test-js`
 ```
 
 ## Layer rules

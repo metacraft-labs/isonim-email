@@ -4,9 +4,9 @@
 // file. Run with:
 //   node --test tools/capture/latency.test.ts
 
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,11 @@ import {
   type HistoryEntry,
   type Selection,
 } from "./latency.ts";
+
+// Every scratch directory this file makes is under one temp dir, removed
+// when the file's tests are done.
+const scratch = mkdtempSync(join(tmpdir(), "latency-test-"));
+after(() => rmSync(scratch, { recursive: true, force: true }));
 
 function entry(key: string, total: number, n = 0): HistoryEntry {
   return {
@@ -101,7 +106,7 @@ describe("latency helpers", () => {
   });
 
   it("history roundtrip skips malformed lines", () => {
-    const dir = mkdtempSync(join(tmpdir(), "latency-test-"));
+    const dir = mkdtempSync(join(scratch, "latency-test-"));
     const path = join(dir, "nested", "latency-history.jsonl");
     assert.deepEqual(readHistory(path), []);
     appendHistory(path, entry("k", 1234, 1));

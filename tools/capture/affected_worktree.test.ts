@@ -2,8 +2,9 @@
 // dirtied working tree, in a scratch clone.
 //
 // The clone is made in the OS temp dir (honours TMPDIR) and removed
-// afterwards. It carries this checkout's capture tools as a commit of
-// its own, so it runs exactly the code under test, and it is then
+// afterwards (kept, and its path printed, when a test fails). It
+// carries this checkout's capture tools as a commit of its own, so it
+// runs exactly the code under test, and it is then
 // dirtied and reverted for real. It never skips: a clean tree here is
 // the starting state, not a reason to stop.
 //
@@ -40,7 +41,7 @@
 // Run with:
 //   node --test tools/capture/affected_worktree.test.ts
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -204,8 +205,24 @@ before(() => {
   assert.equal(git(["status", "--porcelain"]).trim(), "");
 });
 
+// A failed test keeps the scratch clone, with every run directory and
+// provenance in it, and says where: the CLI's stderr in the assertion
+// message names each failed capture's provider, client and reason, and
+// the run directory holds the rest (the provider's per-capture detail).
+let keepClone = false;
+afterEach((t) => {
+  if (!("passed" in t) || t.passed !== true) keepClone = true;
+});
+
 after(() => {
-  if (clone !== "") rmSync(clone, { recursive: true, force: true });
+  if (clone === "") return;
+  if (keepClone) {
+    process.stderr.write(
+      `affected_worktree: a test failed; the scratch clone and its runs are kept at ${clone} (remove it by hand)\n`,
+    );
+    return;
+  }
+  rmSync(clone, { recursive: true, force: true });
 });
 
 describe("--affected over a dirtied working tree (scratch clone)", () => {

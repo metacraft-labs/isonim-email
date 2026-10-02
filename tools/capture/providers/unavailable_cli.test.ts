@@ -65,6 +65,18 @@ describe("email-shots with an unavailable provider", () => {
       /email-shots: provider browser-emulation \(backend a, v1\) UNAVAILABLE: PLAYWRIGHT_BROWSERS_PATH is not set/,
     );
     assert.match(r.stderr, /2 capture\(s\) failed/);
+    // Each failed capture is named in the run summary with its provider,
+    // client and reason, not only counted.
+    for (const [family, client] of [
+      ["apple", "webkit"],
+      ["gmailWeb", "chromium"],
+    ])
+      assert.match(
+        r.stderr,
+        new RegExp(
+          `email-shots: FAILED canary ${family} mobile/light images on, provider browser-emulation, client ${client}: no available provider serves ${family}: browser-emulation is unavailable: PLAYWRIGHT_BROWSERS_PATH is not set`,
+        ),
+      );
     const index = readJson<Entry[]>(join(out, "index.json"));
     assert.equal(index.length, 2);
     for (const e of index) {

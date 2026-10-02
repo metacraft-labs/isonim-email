@@ -265,8 +265,8 @@ setTimeout(poll, 0);
 
 // Waits until the message window has the requested size, every image
 // in the body has finished (or the image timeout passed), the fonts are
-// loaded, and two frames have been painted; then reports the body's
-// geometry and what it holds.
+// loaded, the header shows the message's subject, and two frames have
+// been painted; then reports the body's geometry and what it holds.
 const SETTLE_AND_MEASURE = `
 const [width, height, done] = arguments;
 const win = Services.wm.getMostRecentWindow("mail:messageWindow");
@@ -288,6 +288,18 @@ const frames = (w) => new Promise((r) => w.requestAnimationFrame(() => w.request
     await new Promise((r) => setTimeout(r, 20));
   }
   await cd.fonts.ready;
+  // The header pane is filled in after the body has loaded: until it is,
+  // the subject row holds only its heading ("Subject:"). Wait for it to
+  // show the opened message's subject, so the provider's check that the
+  // opened message is the delivered one reads the filled row; if it never
+  // fills, the row is reported as it is and that check fails.
+  const subjectRow = () => about.getElementById("expandedsubjectBox")?.textContent ?? "";
+  while (true) {
+    const opened = about.defaultView.gMessage?.mime2DecodedSubject ?? "";
+    if (opened === "" || subjectRow().includes(opened)) break;
+    if (Date.now() - t0 > ${STEP_TIMEOUT_MS}) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
   await frames(cw);
   await frames(win);
   const r1 = mb.getBoundingClientRect();

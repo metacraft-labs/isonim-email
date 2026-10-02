@@ -144,6 +144,7 @@ class ClawsInstance implements DesktopClientInstance {
   private readonly a11y: A11yClient;
   private readonly ctx: DriverLaunchCtx;
   private readonly pluginDir: string;
+  private readonly dropOpenRequests: number;
 
   constructor(
     session: DesktopSession,
@@ -151,12 +152,14 @@ class ClawsInstance implements DesktopClientInstance {
     ctx: DriverLaunchCtx,
     pluginDir: string,
     timingMs: Record<string, number>,
+    dropOpenRequests: number,
   ) {
     this.session = session;
     this.a11y = a11y;
     this.ctx = ctx;
     this.pluginDir = pluginDir;
     this.timingMs = timingMs;
+    this.dropOpenRequests = dropOpenRequests;
   }
 
   private socketPath(): string | null {
@@ -257,23 +260,55 @@ class ClawsInstance implements DesktopClientInstance {
     void subjectWanted;
     timing.sync = t() - ts;
 
-    // Its own window.
+    // Its own window. Claws Mail drops an open request it receives while
+    // its message list is busy (summary_display_msg_full() returns at
+    // once while the summary view is locked: it is, for instance, while
+    // the list shows the selected message in the main window's preview
+    // and fetches its body), and nothing in the accessibility tree says
+    // when it is busy; how long it stays busy grows with the host's
+    // load. Whether a request was taken is known, though: Claws Mail
+    // creates the window inside the request, so the window is among the
+    // client's accessible windows as soon as the action returns (the
+    // compositor shows it later). A request the client refused or
+    // dropped is made again once the menu item is sensitive, until the
+    // step's deadline; then the capture fails naming each attempt.
     ts = t();
-    const item = await this.a11y.waitFor(
-      {
+    const before = new Set(this.session.windows().map((w) => w.id));
+    const accessibleBefore = (await this.a11y.windows(APP)).length;
+    const attempts: string[] = [];
+    const tOpen = Date.now();
+    for (;;) {
+      if (Date.now() - tOpen > STEP_TIMEOUT_MS)
+        throw new Error(
+          `claws-mail: the message window did not open within ${STEP_TIMEOUT_MS / 1000} s: ${attempts.length} 'Open in new window' request(s), none taken (${attempts.join("; ") || "the menu item never became sensitive"})`,
+        );
+      const [item] = await this.a11y.find({
         app: APP,
         window: " - Claws Mail ",
         role: "menu item",
         name: "Open in new window",
-      },
-      "the 'Open in new window' menu item",
-      STEP_TIMEOUT_MS,
-    );
-    const before = new Set(this.session.windows().map((w) => w.id));
-    await this.a11y.act(item);
+        limit: 1,
+      });
+      if (item === undefined || !item.states.includes("sensitive")) {
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
+      // (The test seam: a request it drops is never sent, as if the
+      // client had taken the action and opened nothing.)
+      const done =
+        attempts.length < this.dropOpenRequests
+          ? true
+          : await this.a11y.act(item);
+      const accessible = await this.a11y.windows(APP);
+      if (done && accessible.length > accessibleBefore) break;
+      attempts.push(
+        `+${Date.now() - tOpen} ms ${done ? "dropped (no new window)" : "refused by the toolkit"}`,
+      );
+      await new Promise((r) => setTimeout(r, 250));
+    }
     const win = await this.session.waitForWindow(
       (w) => w.appId === APP && !before.has(w.id),
-      "the Claws Mail message window",
+      "Claws Mail message window on the output (the client created it)",
       STEP_TIMEOUT_MS,
     );
     await this.session.fullscreen(win.id);
@@ -366,6 +401,9 @@ class ClawsInstance implements DesktopClientInstance {
         window: { sway_id: win.id, title: placed.name, rect: placed.rect },
         content: { height: docHeight },
         main_window: main.id,
+        // The open requests made, and why each earlier one did not open
+        // the window (see above).
+        open_requests: { made: attempts.length + 1, not_taken: attempts },
         remote_content:
           "litehtml enable_remote_content (all origins; proxy: the egress guard)",
       },
@@ -388,6 +426,17 @@ class ClawsInstance implements DesktopClientInstance {
 }
 
 export class ClawsDriver implements DesktopClientDriver {
+  // Test seam: how many of a capture's first 'Open in new window'
+  // requests to drop (never send to the client), so a test can show that
+  // a request the client did not take is made again, and that a capture
+  // whose every request goes untaken fails naming them. Never set
+  // outside tests.
+  private readonly dropOpenRequests: number;
+
+  constructor(opts: { dropOpenRequests?: number } = {}) {
+    this.dropOpenRequests = opts.dropOpenRequests ?? 0;
+  }
+
   readonly clientId = "claws-mail";
   readonly family = "verification";
   readonly engine = "litehtml" as const;
@@ -434,8 +483,13 @@ export class ClawsDriver implements DesktopClientDriver {
     // The wrapper's store path holds the plugins.
     const pluginDir = join(bin, "..", "..", "lib", "claws-mail", "plugins");
     const a11y = await A11yClient.start(session);
-    return new ClawsInstance(session, a11y, ctx, pluginDir, {
-      a11y: performance.now() - t0,
-    });
+    return new ClawsInstance(
+      session,
+      a11y,
+      ctx,
+      pluginDir,
+      { a11y: performance.now() - t0 },
+      this.dropOpenRequests,
+    );
   }
 }

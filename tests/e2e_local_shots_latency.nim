@@ -14,9 +14,11 @@
 ## run.json must carry the run's total and per-step timings and the
 ## local browser provider's slice, and the run must land in the latency
 ## history (build/email-shots/latency-history.jsonl) that the CLI
-## compares against its rolling median. The measured wall time is
-## printed; a regression beyond 50% of the rolling median is a
-## warning in the CLI's run summary, echoed here, never a failure.
+## compares against its rolling median, exactly once (found by its run
+## id: other runs may append to the shared history meanwhile). The
+## measured wall time is printed; a regression beyond 50% of the rolling
+## median is a warning in the CLI's run summary, echoed here, never a
+## failure.
 ##
 ## C-only: spawns node + the driver and reads the run dir off disk
 ## (the t6_roundtrip precedent). A missing node, missing shell
@@ -201,15 +203,26 @@ suite "e2e local shots latency":
       check isMs(provider{"wall_ms"})
     check runJson{"latency", "recorded"}.getBool()
 
-    # The run landed in the latency history, under this run's id.
+    # The run landed in the latency history, under this run's id, exactly
+    # once. The history is shared by every email-shots run in this
+    # checkout, and `just test` runs other captures (the determinism and
+    # DOM-assertion tests, the capture regression checks, the TypeScript
+    # suites) at the same time, so lines from those runs may land around
+    # this one: this run's line is found by its run id and total (the id
+    # alone is per-second), among the lines added since the run started.
     let history = historyLines(historyPath)
-    check history.len == historyBefore + 1
-    if history.len > 0:
-      let last = history[^1]
-      check last{"run"}.getStr() == runJson{"run"}.getStr()
-      check last{"total_ms"}.getInt() == runTotal
-      check last{"requests"}.getInt() == index.len
-      check last{"key"}.getStr() == runJson{"latency", "key"}.getStr()
+    check history.len >= historyBefore + 1
+    var mine: seq[JsonNode]
+    for i, entry in history:
+      if entry{"run"}.getStr() == runJson{"run"}.getStr() and
+          entry{"total_ms"}.getInt() == runTotal:
+        check i >= historyBefore # not a line from before the run
+        mine.add entry
+    check mine.len == 1
+    if mine.len > 0:
+      let entry = mine[0]
+      check entry{"requests"}.getInt() == index.len
+      check entry{"key"}.getStr() == runJson{"latency", "key"}.getStr()
 
     # The evidence line: measured wall time, recorded — no budget.
     let median = runJson{"latency", "median_ms"}

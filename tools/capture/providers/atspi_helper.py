@@ -20,7 +20,12 @@ on stdout ({"ok": true, "result": ...} or {"ok": false, "error": ...}).
       name, window-relative extents, states, action names, text (for a
       text node), its ancestors (role, name, extents; the window first)
       and a path (child indices from the desktop) for the ops below
-  {"op": "act", "path": P, "action": NAME}  runs the node's action
+  {"op": "act", "path": P, "action": NAME}  runs the node's action; the
+      answer is the toolkit's: true when it performed it
+  {"op": "windows", "app": A}               the names of the app's
+      top-level windows, as the app reports them now (its accessibility
+      objects: a window exists here as soon as the app created it,
+      before the compositor shows it)
   {"op": "focus", "path": P}                gives the node the focus
   {"op": "set_text", "path": P, "text": T}  replaces an editable text
   {"op": "dbus_call", "dest": D, "path": P, "iface": I, "method": M,
@@ -204,6 +209,27 @@ def act(req):
     return Atspi.Action.do_action(a, idx)
 
 
+def windows(req):
+    pump()
+    desk = Atspi.get_desktop(0)
+    out = []
+    for i in range(desk.get_child_count()):
+        app = desk.get_child_at_index(i)
+        if app is None:
+            continue
+        try:
+            app.clear_cache()
+            if app.get_name() != req["app"]:
+                continue
+            for j in range(app.get_child_count()):
+                win = app.get_child_at_index(j)
+                if win is not None:
+                    out.append(win.get_name() or "")
+        except GLib.Error:
+            continue
+    return out
+
+
 def set_text(req):
     node = resolve(req["path"])
     e = node.get_editable_text_iface()
@@ -276,6 +302,7 @@ def sql(req):
 OPS = {
     "find": find,
     "act": act,
+    "windows": windows,
     "focus": focus,
     "set_text": set_text,
     "wait_name": wait_name,

@@ -18,7 +18,7 @@
 // wrong window, a crop of the client's chrome or a capture of the
 // wrong message fails it, whatever the client reports about itself.
 //
-// Three test seams are used, each justified: further origins the
+// Four test seams are used, each justified: further origins the
 // client may load remote content from (the provider's
 // `extraRemoteOrigins`), so a message with an image on a foreign host
 // makes Thunderbird request it and the test can see that the request
@@ -30,7 +30,13 @@
 // counts only its own requests; and the accessible name KMail's driver
 // looks for in the external-references notice (`noticeLink`), so the
 // link is never found and the test can show that the capture fails
-// rather than passing without its images. Nothing else is replaced. One test
+// rather than passing without its images; and the number of Claws
+// Mail's 'Open in new window' requests its driver drops instead of
+// sending (`dropOpenRequests`), because Claws Mail itself drops such a
+// request only while its message list is busy, which no test can bring
+// about on demand, and the driver's answer to a dropped request (make
+// it again, and fail naming every attempt when none is taken) must
+// still be shown to work. Nothing else is replaced. One test
 // reaches into the running Thunderbird instance's Marionette connection
 // (a private field) to put a text field in its window and read back
 // what wtype typed into it: the session's input path is what is under
@@ -116,6 +122,7 @@ import {
 import type { Marionette } from "./marionette.ts";
 import { processAlive } from "./owned_state.ts";
 import { registeredServices } from "./services.ts";
+import { ClawsDriver } from "./claws_driver.ts";
 import { KMailDriver } from "./kmail_driver.ts";
 import { ThunderbirdDriver } from "./thunderbird_driver.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./types.ts";
@@ -1031,6 +1038,55 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         r!.reason,
         "kmail: the message has remote images but KMail's notice offered no 'load the external references' link within 60 s",
       );
+    },
+  );
+
+  it(
+    "Claws Mail: an 'Open in new window' request the client does not take is made again, and the provenance counts the requests",
+    { skip: !CLIENTS.includes("claws-mail") },
+    async () => {
+      const { rows } = await runDesktop([receipt], {
+        clients: ["claws-mail"],
+        provider: { drivers: [new ClawsDriver({ dropOpenRequests: 1 })] },
+      });
+      assert.equal(rows.length, 1);
+      const [r] = rows;
+      assert.equal(r!.entry.status, "done", r!.reason ?? "");
+      assert.ok(r!.png !== null);
+      const open = rec(rec(r!.meta.client).open_requests);
+      assert.equal(open.made, 2, JSON.stringify(open));
+      const notTaken = open.not_taken as string[];
+      assert.equal(notTaken.length, 1, JSON.stringify(open));
+      assert.match(notTaken[0]!, /^\+\d+ ms dropped \(no new window\)$/);
+    },
+  );
+
+  it(
+    "Claws Mail: a capture whose every 'Open in new window' request goes untaken fails, naming each request",
+    { skip: !CLIENTS.includes("claws-mail") },
+    async () => {
+      const { rows } = await runDesktop([receipt], {
+        clients: ["claws-mail"],
+        provider: {
+          drivers: [new ClawsDriver({ dropOpenRequests: Infinity })],
+        },
+      });
+      assert.equal(rows.length, 1);
+      const [r] = rows;
+      assert.equal(r!.entry.status, "failed", r!.reason ?? "");
+      assert.equal(r!.png, null);
+      const m =
+        /^claws-mail: the message window did not open within 30 s: (\d+) 'Open in new window' request\(s\), none taken \((.*)\)$/.exec(
+          String(r!.reason),
+        );
+      assert.ok(m !== null, String(r!.reason));
+      const n = Number(m[1]);
+      // One request every ~250 ms for 30 s: well over one.
+      assert.ok(n >= 2, String(r!.reason));
+      const each = m[2]!.split("; ");
+      assert.equal(each.length, n, String(r!.reason));
+      for (const a of each)
+        assert.match(a, /^\+\d+ ms dropped \(no new window\)$/);
     },
   );
 

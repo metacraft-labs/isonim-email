@@ -114,11 +114,27 @@ theme-snapshot:
 
 # Test: the full suite on the C backend, plus the backend-independent
 # passes on the JS backend, plus the capture emulation-transform tests,
-# plus the self-hosted webmail end-to-end tests (~90 s), plus the
-# desktop-client end-to-end tests for Thunderbird and Claws Mail (~2 min;
-# Linux only; `just test-desktop-all` runs every desktop client), plus
-# the capture regression checks (Tier-1 + Tier-2, ~10-12 s).
-test: build-tailwind test-c test-js test-ts test-webmail test-desktop test-capture-ci
+# plus the self-hosted webmail end-to-end tests, plus the desktop-client
+# end-to-end tests for Thunderbird and Claws Mail (Linux only;
+# `just test-desktop-all` runs every desktop client), plus the capture
+# regression checks (Tier-1 + Tier-2).
+#
+# The shared prerequisites (the Tailwind map, the story and brief
+# drivers) are built first; then the six test recipes run at the same
+# time (tools/test/run-recipes.sh), each logging to
+# test-logs/<recipe>.log, and the C and JS recipes run their files
+# concurrently too (tools/test/run-nim-tests.sh). Every test keeps its
+# services, browsers, sessions, ports and scratch state to itself, so the
+# recipes do not see each other. A line per recipe says PASS or FAIL as
+# it finishes; a failed recipe's log follows at the end, naming the
+# failing file and test; the exit status is non-zero if any failed.
+# `test-serial` runs the same recipes one after another, as before.
+test: build-tailwind email-shots-build
+    tools/test/run-recipes.sh test-c test-js test-ts test-webmail test-desktop test-capture-ci
+
+# The same recipes, one at a time, each streaming its output (slower;
+# for comparing timings or reading one recipe's output live).
+test-serial: build-tailwind test-c test-js test-ts test-webmail test-desktop test-capture-ci
 
 # The capture regression checks as part of the full suite. The
 # baselines (Tier-1 exact hashes above all) are pinned to the
@@ -128,13 +144,15 @@ test: build-tailwind test-c test-js test-ts test-webmail test-desktop test-captu
 test-capture-ci:
     @if [ "$(uname -sm)" = "Linux x86_64" ]; then       just email-capture-ci;     else       echo "test-capture-ci: NOT RUN on $(uname -sm): the capture baselines are pinned to x86_64-linux";     fi
 
-# Test on the C backend (the default target).
-test-c:
-    @mkdir -p build/test-bin test-logs
-    @for t in {{tests}}; do \
-      echo "=== $t (c)"; \
-      nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/test-bin/$(basename $t .nim) --nimcache:build/nimcache-$(basename $t .nim) -r $t 2>&1 | tee test-logs/$(basename $t .nim)-c.log; \
-    done
+# Test on the C backend (the default target). Each file is its own
+# `nim c -r` with its own binary and nimcache, as `test-file` builds it;
+# several files compile and run at once (ISONIM_EMAIL_TEST_JOBS sets how
+# many; tools/test/run-nim-tests.sh), each logging to
+# test-logs/<file>-c.log. Depends on the story driver because the
+# end-to-end files run it, and building it here keeps them from building
+# it concurrently.
+test-c: build-tailwind email-shots-build
+    tools/test/run-nim-tests.sh c "{{nim-flags}} {{src-paths}} {{tailwind-flags}}" {{tests}}
 
 # Run one test file on the C backend (verification pointers
 # use this form: `just test-file tests/<file>.nim`).
@@ -150,44 +168,52 @@ test-file file:
 # comes from tailwind-flags above, the variant-preserving opt-in switch
 # from config.nims.
 test-js: build-tailwind
-    @mkdir -p build/test-bin-js test-logs
-    @for t in {{tests-js}}; do \
-      echo "=== $t (js)"; \
-      nim js {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/test-bin-js/$(basename $t .nim).js -r $t 2>&1 | tee test-logs/$(basename $t .nim)-js.log; \
-    done
+    tools/test/run-nim-tests.sh js "{{nim-flags}} {{src-paths}} {{tailwind-flags}}" {{tests-js}}
+
+# node:test as every TypeScript recipe runs it: the spec reporter (a
+# failure's file:line and assertion at the end), and a per-test timeout
+# that fails a test still running after 25 min. It applies to each
+# describe() suite as a whole too, so it sits well above the longest
+# suite: the desktop clients' (`test-desktop-all`: about 6 min on a quiet
+# host, 9-10 min at load ~100-120). It does not catch a handle left open
+# after the tests finish (a server nobody closed keeps `node --test`
+# waiting); tools/test/run-recipes.sh's per-recipe timeout does.
+node-test := "node --test --test-reporter=spec --test-timeout=1500000"
 
 # Test the capture and review suites (emulation transforms,
 # cache/affected/wiring suites, provider routing and requirement
-# suites, contact-sheet and findings suites):
+# suites, contact-sheet and findings suites, and the test runners'
+# own suite):
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
 # The self-hosted webmail and desktop-client end-to-end files are left
 # to `test-webmail` and `test-desktop`.
 test-ts:
-    node --test "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts"
+    {{node-test}} "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts" "tools/test/*.test.ts"
 
 # The self-hosted webmail provider end to end: real Roundcube and
-# SnappyMail on php-fpm and caddy, Dovecot and Chromium (~90 s on a
-# loaded host, so on its own rather than inside test-ts's parallel
-# run). Needs the story driver (`just email-shots-build`).
+# SnappyMail on php-fpm and caddy, Dovecot and Chromium (~3 min on a
+# loaded host; a recipe of its own so it can be run alone, and the
+# longest of `just test`'s concurrent recipes together with
+# test-desktop). Needs the story driver (`just email-shots-build`).
 test-webmail: email-shots-build
-    node --test tools/capture/providers/selfhosted_webmail.test.ts
+    {{node-test}} tools/capture/providers/selfhosted_webmail.test.ts
 
 # The linux-desktop provider end to end: real clients in a headless
 # sway (wlroots' software renderer), Dovecot, the assets service, grim,
-# wtype, the accessibility bus and OCR, on its own rather than inside
-# test-ts's parallel run. Linux only (the provider is): elsewhere it says
+# wtype, the accessibility bus and OCR, a recipe of its own so it can be
+# run alone. Linux only (the provider is): elsewhere it says
 # so and does not run. Needs the story driver (`just email-shots-build`).
 # `test-desktop` runs the multi-client tests on Thunderbird (the
 # thunderbird family's client) and Claws Mail (the quickest verification
-# client), ~2 min on a loaded host; `test-desktop-all` runs them on all
+# client), ~3 min on a loaded host; `test-desktop-all` runs them on all
 # five clients (Evolution, Geary and KMail with Akonadi add ~3 min), and
 # is the one to run after a change to the desktop provider or a driver.
 test-desktop: email-shots-build
-    @if [ "$(uname -s)" = "Linux" ]; then       ISONIM_EMAIL_DESKTOP_CLIENTS=thunderbird,claws-mail node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
+    @if [ "$(uname -s)" = "Linux" ]; then       ISONIM_EMAIL_DESKTOP_CLIENTS=thunderbird,claws-mail {{node-test}} tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
 
 test-desktop-all: email-shots-build
-    @if [ "$(uname -s)" = "Linux" ]; then       node --test tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop-all: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
+    @if [ "$(uname -s)" = "Linux" ]; then       {{node-test}} tools/capture/providers/linux_desktop.test.ts;     else       echo "test-desktop-all: NOT RUN on $(uname -s): the desktop clients run in a Linux compositor";     fi
 
 # Check the crop calibration of the desktop clients now (a capture run
 # does it by itself when a client's build changed since its last

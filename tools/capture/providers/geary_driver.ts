@@ -298,7 +298,10 @@ class GearyInstance implements DesktopClientInstance {
     });
     let imagesShown = false;
     if (show !== undefined) {
-      await this.a11y.act(show);
+      if (!(await this.a11y.act(show)))
+        throw new Error(
+          `geary: the message's Show (remote images) button refused the press (states: ${show.states.join(", ")})`,
+        );
       imagesShown = true;
     }
     timing.open = t() - ts;

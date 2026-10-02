@@ -3,11 +3,12 @@
 ## runner asserts `nim check` exits non-zero with the substring in its
 ## output and the fixture's violation line cited.
 ##
-## C backend only: shells out to `nim check` (dev shell / CI provide it).
-import std/[os, osproc, strutils, unittest]
+## C backend only: shells out to `nim check` (dev shell / CI provide it),
+## every fixture at once (tests/compile_fail_checks.nim).
+import std/[os, strutils, tables, unittest]
+import compile_fail_checks
 
 const testsDir = parentDir(currentSourcePath())
-const repoRoot = parentDir(testsDir)
 
 type FixtureExpect = object
   want: string
@@ -22,22 +23,16 @@ proc readExpect(path: string): FixtureExpect =
   doAssert result.want.len > 0, path & ": missing '# expect:' header"
   doAssert result.wantLine > 0, path & ": missing '# expect-line:' header"
 
-proc nimCheck(path: string): tuple[output: string, exitCode: int] =
-  let nim = findExe("nim")
-  doAssert nim.len > 0, "nim not on PATH (run under nix develop)"
-  # `nim check` writes diagnostics to stderr; merge it to capture them.
-  # `config.nims` is found by walking up from the fixture, so no --path
-  # flags are needed; style checks are off so only semantic errors show.
-  result = execCmdEx(
-    nim & " check --hints:off " & quoteShell(path) & " 2>&1",
-    workingDir = repoRoot)
-
 suite "compile failures":
   test "event handler fixture fails with the documented message":
     var count = 0
+    var paths: seq[string]
     for path in walkFiles(testsDir / "compile_fail" / "*.nim"):
+      paths.add path
+    let checked = nimCheckAll(paths)
+    for path in paths:
       let exp = readExpect(path)
-      let (output, exitCode) = nimCheck(path)
+      let (output, exitCode) = checked[path]
       check exitCode != 0
       check exp.want in output
       # The violation line is cited as `basename(line, col)` in the

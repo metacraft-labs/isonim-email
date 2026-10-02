@@ -5,7 +5,7 @@
 // the rateFinding cap. Run with:
 //   node --test tools/review/findings.test.ts
 
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,11 @@ import {
   type Finding,
   type NewFinding,
 } from "./findings.ts";
+
+// Every scratch directory this file makes is under one temp dir, removed
+// when the file's tests are done.
+const scratch = mkdtempSync(join(tmpdir(), "findings-test-"));
+after(() => rmSync(scratch, { recursive: true, force: true }));
 
 function fields(over: Partial<NewFinding> = {}): NewFinding {
   return {
@@ -38,7 +43,7 @@ function fields(over: Partial<NewFinding> = {}): NewFinding {
 }
 
 function tmpFile(): string {
-  return join(mkdtempSync(join(tmpdir(), "findings-")), "findings.jsonl");
+  return join(mkdtempSync(join(scratch, "findings-")), "findings.jsonl");
 }
 
 describe("findings entry shape", () => {
@@ -193,7 +198,7 @@ describe("rateFinding", () => {
 
 describe("updateFindingStatus", () => {
   it("changes one entry's status in place and keeps every other byte", () => {
-    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const dir = mkdtempSync(join(scratch, "findings-update-"));
     const path = join(dir, "findings.jsonl");
     appendFinding(path, fields());
     appendFinding(path, fields({ story: "alert" }));
@@ -232,7 +237,7 @@ describe("updateFindingStatus", () => {
   });
 
   it("records the owner of an entry left open", () => {
-    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const dir = mkdtempSync(join(scratch, "findings-update-"));
     const path = join(dir, "findings.jsonl");
     appendFinding(path, fields({ severity: "P3", owner: "text leaves" }));
     appendFinding(path, fields({ severity: "P3" }));
@@ -249,7 +254,7 @@ describe("updateFindingStatus", () => {
   });
 
   it("refuses a fixed entry without its run, and an unknown id", () => {
-    const dir = mkdtempSync(join(tmpdir(), "findings-update-"));
+    const dir = mkdtempSync(join(scratch, "findings-update-"));
     const path = join(dir, "findings.jsonl");
     appendFinding(path, fields());
     const before = readFileSync(path, "utf8");

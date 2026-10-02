@@ -247,7 +247,10 @@
               # too. iproute2's `ip` brings loopback up in the network
               # namespace a desktop-client session runs in (loopback
               # only), and util-linux's `mount` sets up the session's own
-              # name resolution in its mount namespace. Only these four
+              # name resolution in its mount namespace. `setsid` gives each
+              # of `just test`'s concurrent recipes a session and process
+              # group of its own (tools/test/run-recipes.sh), so a
+              # timed-out recipe is killed whole. Only these five
               # binaries are put on PATH, so util-linux's and iproute2's
               # other tools do not shadow the host's.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
@@ -257,6 +260,7 @@
                   ln -s ${pkgs.util-linux}/bin/unshare $out/bin/unshare
                   ln -s ${pkgs.iproute2}/bin/ip $out/bin/ip
                   ln -s ${pkgs.util-linux}/bin/mount $out/bin/mount
+                  ln -s ${pkgs.util-linux}/bin/setsid $out/bin/setsid
                 '')
                 # The linux-desktop capture provider: real mail clients in
                 # a headless sway (wlroots' headless backend and its

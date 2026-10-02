@@ -94,7 +94,15 @@ const socketBase = join(scratch, "rt");
 const mailRoot = join(scratch, "mail");
 const webRoot = join(scratch, "web");
 mkdirSync(socketBase, { mode: 0o700 });
-const env = { ...process.env, XDG_RUNTIME_DIR: socketBase };
+// The temp dir of this file's runs, this process's included: Playwright
+// puts each Chromium's profile and artifacts directories there and
+// removes them when the browser is closed, so the "nothing left behind"
+// checks (staleScratch below) see a launch that was not closed, and
+// whatever else lands there goes with the scratch dir.
+const tmpRoot = join(scratch, "tmp");
+mkdirSync(tmpRoot);
+process.env.TMPDIR = tmpRoot;
+const env = { ...process.env, XDG_RUNTIME_DIR: socketBase, TMPDIR: tmpRoot };
 
 const MOBILE: ViewportSpec = { name: "mobile", width: 375, dpr: 3 };
 const DESKTOP: ViewportSpec = { name: "desktop", width: 800, dpr: 1 };
@@ -364,6 +372,12 @@ function staleScratch(): string[] {
     if (existsSync(root))
       for (const e of readdirSync(root)) left.push(join(root, e));
   for (const e of readdirSync(socketBase)) left.push(join(socketBase, e));
+  // Playwright's directories only: a Chromium process killed at the
+  // wrong moment (its browser closing under load) can leave one of its
+  // shared-memory files (.org.chromium.Chromium.*) here too, which is
+  // Chromium's, not a launch left open, and goes with the scratch dir.
+  for (const e of readdirSync(tmpRoot))
+    if (e.startsWith("playwright")) left.push(join(tmpRoot, e));
   return left;
 }
 
@@ -1150,15 +1164,19 @@ describe(
       stateDir: string;
       socketDir: string;
       procs: Proc[];
+      // The run's own temp dir (its Chromium's profile and artifacts).
+      tmp: string;
     }
 
     let seq = 0;
     async function startRun(): Promise<Up> {
       const run = `swt-${process.pid}-${++seq}`;
+      const tmp = join(scratch, `tmp-${run}`);
+      mkdirSync(tmp);
       const child = spawn(
         process.execPath,
         [childScript, run, mailRoot, webRoot, eml],
-        { env, stdio: ["ignore", "ignore", "pipe"] },
+        { env: { ...env, TMPDIR: tmp }, stdio: ["ignore", "ignore", "pipe"] },
       );
       spawned.push(child.pid!);
       let stderr = "";
@@ -1200,14 +1218,14 @@ describe(
         procs.filter((p) => p.comm.includes("php-fpm")).length >= 3,
         JSON.stringify(procs),
       );
-      return { child, exit, stateDir, socketDir: o.socketDir, procs };
+      return { child, exit, stateDir, socketDir: o.socketDir, procs, tmp };
     }
 
     const alive = (procs: Proc[]): Proc[] =>
       procs.filter((p) => processAlive(p));
 
     it("SIGTERM: the run exits 143 and leaves no php-fpm, caddy or Dovecot and no state", async () => {
-      const { child, exit, stateDir, socketDir, procs } = await startRun();
+      const { child, exit, stateDir, socketDir, procs, tmp } = await startRun();
       const all = tree(child.pid!);
       child.kill("SIGTERM");
       assert.deepEqual(await exit, { code: 143, signal: null });
@@ -1221,10 +1239,14 @@ describe(
       assert.equal(existsSync(stateDir), false);
       assert.equal(existsSync(socketDir), false);
       assert.deepEqual(staleScratch(), []);
+      // Its temp dir is this test's to remove: a signalled run's teardown
+      // stops its services but does not wait for Playwright to remove
+      // its Chromium's profile, which then may or may not be gone.
+      rmSync(tmp, { recursive: true, force: true });
     });
 
     it("SIGKILL: php-fpm (workers included) and caddy die with the run, and the next start sweeps what it left", async () => {
-      const { child, exit, stateDir, socketDir, procs } = await startRun();
+      const { child, exit, stateDir, socketDir, procs, tmp } = await startRun();
       child.kill("SIGKILL");
       assert.equal((await exit).signal, "SIGKILL");
       assert.ok(
@@ -1255,6 +1277,10 @@ describe(
       await d.stop();
       assert.deepEqual(scratchProcesses(), []);
       assert.deepEqual(staleScratch(), []);
+      // A killed run cannot close its browser, so Playwright's profile
+      // and artifacts directories stay in the run's temp dir: they are
+      // this test's to remove.
+      rmSync(tmp, { recursive: true, force: true });
     });
   },
 );
