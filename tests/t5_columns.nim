@@ -165,8 +165,9 @@ suite "hybrid columns":
     # The content sits inside those tables.
     check "<tr><td style=\"padding:0 12px 0 0;\"><![endif]--><div><p" in html
     check "<tr><td style=\"padding:0 0 0 12px;\"><![endif]--><div><p" in html
-    # The row, the two gutter tables and the section close.
-    check html.count("<!--[if mso]></td></tr></table><![endif]-->") == 4
+    # The row, the two gutter tables, the section and the heading's
+    # implicit section (the document's loose content) close.
+    check html.count("<!--[if mso]></td></tr></table><![endif]-->") == 5
     # No cell of the ghost row is padded.
     check "width:276px;padding" notin html
     # Without Outlook output there is no ghost row at all.

@@ -297,7 +297,9 @@
                 noto-fonts
               ];
               impureFontDirectories = [ ];
-              includes = [ ];
+              # Arabic prefers Noto Sans Arabic UI; the calligraphic Noto
+              # Nastaliq Urdu is removed (nix/fonts-arabic.conf says why).
+              includes = [ ./nix/fonts-arabic.conf ];
             }}";
           };
 

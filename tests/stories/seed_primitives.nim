@@ -167,7 +167,8 @@ proc boxImagesOffDoc*(): EmailNode =
   let s = r.band(result, "#f4f5f7")
   let b = r.el(s, "mailBox", [("background-color", "#ffffff"),
     ("border", "1px solid #d1d5db"), ("text-align", "center")])
-  discard r.el(b, "mailImage", [("width", "280px")],
+  discard r.el(b, "mailImage", [("width", "280px"),
+    ("height", fixtureImageHeight("scene.png", 280))],
     [("src", fixtureImageUrl("scene.png")),
       ("alt", "A green hill under a yellow sun")])
   discard r.el(b, "p", [("margin", "16px 0 0")],
@@ -267,7 +268,9 @@ proc gridImagesOffDoc*(): EmailNode =
       ("shield.png", "The tower crest")]:
     let src = if img == "scene.png": fixtureImageUrl("scene.png")
       else: fixtureImageUrl("shield.png")
-    discard r.el(g, "mailImage", [("width", "160px")],
+    let h = if img == "scene.png": fixtureImageHeight("scene.png", 160)
+      else: fixtureImageHeight("shield.png", 160)
+    discard r.el(g, "mailImage", [("width", "160px"), ("height", h)],
       [("src", src), ("alt", alt)])
   r.footer(result)
 
@@ -361,7 +364,8 @@ proc clusterImagesOffDoc*(): EmailNode =
   for (i, name) in [(0, "Mastodon"), (1, "GitHub"), (2, "YouTube"),
       (3, "Blog")]:
     let a = r.el(c, "a", attrs = [("href", "https://example.com/s" & $i)])
-    discard r.el(a, "mailImage", [("width", "32px")],
+    discard r.el(a, "mailImage", [("width", "32px"),
+      ("height", fixtureImageHeight("shield.png", 32))],
       [("src", fixtureImageUrl("shield.png")), ("alt", name)])
   r.footer(result)
 
@@ -403,7 +407,8 @@ proc clusterInContextDoc*(): EmailNode =
 proc avatarRow(r: EmailRenderer; parent: EmailNode; name, role: string;
     imgWidth = "48px"; fixed = "48px") =
   let sb = r.el(parent, "mailSidebar", attrs = [("fixed", fixed)])
-  discard r.el(sb, "mailImage", [("width", imgWidth)],
+  discard r.el(sb, "mailImage", [("width", imgWidth),
+    ("height", imgWidth)],
     [("src", fixtureImageUrl("shield.png")), ("alt", name & "'s avatar")])
   let who = r.el(sb, "mailStack", [("gap", "0")])
   discard r.el(who, "p", [("margin", "0"), ("font-weight", "700")],
@@ -429,7 +434,8 @@ proc sidebarMaximalDoc*(): EmailNode =
   let teaser = r.el(stack, "mailSidebar", [("gap", "24px")],
     [("fixed", "160px"), ("switch_below", "280px"), ("valign", "top"),
       ("side", "left")])
-  discard r.el(teaser, "mailImage", [("width", "160px")],
+  discard r.el(teaser, "mailImage", [("width", "160px"),
+    ("height", fixtureImageHeight("scene.png", 160))],
     [("src", fixtureImageUrl("scene.png")),
       ("alt", "A green hill under a yellow sun")])
   let words = r.el(teaser, "mailStack", [("gap", "8px")])
@@ -500,7 +506,9 @@ proc sidebarInContextDoc*(): EmailNode =
       ("Castle badge", "$18.00")]:
     let sb = r.el(stack, "mailSidebar", attrs = [("fixed", "96px"),
       ("switch_below", "200px")])
-    discard r.el(sb, "mailImage", [("width", "96px")],
+    discard r.el(sb, "mailImage", [("width", "96px"), ("height",
+      if name.startsWith("Mountain"): fixtureImageHeight("scene.png", 96)
+      else: fixtureImageHeight("shield.png", 96))],
       [("src", if name.startsWith("Mountain"): fixtureImageUrl("scene.png")
         else: fixtureImageUrl("shield.png")), ("alt", name)])
     let w = r.el(sb, "mailStack", [("gap", "4px")])

@@ -17,6 +17,7 @@ import stories/email_stories
 import stories/seed_broken
 import stories/seed_layout
 import stories/seed_primitives
+import stories/seed_leaves
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -69,6 +70,8 @@ proc main(): int =
     registerLayoutStories()
     # The layout primitives' story set (tests/stories/seed_primitives.nim).
     registerPrimitiveStories()
+    # The content leaves' story set (tests/stories/seed_leaves.nim).
+    registerLeafStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

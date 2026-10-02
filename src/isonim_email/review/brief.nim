@@ -30,6 +30,7 @@ import ../passes/layout
 import ../style/tokens
 import ../patterns
 import ../primitives
+from ../lower/image import altStyle, altFitsOneLine
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -688,6 +689,58 @@ proc patternDegradations(node: EmailNode; view: BriefView;
   for c in node.children:
     patternDegradations(c, view, acc)
 
+const webkitAltOffset* = "with images off, WebKit draws an image's alt " &
+  "text from just above the image's box, which keeps only one alt " &
+  "line's height: the alt can touch whatever sits directly above the " &
+  "image (the row above, in a grid), and a rounded image clips its top"
+  ## Measured on the WebKit build captured here with a bare `img`.
+
+proc altDropLines(node: EmailNode; acc: var seq[string]) =
+  ## The images whose alt WebKit cannot show with images off: an alt
+  ## that does not fit the image's width on one line (`W-IMG-ALT-FIT`).
+  if node == nil:
+    return
+  if node.kind == enElement and node.tag == "mailImage":
+    let alt = node.attrs.getOrDefault("alt", "")
+    let w = node.styles.getOrDefault("width", "").strip()
+    if alt.len > 0 and w.endsWith("px"):
+      try:
+        let px = int(parseFloat(w[0 ..< ^2]))
+        let fits = altFitsOneLine(alt, px, altStyle(defaultTheme()))
+        if fits and webkitAltOffset notin acc:
+          acc.add(webkitAltOffset)
+        if px <= 280 and not fits:
+          acc.add("with images off, the " & $px & "px image \"" & alt &
+            "\" shows no alt text (WebKit draws an alt only when it " &
+            "fits the image's width on one line)")
+      except ValueError:
+        discard
+  for c in node.children:
+    altDropLines(c, acc)
+
+proc hasList(node: EmailNode): bool =
+  if node == nil:
+    return false
+  if node.kind == enElement and node.tag in ["ul", "ol"]:
+    return true
+  for c in node.children:
+    if hasList(c):
+      return true
+  false
+
+const webkitListMarkers* = "list items show no bullet or number: the " &
+  "WebKit builds captured here (Playwright's WebKit, WebKitGTK) draw " &
+  "no list markers, even for an unstyled list; the items keep their " &
+  "indent"
+  ## A capture-environment limit, not the message's: declared so a
+  ## reviewer does not report it as a defect.
+
+const alwaysDefect* = "\nAlways a defect, in every client: text cut at " &
+  "any edge of the capture (the tops of the first line's letters " &
+  "missing, glyphs on the first or last pixel row or column).\n"
+  ## The standing check every brief ends with: a client's degradations
+  ## never excuse clipped text.
+
 proc degradationLines(family: string; doc: EmailNode;
                       images: seq[string];
                       view = BriefView()): seq[string] =
@@ -705,6 +758,10 @@ proc degradationLines(family: string; doc: EmailNode;
         if fam in d.families and declarationApplies(doc, d):
           result.add(if d.note.len > 0: d.note
                      else: d.name & " degrades as declared")
+      if fam == cfApple:
+        altDropLines(doc, result)
+        if hasList(doc):
+          result.add(webkitListMarkers)
   patternDegradations(doc, view, result)
   if result.len == 0:
     result.add("(none)")
@@ -794,6 +851,7 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
     result.add("- " & d & "\n")
   result.add("\nNot expected here: " & notExpectedLine(family, images) &
     ".\n")
+  result.add(alwaysDefect)
 
 # ----------------------------------------------------------------------------
 # Real-client briefs
@@ -1077,6 +1135,8 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   var degr = c.degradations
   if c.rtlDegradation.len > 0 and directionLine(doc).len > 0:
     degr.add(c.rtlDegradation)
+  if c.engine == "WebKitGTK" and hasList(doc):
+    degr.add(webkitListMarkers)
   if c.audience.len > 0:
     for d in degradationLines(c.audience, doc, images, view):
       if d != "(none)" and d notin degr:
@@ -1094,6 +1154,7 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   result.add("\nNot expected here: " &
     (if c.notExpected.len == 0: "(none)" else: c.notExpected.join("; ")) &
     ".\n")
+  result.add(alwaysDefect)
 
 proc numberedItems(`block`: string): seq[string] =
   ## The `N. text` items of an expected block, numbers stripped. Only

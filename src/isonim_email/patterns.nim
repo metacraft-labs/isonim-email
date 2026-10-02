@@ -266,10 +266,63 @@ proc expandNode(n: EmailNode; ctx: ExpandCtx; depth: int;
   for c in kids:
     expandNode(c, ctx, depth, diags)
 
+const bandTags* = ["mailSection", "mailWrapper", "mailHero", "mailIf",
+  "textOnly", "htmlOnly", "mailRaw", "mailColumn", "mailGroup"]
+  ## A document's children that are bands (or wrap bands, or are the
+  ## author's own raw markup) and so are never wrapped; a column or a
+  ## group outside a row stays where it is, for P4's nesting error.
+
+proc isBand*(n: EmailNode): bool =
+  ## True for a band (`bandTags`), and for an expanded pattern whose
+  ## expansion is one: a pattern is classified by the root of what it
+  ## became, never by its own name.
+  if n == nil or n.kind != enElement:
+    return false
+  if n.tag in bandTags:
+    return true
+  if n.expanded and n.tag in patternRegistry:
+    for c in n.children:
+      if c.kind == enElement:
+        return isBand(c)
+  false
+
+proc wrapLooseContent*(doc: EmailNode) =
+  ## Content placed directly in a `mailDocument` (outside any band) is an
+  ## implicit `mailSection` with the section's defaults (catalogue
+  ## R-LAY-08): each run of consecutive loose children moves into a
+  ## section of its own. Without it the content sits flush against the
+  ## message's edges, where a heading whose glyphs reach above its line
+  ## box is clipped at the top of the reading pane. Runs after pattern
+  ## expansion, so a pattern that expands to a band stays a top-level
+  ## band. Idempotent.
+  if doc == nil or doc.kind != enElement or doc.tag != "mailDocument":
+    return
+  let r = EmailRenderer()
+  var kids: seq[EmailNode] = @[]
+  var run: EmailNode = nil
+  for c in doc.children:
+    let loose = (c.kind == enElement and not isBand(c)) or
+      (c.kind == enText and c.text.strip().len > 0)
+    if not loose:
+      if c.kind == enElement or c.kind != enText:
+        run = nil
+      kids.add(c)
+      continue
+    if run == nil:
+      run = r.createElement("mailSection")
+      run.origin = c.origin
+      run.parent = doc
+      kids.add(run)
+    c.parent = run
+    run.children.add(c)
+  doc.children = kids
+
 proc expandPatterns*(root: EmailNode; theme: EmailTheme;
     target: EmailTarget): seq[EmailDiagnostic] =
   ## Expands every pattern element of `root` in place, depth first, the
-  ## expansions' own patterns included. Idempotent: an expanded element
-  ## is not expanded again.
+  ## expansions' own patterns included, then wraps a document's loose
+  ## content in sections (`wrapLooseContent`). Idempotent: an expanded
+  ## element is not expanded again.
   let ctx = ExpandCtx(theme: theme, target: target, r: EmailRenderer())
   expandNode(root, ctx, 0, result)
+  wrapLooseContent(root)

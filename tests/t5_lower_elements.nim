@@ -20,7 +20,7 @@
 ##
 ## Backend-independent (tree building + pure passes + the in-memory
 ## asset store), so `just test` also runs it on JS.
-import std/[algorithm, strutils, unittest]
+import std/[algorithm, math, strutils, unittest]
 import isonim_email
 import stories/email_stories
 import stories/fixture_images
@@ -54,8 +54,13 @@ proc image(r: EmailRenderer; src, alt: string;
     r.setStyle(result, k, v)
 
 proc renderOne(img: EmailNode; assets: AssetStore = nil): RenderedEmail =
+  ## The image in a centred section (content directly in the document
+  ## is an implicit section, aligned to its start).
   renderTree(docWith(proc(r: EmailRenderer; doc: EmailNode) =
-    r.appendChild(doc, img)), assets = assets)
+    let s = r.createElement("mailSection")
+    r.setStyle(s, "text-align", "center")
+    r.appendChild(s, img)
+    r.appendChild(doc, s)), assets = assets)
 
 const altStyle = "font-family:Helvetica, Arial, sans-serif;" &
   "font-size:14px;line-height:20px;color:#4b5563;"
@@ -95,8 +100,9 @@ suite "elements without a lowering are errors, never raw tags":
     # lowering, plus a pattern-shaped tag the vocabulary does not know.
     let lowered = @loweredHere & @loweredElsewhere
     check lowered.sorted() == @["mailBox", "mailCluster", "mailColumn",
-      "mailColumns", "mailDocument", "mailGrid", "mailGroup", "mailImage",
-      "mailSection", "mailSidebar", "mailStack", "mailWrapper"]
+      "mailColumns", "mailDivider", "mailDocument", "mailGrid", "mailGroup",
+      "mailImage", "mailSection", "mailSidebar", "mailSpacer", "mailStack",
+      "mailText", "mailWrapper"]
     var nonLeaf = 0
     var tags: seq[string] = @[]
     for t in buildEmailVocabulary().tags:
@@ -134,8 +140,10 @@ suite "elements without a lowering are errors, never raw tags":
     check res.diagnostics.len == 0
 
   test "test_strict_raises_and_stories_refuse_unlowered_elements":
+    # `mailHero` has no lowering yet (the spacer that stood here has one
+    # now: tests/t5_leaves.nim).
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      r.appendChild(doc, r.createElement("mailSpacer")))
+      r.appendChild(doc, r.createElement("mailHero")))
     var msg = ""
     try:
       discard renderTree(doc, strict = true)
@@ -143,7 +151,7 @@ suite "elements without a lowering are errors, never raw tags":
       msg = e.msg
     check msg.startsWith(codeLowerMissing & ":")
     let again = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      r.appendChild(doc, r.createElement("mailSpacer")))
+      r.appendChild(doc, r.createElement("mailHero")))
     var storyMsg = ""
     try:
       discard renderPipeline(again, defaultTarget())
@@ -186,9 +194,11 @@ suite "mailImage lowers to the fixed-size image":
       "Acme logo", attrs = [("href", "https://acme.example/")],
       styles = [("width", "120px")]))
     check res.diagnostics.len == 0
+    # The link keeps the alt text's colour and no underline: Word paints
+    # a link's content in the link's colour, underlined.
     check ("<a href=\"https://acme.example/\" target=\"_blank\" " &
-      "style=\"display:block;\"><img src=\"https://x.test/logo.png\"") in
-      res.html
+      "style=\"display:block;color:#4b5563;text-decoration:none;\">" &
+      "<img src=\"https://x.test/logo.png\"") in res.html
     check "width:120px;max-width:100%;-ms-interpolation-mode:bicubic;" &
       altStyle & "\"></a>" in res.html
 
@@ -200,26 +210,42 @@ suite "mailImage lowers to the fixed-size image":
     let store = memoryAssetStore("https://assets.example.com")
     store.put("hero@2x.png", pngBytes)
     store.put("plain.png", pngBytes)
+    # The fixture is a few pixels wide, narrower than any alt text: the
+    # only diagnostic is that warning (tests/t5_images.nim).
+    proc onlyAltFit(d: seq[EmailDiagnostic]): bool =
+      for x in d:
+        if x.code != codeImgAltFit:
+          return false
+      true
+    # A published asset's aspect is known, so its height attribute is
+    # written at the rendered width.
+    proc heightAt(w: int): int =
+      int(round(float(w) * float(info.height) / float(info.width)))
     let retina = renderOne(image(EmailRenderer(), "hero@2x.png", "Hero"),
       store)
-    check retina.diagnostics.len == 0
-    check ("width=\"" & $(info.width div 2) & "\" style=") in retina.html
-    check (";width:" & $(info.width div 2) & "px;max-width:100%;") in
-      retina.html
+    check onlyAltFit(retina.diagnostics)
+    let half = info.width div 2
+    check ("width=\"" & $half & "\" height=\"" & $heightAt(half) &
+      "\" style=") in retina.html
+    # (A few pixels wide and alone in its section, it takes the inline
+    # form of an image narrower than its alt: the CSS width stays.)
+    check ("width:" & $half & "px;") in retina.html
     let plain = renderOne(image(EmailRenderer(), "plain.png", "Plain"),
       store)
-    check plain.diagnostics.len == 0
-    check ("width=\"" & $info.width & "\" style=") in plain.html
+    check onlyAltFit(plain.diagnostics)
+    check ("width=\"" & $info.width & "\" height=\"" &
+      $heightAt(info.width) & "\" style=") in plain.html
     # An explicit width wins over the intrinsic size.
     let given = renderOne(image(EmailRenderer(), "plain.png", "Plain",
       styles = [("width", "7px")]), store)
-    check ("width=\"7\" style=") in given.html
+    check ("width=\"7\" height=\"" & $heightAt(7) & "\" style=") in
+      given.html
 
   test "test_mail_image_margin_follows_the_inherited_alignment":
     # rule: R-IMG-01
     # The image sits in a cell whose own alignment (attribute or
-    # text-align) decides the margin; with none, the skeleton's centred
-    # content cell centres it.
+    # text-align) decides the margin; with none, the centred section
+    # around the table centres it.
     proc inCell(cellAttrs, cellStyles: seq[(string, string)]):
         string =
       let html = renderTree(docWith(proc(r: EmailRenderer;
@@ -235,7 +261,10 @@ suite "mailImage lowers to the fixed-size image":
           styles = [("width", "120px")]))
         r.appendChild(tr, td)
         r.appendChild(table, tr)
-        r.appendChild(doc, table))).html
+        let s = r.createElement("mailSection")
+        r.setStyle(s, "text-align", "center")
+        r.appendChild(s, table)
+        r.appendChild(doc, s))).html
       html.split("<img ")[1].split(">")[0]
     check "style=\"display:block;margin:0 auto;border:0;" in inCell(@[], @[])
     check "style=\"display:block;margin:0 auto;border:0;" in
@@ -248,7 +277,7 @@ suite "mailImage lowers to the fixed-size image":
     check "style=\"display:block;border:0;" in left
     check "margin" notin left
     # A table's own align places the table, not its content: it does
-    # not stop the walk, so the skeleton's centre still applies.
+    # not stop the walk, so the centred section around it still applies.
     let tableAligned = renderTree(docWith(proc(r: EmailRenderer;
         doc: EmailNode) =
       let table = r.createElement("table")
@@ -259,7 +288,10 @@ suite "mailImage lowers to the fixed-size image":
         styles = [("width", "120px")]))
       r.appendChild(tr, td)
       r.appendChild(table, tr)
-      r.appendChild(doc, table))).html
+      let s = r.createElement("mailSection")
+      r.setStyle(s, "text-align", "center")
+      r.appendChild(s, table)
+      r.appendChild(doc, s))).html
     check "style=\"display:block;margin:0 auto;border:0;" in tableAligned
 
   test "test_unknown_width_is_an_error":
@@ -269,13 +301,12 @@ suite "mailImage lowers to the fixed-size image":
     check res.diagnostics[0].rules == @["R-IMG-01"]
 
   test "test_props_without_a_lowering_are_reported":
+    # `dark_src` is the one prop left without a lowering (the dark
+    # swap); `fluid_on_mobile`, `align` and percentage widths lower now
+    # (tests/t5_images.nim).
     for (attrs, styles, rule) in [
         (@[("dark_src", "https://x.test/logo-dark.png")],
-          @[("width", "120px")], "R-IMG-06"),
-        (@[("fluid_on_mobile", "true")], @[("width", "120px")],
-          "R-IMG-09"),
-        (@[("align", "left")], @[("width", "120px")], "R-IMG-01"),
-        (newSeq[(string, string)](), @[("width", "100%")], "R-IMG-11")]:
+          @[("width", "120px")], "R-IMG-06")]:
       let res = renderOne(image(EmailRenderer(), "https://x.test/logo.png",
         "Acme logo", attrs = attrs, styles = styles))
       check codesOf(res.diagnostics) == @[codeLowerMissing]

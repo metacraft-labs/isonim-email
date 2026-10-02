@@ -225,6 +225,18 @@ proc appendRawHtml*(r: EmailRenderer; parent: EmailNode; html: string) =
 proc setAttribute*(r: EmailRenderer; node: EmailNode; name, value: string) =
   node.attrs[name] = value
 
+proc setAttribute*(r: EmailRenderer; node: EmailNode; name: string;
+                   value: int) =
+  ## An integer prop written bare in a template (`mailGrid(columns = 3)`):
+  ## stored as its decimal text, the form every reader parses.
+  node.attrs[name] = $value
+
+proc setAttribute*(r: EmailRenderer; node: EmailNode; name: string;
+                   value: bool) =
+  ## A boolean prop written bare (`mailSection(full_width = true)`):
+  ## stored as `true` or `false`, the form every reader compares with.
+  node.attrs[name] = $value
+
 proc removeAttribute*(r: EmailRenderer; node: EmailNode; name: string) =
   node.attrs.del(name)
 
@@ -245,6 +257,14 @@ proc setStyle*(r: EmailRenderer; node: EmailNode; prop, value: string) =
   ## including a fallback pair set by `setStyleWithFallback`.
   node.styles[prop] = value
   node.fallbacks.del(prop)
+
+proc setStyle*(r: EmailRenderer; node: EmailNode; prop: string;
+               value: int) =
+  ## A value written as a bare integer (`mailSpacer(height = 24)`,
+  ## `font_weight = 700`): stored as its decimal text, which the style
+  ## pass reads as CSS reads it (a unitless length is px, a weight is a
+  ## weight, a unitless `line-height` is a multiplier).
+  r.setStyle(node, prop, $value)
 
 proc setStyleWithFallback*(r: EmailRenderer; node: EmailNode;
                            prop, fallback, value: string) =

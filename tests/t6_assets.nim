@@ -39,6 +39,15 @@ proc imgTpl(r: EmailRenderer; src: string): EmailNode =
       h1: text "Img"
       mailImage(src = src, alt = "logo")
 
+proc beyondAltFit(diags: seq[EmailDiagnostic]): seq[EmailDiagnostic] =
+  ## The diagnostics other than the alt-fit warning: the fixtures are a
+  ## couple of pixels wide, narrower than any alt text, so the image
+  ## lowering rightly reports that WebKit cannot show their alt
+  ## (W-IMG-ALT-FIT); these tests are about publishing.
+  for d in diags:
+    if d.code != codeImgAltFit:
+      result.add(d)
+
 var cdnCalls: seq[string]
 
 proc cdnHook(a: AssetRef): string =
@@ -232,7 +241,7 @@ suite "assets":
       upload = cdnHook)
     store.put("brand/logo.png", rgbBytes)
     let res = renderEmail(imgTpl, "brand/logo.png", assets = store)
-    check res.diagnostics.len == 0
+    check beyondAltFit(res.diagnostics).len == 0
     # Published through the store's hook before the HTML was final,
     # and the HTML carries exactly the URL the hook returned.
     check cdnCalls == @["brand/logo.png"]
@@ -256,7 +265,7 @@ suite "assets":
     let path = $asset"fixtures/t6_rgba.png"
     let store = memoryAssetStore("https://assets.example.com")
     let res = renderEmail(imgTpl, path, assets = store)
-    check res.diagnostics.len == 0
+    check beyondAltFit(res.diagnostics).len == 0
     check res.assets.len == 1
     check res.assets[0].bytes == rgbaBytes
     check res.assets[0].url == "https://assets.example.com" & path
@@ -318,6 +327,6 @@ suite "assets":
       upload = badUrlHook)
     good.put("brand/logo.png", rgbBytes)
     let res = renderEmail(imgTpl, "brand/logo.png", assets = good)
-    check res.diagnostics.len == 0
+    check beyondAltFit(res.diagnostics).len == 0
     check res.assets.len == 1
     check "src=\"https://cdn.example.net/ok/logo.png\"" in res.html

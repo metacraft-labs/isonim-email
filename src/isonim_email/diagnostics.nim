@@ -107,6 +107,14 @@ const
   codeA11yContrastDark* = "E-A11Y-CONTRAST"
     ## Text/background pair below threshold in the designed dark scheme
     ## (R-DRK-04). Collected from `passes/lint.lintDarkContrast`.
+  codeImgAltFit* = "W-IMG-ALT-FIT"
+    ## With images off, WebKit shows no alt text for an image whose alt
+    ## does not fit its width on one line (R-IMG-03). Collected from
+    ## `lower/image.nim`.
+  codeAssetFormat* = "E-ASSET-FORMAT"
+    ## WebP or SVG image under a profile that gives Word-engine Outlook
+    ## or Gmail weight (R-IMG-08, R-OL-13). Collected from
+    ## `passes/lint.nim`.
   codeA11yAltLong* = "W-A11Y-ALT-LONG"
     ## Alt longer than 60 characters (R-IMG-04, text-in-image
     ## heuristic). Collected from `passes/lint.nim`.

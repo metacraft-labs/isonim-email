@@ -128,7 +128,18 @@ suite "review brief":
       "a link (R-BTN-02)" in word
     let apple = expectedBlock(getStory("twoColumn"), "apple",
       "desktop", "light")
-    check "- (none)" in apple
+    # WebKit's one declared difference here is how it draws the logo's
+    # alt text with images off (lower/image.nim); nothing degrades
+    # with images on.
+    check "- with images off, WebKit draws an image's alt text from " &
+      "just above the image's box" in apple
+    check "button corners" notin apple
+    # Every brief, backend A's and a real client's, ends with the
+    # standing check that no client excuses: text cut at any edge.
+    check apple.endsWith("Always a defect, in every client: text cut at " &
+      "any edge of the capture (the tops of the first line's letters " &
+      "missing, glyphs on the first or last pixel row or column).\n")
+    check "text cut at any edge of the capture" in fixture
     check "backend A (local engine)" in apple
     # Falsifying mutation, performed + reverted: without the button
     # the label leaves the block; with it (above) it stays.
@@ -203,6 +214,10 @@ suite "review brief":
     # The Fab Four keeps its lower bound there (R-LAY-18's max() width).
     check "a Fab Four row keeps its lower bound" in snappy
     check "shrink to nothing" notin snappy
+    # A real client's brief ends with the same standing edge check.
+    check snappy.endsWith("Always a defect, in every client: text cut " &
+      "at any edge of the capture (the tops of the first line's letters " &
+      "missing, glyphs on the first or last pixel row or column).\n")
 
   test "test_brief_images_off_names_alt_texts":
     let off = expectedBlock(getStory("receipt"), "imagesOff",

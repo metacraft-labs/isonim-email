@@ -45,6 +45,7 @@ import ../style/colors
 import ../style/shorthand
 import ./lint
 import ../target
+import ../lower/text
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -73,9 +74,13 @@ const
   bgAttrCarriers = ["body", "table", "tr", "td", "th"]
     ## Elements whose `bgcolor` mirrors `background-color`.
 
-  textColorCarriers = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]
+  textColorCarriers = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
+    "blockquote", "pre"]
     ## Text elements that always carry an inline `color` (R-TXT-02);
-    ## `td`/`th` carry one when they hold text directly.
+    ## `td`/`th`/`div` carry one when they hold text directly.
+
+  linkColorToken = "color.link"
+    ## The colour of a link in body text (R-TXT-04).
 
   defaultTextColorToken = "color.text.primary"
     ## The theme token a text element without a colour of its own gets.
@@ -498,13 +503,81 @@ proc inheritedTextColor(node: EmailNode; theme: EmailTheme;
   except ThemeError, StyleError:
     discard
 
+proc onlyImages(node: EmailNode): bool =
+  ## True when `node` holds images and nothing else (whitespace aside).
+  var any = false
+  for c in node.children:
+    case c.kind
+    of enText:
+      if c.text.strip().len > 0:
+        return false
+    of enElement:
+      if c.tag notin ["mailImage", "img"]:
+        return false
+      any = true
+    else: discard
+  any
+
+proc linkDefaults(node: EmailNode; theme: EmailTheme; target: EmailTarget;
+                  head: var seq[HeadDecl];
+                  res: var OrderedTable[string, string]) =
+  ## R-TXT-04: every link carries its colour and decoration inline, so
+  ## no client paints its default blue, purple or underline. A link in
+  ## body text is `color.link`, underlined; a link in text the author
+  ## coloured (a footer, a caption) keeps that colour, underlined, the
+  ## way it would inherit it; a link around images only is not
+  ## underlined (the line would show under the image, or under its alt
+  ## text). The author's own values win.
+  defer:
+    if "text-decoration" notin res:
+      res["text-decoration"] = if onlyImages(node): "none" else: "underline"
+  if "color" in res:
+    return
+  let (light, dark) = inheritedTextColor(node, theme, head)
+  var primary = ""
+  try:
+    primary = normaliseColor(theme.lightFor(defaultTextColorToken))
+  except ThemeError, StyleError:
+    discard
+  if light.len > 0 and light != primary:
+    res["color"] = light
+    if target.darkMode == dmDesigned and dark != "" and dark != light:
+      head.add(HeadDecl(variant: "dark", prop: "color", value: dark,
+        node: node, origin: node.origin))
+    return
+  try:
+    let l = normaliseColor(theme.lightFor(linkColorToken))
+    let d = normaliseColor(theme.darkFor(linkColorToken))
+    res["color"] = l
+    if target.darkMode == dmDesigned and d != l:
+      head.add(HeadDecl(variant: "dark", prop: "color", value: d,
+        node: node, origin: node.origin))
+  except ThemeError, StyleError:
+    discard
+
 proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
                   profile: AudienceProfile; head: var seq[HeadDecl];
                   diags: var seq[EmailDiagnostic]) =
   let tag = node.tag.toLowerAscii()
   var entries: seq[(string, string)] = @[]
+  # The text leaves' defaults (`lower/text.nim`, R-TXT-02, R-TXT-09)
+  # come first, so every declaration of the element's own follows and
+  # wins; they normalise like any other declaration.
+  try:
+    for (k, v) in textDefaults(node, theme):
+      entries.add((k, v))
+    for (k, v) in leafDefaults(node, target):
+      entries.add((k, v))
+  except ThemeError as e:
+    diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TXT-02"]))
   for k, v in node.styles.pairs:
     entries.add((k, v))
+  if tag == "mailimage" and
+      node.attrs.getOrDefault("fluid_on_mobile", "").toLowerAscii() == "true":
+    # R-IMG-09: full width below the breakpoint, through a class; the
+    # desktop width stays inline (`lower/image.nim`).
+    entries.add(("@sm:width", "100%"))
+    entries.add(("@sm:max-width", "100%"))
   # The element's font size, for unitless line-height multipliers; unknown
   # or unparseable sizes fall back to the 16px root.
   var fontSizePx = cssRootPx
@@ -577,8 +650,10 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     for (p, v) in normaliseDecl(node, tag, prop, val, fromToken, tkey,
         theme, target, fontSizePx, true, diags):
       res[p] = v
-  if "color" notin res and (tag in textColorCarriers or
-      (tag in ["td", "th"] and holdsText(node))):
+  if tag == "a":
+    linkDefaults(node, theme, target, head, res)
+  elif "color" notin res and (tag in textColorCarriers or
+      (tag in ["td", "th", "div", "mailtext"] and holdsText(node))):
     # R-TXT-02: a text element never relies on an inherited colour. A
     # client whose dark scheme or theme supplies a light default text
     # colour (SnappyMail's dark themes, WebKit under `color-scheme:

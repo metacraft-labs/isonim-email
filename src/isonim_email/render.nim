@@ -304,10 +304,12 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   for c in kids:
     r.appendChild(sections, c)
   let lowered = lowerDocument(work, sections, headRes.blocks, target)
-  # P10 over what is emitted: the closed mso-* list (R-OL-15) and the
-  # layout-table depth outside Outlook conditionals (R-TBL-15).
+  # P10 over what is emitted: the closed mso-* list (R-OL-15), the
+  # layout-table depth outside Outlook conditionals (R-TBL-15) and no
+  # sectioning element (R-A11Y-10).
   diags.add(lintMsoProperties(lowered))
   diags.add(lintTableDepth(lowered))
+  diags.add(lintSectioning(lowered))
   # The breakdown is counted while the bytes are written (R-SIZE-02),
   # so it partitions the document exactly.
   let (html, sizeBreakdown) = serializeDocumentMeasured(lowered)

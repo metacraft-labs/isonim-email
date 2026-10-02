@@ -49,6 +49,39 @@ proc noteDegradations(n: EmailNode; p: NoteProps;
 defineMailPattern(mailNote, NoteProps, noteExpand, noteExpected,
   noteDegradations)
 
+type BandProps = object
+  heading: string
+
+proc bandExpand(n: EmailNode; p: BandProps; ctx: ExpandCtx): EmailNode =
+  ## A band pattern: its expansion is a section of its own.
+  let r = ctx.r
+  result = r.createElement("mailSection")
+  r.setStyle(result, "background-color", "#eff6ff")
+  let h = r.createElement("h2")
+  r.setTextContent(h, p.heading)
+  r.appendChild(result, h)
+  let slot = n.children # Copy: appendChild detaches as it moves.
+  for c in slot:
+    r.appendChild(result, c)
+
+proc bandExpected(n: EmailNode; p: BandProps; view: BriefView): seq[string] =
+  @["Band \"" & p.heading & "\": a tinted section."]
+
+proc bandDegradations(n: EmailNode; p: BandProps;
+    view: BriefView): seq[string] =
+  @[]
+
+defineMailPattern(mailTestBand, BandProps, bandExpand, bandExpected,
+  bandDegradations)
+
+proc tagline(n: EmailNode; p: BandProps; ctx: ExpandCtx): EmailNode =
+  ## A loose pattern: its expansion is a paragraph.
+  result = ctx.r.createElement("p")
+  ctx.r.setTextContent(result, p.heading)
+
+defineMailPattern(mailTestTagline, BandProps, tagline, bandExpected,
+  bandDegradations)
+
 proc noteTpl(r: EmailRenderer; title: string): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Notes"):
@@ -227,3 +260,54 @@ suite "the brief reads the declarations":
       "desktop", "light")
     let snappy = clientExpectedBlock(side, "snappymail", "desktop", "light")
     check "no gap" in snappy
+
+suite "patterns at the top of a document":
+  # rule: R-LAY-08
+  proc topDoc(build: proc(r: EmailRenderer; d: EmailNode)): EmailNode =
+    let r = EmailRenderer()
+    result = r.el(nil, "mailDocument", [("lang", "en"), ("dir", "ltr"),
+      ("title", "Bands")])
+    discard r.el(r.el(result, "mailSection"), "h1", text = "Bands")
+    build(r, result)
+
+  test "test_band_pattern_stays_a_top_level_band":
+    # A pattern whose expansion is a section, placed directly in the
+    # document, is a band: the implicit section of loose content (which
+    # runs after expansion) does not wrap it.
+    let doc = topDoc(proc(r: EmailRenderer; d: EmailNode) =
+      let b = r.el(d, "mailTestBand", [("heading", "News")])
+      discard r.el(b, "p", text = "Inside the band"))
+    let res = renderTree(doc)
+    check not hasErrors(res.diagnostics)
+    check res.semantic.children.len == 2
+    check res.semantic.children[1].tag == "mailTestBand"
+    # One 600px section of its own: a section in a section would be a
+    # 552px band inside the 600px one, padded twice.
+    let band = res.semantic.children[1].children[0]
+    check band.tag == "mailSection"
+    check band.layout.outer == 600
+    check res.html.count("max-width:600px;") == 2
+    check "max-width:552px;" notin res.html
+
+  test "test_loose_pattern_is_wrapped":
+    let doc = topDoc(proc(r: EmailRenderer; d: EmailNode) =
+      discard r.el(d, "mailTestTagline", [("heading", "Loose words")]))
+    let res = renderTree(doc)
+    check not hasErrors(res.diagnostics)
+    check res.semantic.children[1].tag == "mailSection"
+    check res.semantic.children[1].children[0].tag == "mailTestTagline"
+    check "padding:24px;font-size:16px;text-align:left;direction:ltr;\">" &
+      "<p " in res.html
+
+  test "test_section_in_a_section_through_a_pattern_errors":
+    let doc = topDoc(proc(r: EmailRenderer; d: EmailNode) =
+      let s = r.el(d, "mailSection")
+      discard r.el(s, "mailTestBand", [("heading", "Nested")]))
+    let res = renderTree(doc)
+    var found: seq[EmailDiagnostic] = @[]
+    for d in res.diagnostics:
+      if d.code == codeStructNesting:
+        found.add(d)
+    check found.len == 1
+    check "mailTestBand" in found[0].message
+    check found[0].rules == @["R-LAY-16"]

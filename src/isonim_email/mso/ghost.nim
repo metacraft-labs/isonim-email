@@ -227,3 +227,21 @@ proc msoZwnj*(): EmailNode =
   ## image. Only Word needs it; elsewhere a character after a block
   ## image would open a line of its own under it.
   newMsoIf("mso", @[raw("&zwnj;")])
+
+proc ghostDivider*(width: int; border, align: string): EmailNode =
+  ## A divider's line for Word (MJML `mj-divider`): `<!--[if mso]><table
+  ## role="presentation" align="{align}" border="0" cellpadding="0"
+  ## cellspacing="0" width="{w}" style="width:{w}px;border-top:{border};"><tr><td
+  ## style="height:0;font-size:0;line-height:0;…">&nbsp;</td></tr></table><![endif]-->`.
+  ## A table with a px width, because Word ignores a paragraph's width
+  ## and draws its border across the whole cell.
+  var attrs = @[("role", "presentation")]
+  if align in ["center", "right"]:
+    attrs.add(("align", align))
+  attrs.add([("border", "0"), ("cellpadding", "0"), ("cellspacing", "0"),
+    ("width", $width), ("style", "width:" & $width & "px;border-top:" &
+      border & ";")])
+  let td = tagText("td", [("aria-hidden", "true"), ("style",
+    "height:0;font-size:0;line-height:0;mso-line-height-rule:exactly;")])
+  newMsoIf("mso", @[raw(tagText("table", attrs) & "<tr>" & td &
+    "&nbsp;</td></tr></table>")])

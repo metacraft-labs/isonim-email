@@ -88,7 +88,10 @@ suite "renderEmail returns the rendered record":
     # The semantic tree keeps its children and resolved values.
     check res.semantic.tag == "mailDocument"
     check res.semantic.attrs["title"] == "Hello"
-    let h1 = res.semantic.children[0]
+    # The template's heading sits directly in the document, so it is in
+    # the implicit section that holds the document's loose content.
+    check res.semantic.children[0].tag == "mailSection"
+    let h1 = res.semantic.children[0].children[0]
     check h1.tag == "h1"
     check h1.children[0].text == "Hello, Ada"
     check "data-hk" notin res.html

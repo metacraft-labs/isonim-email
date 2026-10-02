@@ -132,6 +132,9 @@ const emailTestSpecs = @[
   "t5_scaffolding",
   "t5_columns",
   "t5_primitives",
+  "t5_text",
+  "t5_images",
+  "t5_leaves",
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",
@@ -169,6 +172,11 @@ const emailTestSpecs = @[
   # Chromium like the e2e actions above (same expected engine defect;
   # `repro test` was not re-run for it).
   "e2e_local_primitives",
+  # Added with the content leaves: spawns node and the pinned browsers
+  # like the e2e actions above (same expected engine defect; `repro
+  # test` was not re-run for it).
+  "e2e_local_images_off",
+  "e2e_local_text_edges",
 ]
 
 package isonim_email:

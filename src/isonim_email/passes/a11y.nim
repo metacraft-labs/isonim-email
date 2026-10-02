@@ -12,7 +12,9 @@
 ##   (R-A11Y-05; its dark-swap duplicates are not handled yet, because
 ##   `mailImage` `dark_src` has no lowering to produce them);
 ## - `mailDocument` `lang`/`dir` copied onto the article wrapper div when
-##   absent (R-A11Y-01).
+##   absent (R-A11Y-01);
+## - `scope` on every `th` lacking it (R-A11Y-09): `col` in a `thead` or
+##   in a row of header cells only, else `row`.
 ##
 ## Backfills only add missing attributes, never overwrite author values,
 ## and never reorder children. No other checks.
@@ -54,6 +56,20 @@ proc isDecorativeVml(node: EmailNode): bool =
   ## it carries an explicitly empty `alt`.
   node.attrs.getOrDefault("decorative", "").toLowerAscii() == "true" or
     ("alt" in node.attrs and node.attrs["alt"].len == 0)
+
+proc thScope(th: EmailNode): string =
+  ## R-A11Y-09: a header cell in a `thead`, or in a row of header cells
+  ## only, heads its column; any other heads its row.
+  let row = th.parent
+  if row == nil:
+    return "col"
+  if row.parent != nil and row.parent.kind == enElement and
+      row.parent.tag == "thead":
+    return "col"
+  for c in row.children:
+    if c.kind == enElement and c.tag == "td":
+      return "row"
+  "col"
 
 proc findFirst(root: EmailNode;
                pred: proc(n: EmailNode): bool): EmailNode =
@@ -117,6 +133,9 @@ proc applyA11y*(root: EmailNode): seq[EmailDiagnostic] =
             "plus a caption)",
           origin: node.origin, rules: @["R-A11Y-02"],
         ))
+    if node.kind == enElement and node.tag == "th" and
+        "scope" notin node.attrs:
+      node.attrs["scope"] = thScope(node)
     if node.kind == enVml and isDecorativeVml(node) and
         "aria-hidden" notin node.attrs:
       node.attrs["aria-hidden"] = "true"

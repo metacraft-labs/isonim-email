@@ -832,7 +832,12 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     );
     // Ids are prefixed like classes; inline styles are kept, re-spaced.
     assert.match(rc, /#message-htmlpart1 div\.rcmBody #v1outlook a\{/);
-    assert.match(rc, /<h1 class="v1e-[0-9a-z]+" style="color: #111111">/);
+    // (The heading's inline style is its colour plus the text leaves'
+    // defaults: margin, family, type, weight, Word's line-height rule.)
+    assert.match(
+      rc,
+      /<h1 class="v1e-[0-9a-z]+" style="margin: 0 0 16px; font-family: Helvetica, Arial, sans-serif; font-size: 28px; line-height: 36px; font-weight: 700; overflow-wrap: break-word; color: #111111; mso-line-height-rule: exactly">/,
+    );
     // (Text pixels in the paragraph's own #111827 colour count a few
     // hundred; its dark background, where applied, tens of thousands.)
     assert.ok(

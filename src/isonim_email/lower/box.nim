@@ -14,7 +14,9 @@
 ##
 ## - A radius needs `border-collapse:separate` on the table (R-TBL-16),
 ##   written `!important` because the reset collapses every table with
-##   `!important`; Word draws it square.
+##   `!important`; Word draws it square. The cell sets `collapse` again,
+##   so a table nested in it (a data table) does not inherit `separate`
+##   where no head CSS collapses it.
 ## - The cell breaks long unbroken words (`word-break:break-word`,
 ##   R-TBL-17).
 ## - A shadow is decoration only: Gmail web, Word and Yahoo draw none,
@@ -117,6 +119,11 @@ proc lowerBox*(node: EmailNode; ctx: LowerCtx):
     r.setStyle(td, "border", border)
   if radius.len > 0:
     r.setStyle(td, "border-radius", radius)
+    # `border-collapse` inherits: without head CSS (the reset collapses
+    # every table) a table nested in the cell would take the box's
+    # `separate` and space its cells apart. The cell hands its content
+    # `collapse` back.
+    r.setStyle(td, "border-collapse", "collapse")
   if shadow.len > 0:
     r.setStyle(td, "box-shadow", shadow)
   # A long unbroken word breaks inside the cell instead of overflowing

@@ -149,6 +149,32 @@ proc checkGrid(node: EmailNode; diags: var seq[EmailDiagnostic]) =
         "per row on a phone (layout-patterns.md §3.4)",
       origin: node.origin))
 
+proc checkBandNesting(node: EmailNode; acc: var seq[EmailDiagnostic]) =
+  ## A band sits in the document, a section also in a wrapper (R-LAY-16,
+  ## R-LAY-17): a section inside a section, or a wrapper inside any
+  ## band, is `E-STRUCT-NESTING`. The template check stops it when the
+  ## author writes it; a pattern whose expansion is a band, placed in a
+  ## band, reaches here only (the pattern element hides the nesting).
+  var a = node.parent
+  var through = ""
+  while a != nil:
+    if a.kind == enElement:
+      if a.tag == "mailSection" or
+          (a.tag == "mailWrapper" and node.tag == "mailWrapper"):
+        acc.add(EmailDiagnostic(severity: sevError,
+          code: codeStructNesting,
+          message: "<" & node.tag & "> inside <" & a.tag & ">" &
+            (if through.len > 0: " (through the pattern <" & through &
+              ">, whose expansion is a band)" else: "") &
+            ": bands sit in the document, sections also in a wrapper",
+          origin: node.origin, rules: @["R-LAY-16"]))
+        return
+      if a.tag == "mailDocument":
+        return
+      if a.expanded and through.len == 0:
+        through = a.tag
+    a = a.parent
+
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
   ## result means the tree is structurally valid.
@@ -197,6 +223,8 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
       checkReversal(node, result)
     if node.kind == enElement and node.tag == "mailGrid":
       checkGrid(node, result)
+    if node.kind == enElement and node.tag in ["mailSection", "mailWrapper"]:
+      checkBandNesting(node, result)
     if node.kind == enRaw and not insideMailRaw(node):
       let within =
         if node.parent != nil and node.parent.kind == enElement:

@@ -104,7 +104,9 @@ suite "tokens resolve to light literals inline":
 
 suite "variant keys split out of inline for P6":
   test "test_variant_keys_split_out":
-    let p = styled("p", [("color", "#111827"), ("@sm:padding", "8"),
+    # A span: block text elements also get their type defaults inline
+    # (lower/text.nim), which would crowd the count checked here.
+    let p = styled("span", [("color", "#111827"), ("@sm:padding", "8"),
       ("@dark:color", "white"), ("@hover:text-decoration", "underline")])
     let (head, diags) = applyStyles(p, defaultTheme(), defaultTarget())
     check diags.len == 0
@@ -121,8 +123,9 @@ suite "variant keys split out of inline for P6":
       check h.node == p
     # A head-bound flex is kept, not removed: Word ignores head rules
     # entirely, so it cannot collapse anything (the lint precedent).
-    # (A div: a text element would also get its default inline colour.)
-    let q = styled("div", [("@sm:display", "flex")])
+    # (A span: a text element or a div would also get its default
+    # inline colour and type.)
+    let q = styled("span", [("@sm:display", "flex")])
     let (qHead, qDiags) = applyStyles(q, defaultTheme(), defaultTarget())
     check qDiags.len == 0
     check q.styles.len == 0
@@ -174,6 +177,7 @@ suite "dark variants resolve tokens to their dark literal":
 
 suite "margins convert to cell padding":
   test "test_margins_convert_to_cell_padding":
+    # rule: R-OL-04
     let inner = styled("div", [("margin", "8px 0")])
     let cell = styled("td", [("padding", "10px")], inner)
     let (head, diags) = applyStyles(cell, defaultTheme(), defaultTarget())
@@ -298,9 +302,9 @@ suite "harmful display is removed with its R-OL-10 severity":
 suite "custom properties never reach output":
   test "test_no_var_anywhere":
     # rule: R-CSS-11
-    # Divs: a text element would also get its default inline colour
-    # once the var() colour is removed.
-    let p = styled("div", [("color", "var(--ink)"), ("--ink", "#111827"),
+    # Spans: a text element or a div would also get its default inline
+    # colour and type once the var() colour is removed.
+    let p = styled("span", [("color", "var(--ink)"), ("--ink", "#111827"),
       ("width", "var (--w)")])
     let (head, diags) = applyStyles(p, defaultTheme(), defaultTarget())
     check p.styles.len == 0
@@ -314,7 +318,7 @@ suite "custom properties never reach output":
     check "var(" notin allStyleText(p)
     # Variant values are rejected the same way (P6's serialiser would
     # otherwise pass the parens through into a head block).
-    let q = styled("div", [("@sm:color", "var(--x)")])
+    let q = styled("span", [("@sm:color", "var(--x)")])
     let (qHead, qDiags) = applyStyles(q, defaultTheme(), defaultTarget())
     check qHead.len == 0
     check q.styles.len == 0

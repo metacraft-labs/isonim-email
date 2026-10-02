@@ -813,6 +813,11 @@ proc solveNode(node: EmailNode; context: float; s: Solve; rtl: bool;
     for c in node.children:
       solveNode(c, float(node.layout.box), s, rtl, diags)
   else:
+    if tag in ["mailImage", "mailDivider", "mailSpacer", "mailText"]:
+      # Content leaves keep the width they sit in (not `solved`: they
+      # lay out nothing of their own): a fluid image's and a divider's
+      # Word width.
+      node.layout.container = int(context)
     for c in node.children:
       solveNode(c, context, s, rtl, diags)
 

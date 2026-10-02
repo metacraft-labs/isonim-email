@@ -105,7 +105,11 @@ suite "mailBox":
     # !important`.
     check "style=\"border-collapse:separate !important;\"><tr><td " &
       "style=\"padding:12px 16px;border:1px solid #9ca3af;" &
-      "border-radius:8px;word-break:break-word;overflow-wrap:break-word;\"><p" in res.html
+      "border-radius:8px;border-collapse:collapse;word-break:break-word;" &
+      "overflow-wrap:break-word;\"><p" in res.html
+    # The cell hands its content `collapse` back: `border-collapse`
+    # inherits, and without head CSS a data table nested in the box
+    # would space its cells apart.
     # A real table everyone sees: no ghost table around it.
     check "border-collapse:collapse" notin msoPayload(res.html)
     # The content box: 552 less the padding.
@@ -248,8 +252,10 @@ suite "mailGrid":
       let res = renderTree(doc)
       noErrors(res)
       let mso = msoPayload(res.html)
-      # The last row in a ghost table of its own, no spacer cells.
-      check mso.count("</td></tr></table><table role=\"presentation\"") == 1
+      # The last row in a ghost table of its own, no spacer cells. (The
+      # other match is the heading's implicit section closing before the
+      # grid's section opens.)
+      check mso.count("</td></tr></table><table role=\"presentation\"") == 2
       check "aria-hidden=\"true\" style=\"width:" notin mso
       if lastRow == "center":
         check "<table role=\"presentation\" align=\"center\" border=\"0\"" in

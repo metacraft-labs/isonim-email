@@ -695,7 +695,7 @@ proc relativeLuminance(c: Rgba): float =
   0.2126 * channelLuminance(c.r) + 0.7152 * channelLuminance(c.g) +
     0.0722 * channelLuminance(c.b)
 
-proc contrastRatio(a, b: Rgba): float =
+proc contrastRatio*(a, b: Rgba): float =
   ## WCAG contrast of two opaque colours, 1..21.
   let hi = max(relativeLuminance(a), relativeLuminance(b))
   let lo = min(relativeLuminance(a), relativeLuminance(b))
@@ -899,6 +899,50 @@ proc lintAltLength(node: EmailNode): seq[EmailDiagnostic] =
       origin: node.origin, rules: @["R-IMG-04"],
     )]
   @[]
+
+proc imageFormat*(src: string): string =
+  ## The format an image source names by its extension (`webp`, `svg`,
+  ## `png`, …; a `data:` URI by its media type), "" when it names none.
+  ## Query and fragment are ignored.
+  var s = src.strip().toLowerAscii()
+  if s.startsWith("data:image/"):
+    let e = s.find({';', ','})
+    let t = if e > 0: s["data:image/".len ..< e] else: s["data:image/".len .. ^1]
+    return if t.startsWith("svg"): "svg" else: t
+  for cut in ['?', '#']:
+    let i = s.find(cut)
+    if i >= 0:
+      s = s[0 ..< i]
+  let slash = s.rfind('/')
+  let dot = s.rfind('.')
+  if dot > slash and dot >= 0:
+    return s[dot + 1 .. ^1]
+  ""
+
+proc lintImageFormat(node: EmailNode;
+    profile: AudienceProfile): seq[EmailDiagnostic] =
+  ## R-IMG-08, R-OL-13: WebP and SVG images are errors under a profile
+  ## that gives Word-engine Outlook or Gmail (web, app, or with another
+  ## provider's account) any weight: neither shows them.
+  if node.kind != enElement or node.tag notin ["mailImage", "img"]:
+    return @[]
+  let fmt = imageFormat(node.attrs.getOrDefault("src", ""))
+  if fmt notin ["webp", "svg"]:
+    return @[]
+  var fams: set[ClientFamily] = {}
+  var weight = 0.0
+  for f in [cfOutlookWord, cfGmailWeb, cfGmailApp, cfGanga]:
+    if profile.weights[f] > 0:
+      fams.incl(f)
+      weight += profile.weights[f]
+  if fams == {}:
+    return @[]
+  @[EmailDiagnostic(severity: sevError, code: codeAssetFormat,
+    message: "<" & node.tag & "> is " & fmt.toUpperAscii() & ", which " &
+      "Word-engine Outlook and Gmail do not show (R-IMG-08); use PNG, " &
+      "JPEG or GIF",
+    origin: node.origin, families: fams, weight: weight,
+    rules: @["R-IMG-08", "R-OL-13"])]
 
 # ----------------------------------------------------------------------------
 # Construction checks (R-TBL-01, R-TBL-06, R-TBL-15, R-OL-15)
@@ -1139,6 +1183,31 @@ proc lintDepthImpl(node: EmailNode; depth: int; wrapperSeen: bool;
   for c in node.children:
     lintDepthImpl(c, d, seen, acc)
 
+const sectioningElements* = ["nav", "main", "article", "section",
+  "header", "footer", "aside", "details", "summary"]
+  ## R-A11Y-10: never emitted (Gmail rewrites some to `<u>`, others
+  ## strip them).
+
+proc lintSectioningImpl(node: EmailNode; acc: var seq[EmailDiagnostic]) =
+  if node == nil:
+    return
+  if node.kind == enElement and
+      node.tag.toLowerAscii() in sectioningElements:
+    acc.add(EmailDiagnostic(severity: sevError, code: codeA11ySectioning,
+      message: "<" & node.tag.toLowerAscii() & "> in the emitted " &
+        "document (R-A11Y-10: sectioning elements are never emitted; " &
+        "landmarks are a role on a presentation table)",
+      origin: node.origin, rules: @["R-A11Y-10"]))
+  for c in node.children:
+    lintSectioningImpl(c, acc)
+
+proc lintSectioning*(root: EmailNode): seq[EmailDiagnostic] =
+  ## R-A11Y-10 over a lowered document: a sectioning element anywhere
+  ## in what is emitted, Outlook conditionals included, is an error,
+  ## whoever produced it (the template check stops authors; this one
+  ## stops a lowering or an expansion).
+  lintSectioningImpl(root, result)
+
 proc lintTableDepth*(root: EmailNode): seq[EmailDiagnostic] =
   ## R-TBL-15 over a lowered document: more than three levels of
   ## layout tables (`role="presentation"`) outside Outlook conditionals,
@@ -1173,6 +1242,7 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     result.add(lintLinkText(node))
     result.add(lintContrast(node, ancestors))
     result.add(lintAltLength(node))
+    result.add(lintImageFormat(node, profile))
     result.add(lintRagged(node))
     result.add(lintTapSpacing(node))
   of enHeadStyle:

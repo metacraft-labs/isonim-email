@@ -159,9 +159,11 @@ proc splitBackground*(value: string): tuple[color, rest: string] =
 
 proc isBlockTextElement*(tag: string): bool =
   ## The elements that may carry vertical margins (R-OL-04): `p`,
-  ## `h1`–`h6`, `ul`/`ol`. P5 converts every other margin into cell
-  ## padding with `W-LAYOUT-MARGIN-CONVERTED`.
-  tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol"]
+  ## `h1`–`h6`, `ul`/`ol`, and the text blocks whose defaults carry one
+  ## (`li`, R-TXT-09; `blockquote`, `pre`, R-TXT-02). P5 converts every
+  ## other margin into cell padding with `W-LAYOUT-MARGIN-CONVERTED`.
+  tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
+    "blockquote", "pre"]
 
 proc parseMargin*(value: string): array[4, string] =
   ## Margin sides with R-OL-04's shape: no negatives, no `auto`

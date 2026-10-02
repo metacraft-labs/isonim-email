@@ -9,7 +9,9 @@
 ## (`mailColumn`, `mailGroup` and `mailColumns`: `lower/column.nim`),
 ## the layout primitives (`mailBox`, `mailGrid`, `mailCluster`,
 ## `mailSidebar`: `lower/box.nim`, `grid.nim`, `cluster.nim`,
-## `sidebar.nim`), `mailImage` (`lower/image.nim`), and every expanded
+## `sidebar.nim`), `mailImage` (`lower/image.nim`), the content leaves
+## `mailSpacer`, `mailDivider` and `mailText` (`lower/leaves.nim`), and
+## every expanded
 ## pattern (`patterns.nim`), which leaves its expansion in its place.
 ## `mailDocument` is lowered separately, around
 ## the result, by `lower/document.nim`.
@@ -52,6 +54,7 @@ import ./box
 import ./grid
 import ./cluster
 import ./sidebar
+import ./leaves
 import ../passes/layout
 import ../patterns
 import ../target
@@ -62,7 +65,8 @@ const affects*: set[ClientFamily] = allFamilies
 
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
   "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
-  "mailGrid", "mailCluster", "mailSidebar"]
+  "mailGrid", "mailCluster", "mailSidebar", "mailSpacer", "mailDivider",
+  "mailText"]
   ## Elements this pass lowers (plus every expanded pattern, which it
   ## replaces by its expansion).
 const loweredElsewhere* = ["mailDocument"]
@@ -109,9 +113,28 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
     if c == nil:
       continue
     if c.kind == enElement and c.tag == "mailImage":
-      let (lowered, found) = lowerImage(c, ctx.theme, assets)
+      let (lowered, found) = lowerImage(c, ctx.theme, assets, ctx.target)
       diags.add(found)
-      replaceChild(parent, c, @[lowered])
+      replaceChild(parent, c, lowered)
+    elif c.kind == enElement and c.tag == "blockquote":
+      # R-TXT-11: webmails fold a `blockquote` away as quoted mail
+      # (SnappyMail hides it behind a toggle); the quotation keeps its
+      # styles on a `div`.
+      c.tag = "div"
+      walk(c, ctx, assets, diags)
+    elif c.kind == enElement and c.tag == "mailSpacer":
+      let (nodes, found) = lowerSpacer(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+    elif c.kind == enElement and c.tag == "mailDivider":
+      let (nodes, found) = lowerDivider(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+    elif c.kind == enElement and c.tag == "mailText":
+      let (nodes, inner, found) = lowerText(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      walk(inner, ctx, assets, diags)
     elif c.kind == enElement and c.tag == "mailSection":
       let (band, found) = lowerSection(c, ctx)
       diags.add(found)

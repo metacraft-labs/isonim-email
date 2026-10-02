@@ -78,6 +78,17 @@ proc nonMsoTables(html: string): int =
 
 const ghostClose = "<!--[if mso]></td></tr></table><![endif]-->"
 
+const textType = "font-family:Helvetica, Arial, sans-serif;"
+  ## The text leaves' default family (lower/text.nim, R-TXT-02).
+const h1Last = "margin:0;" & textType & "font-size:28px;" &
+  "line-height:36px;font-weight:700;overflow-wrap:break-word;" &
+  "color:#111827;mso-line-height-rule:exactly;"
+  ## A lone `h1`'s inline defaults: no bottom margin as its block's last
+  ## child, the theme's h1 type and the inherited colour.
+const pItem = "margin:0;" & textType & "font-size:16px;line-height:24px;" &
+  "overflow-wrap:break-word;color:#111827;mso-line-height-rule:exactly;"
+  ## A `p` that is a stack item: no margin (the stack's gap spaces it).
+
 suite "mailSection lowers div-first":
   test "test_section_div_first_with_ghost_table":
     # The default section: padding 24px 0 plus the implicit column's
@@ -96,7 +107,7 @@ suite "mailSection lowers div-first":
       "<div style=\"margin:0 auto;max-width:600px;" &
       "background-color:#ffffff;\"><div align=\"left\" " &
       "style=\"padding:24px;font-size:16px;text-align:left;" &
-      "direction:ltr;\"><h1 style=\"color:#111827;\">Title</h1></div>" &
+      "direction:ltr;\"><h1 style=\"" & h1Last & "\">Title</h1></div>" &
       "</div>" & ghostClose
     # R-TBL-01: the scaffolding adds no table outside the conditionals;
     # the one left is the document's wrapper.
@@ -114,8 +125,10 @@ suite "mailSection lowers div-first":
     let withWord = build(true)
     let without = build(false)
     check "<!--[if" notin without
-    check without ==
-      withWord.replace(ghostClose, "").split("<![endif]-->", 1)[1]
+    # Without Word, no `mso-*` declaration either (R-OL-06's rule rides
+    # with each px line height only for Word).
+    check without == withWord.replace(ghostClose, "").replace(
+      "mso-line-height-rule:exactly;", "").split("<![endif]-->", 1)[1]
 
   test "test_single_column_padding_merges":
     # Section 24px 0 plus column 0 24px is 24px on the div and the ghost
@@ -275,7 +288,7 @@ suite "mailWrapper lowers as a band around its sections":
       "style=\"width:560px;\"><tr><td style=\"padding:12px 24px;\">" &
       "<![endif]--><div style=\"margin:0 auto;max-width:560px;\">" &
       "<div align=\"left\" style=\"padding:12px 24px;font-size:16px;" &
-      "text-align:left;direction:ltr;\"><h1 style=\"color:#111827;\">" &
+      "text-align:left;direction:ltr;\"><h1 style=\"" & h1Last & "\">" &
       "Title</h1></div></div>" & ghostClose & "</div></div>" & ghostClose
 
   test "test_wrapper_border_mirrors_and_narrows":
@@ -311,7 +324,8 @@ suite "mailStack: gaps are padding and spacer rows":
     let html = content(res.html)
     check "<div align=\"left\" style=\"text-align:left;\"><h1 " in html
     check (spacer & "<div align=\"left\" style=\"padding-top:20px;" &
-      "text-align:left;\"><p style=\"color:#111827;\">Second</p></div>") in html
+      "text-align:left;\"><p style=\"" & pItem & "\">Second</p></div>") in
+      html
     check html.count(spacer) == 2
     # The stack leaves no element of its own, and no gap CSS.
     check "<mailstack" notin res.html.toLowerAscii()

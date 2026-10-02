@@ -23,3 +23,11 @@ proc fixtureImageUrl*(name: static string): string =
   ## The hosted URL of `tests/stories/assets/<name>`.
   const bytes = staticRead("assets/" & name)
   fixtureHost & hostedPath(loadAsset(name, bytes))
+
+proc fixtureImageHeight*(name: static string; width: int): string =
+  ## The px height of `tests/stories/assets/<name>` shown `width` px
+  ## wide (its aspect kept), for a story's `height` prop: an image whose
+  ## height is known gets the alt-text box rules that need it.
+  const bytes = staticRead("assets/" & name)
+  let a = loadAsset(name, bytes)
+  $int(float(width) * float(a.height) / float(a.width) + 0.5) & "px"

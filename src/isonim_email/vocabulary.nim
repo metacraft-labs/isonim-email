@@ -146,6 +146,7 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("border", akStyle, "Border"),
         attr("padding", akStyle, "Box"),
         attr("width", akStyle, "Len"),
+        attr("align", akAttr, "Align"),
       ]),
       TagDef(name: "mailTable", attrs: @[
         attr("caption", akAttr, "string"),
