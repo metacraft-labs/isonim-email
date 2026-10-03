@@ -2,7 +2,8 @@
 ##
 ## `e2e_local_text_not_clipped_at_the_top` renders the seed stories
 ## (canary, receipt, alert), the content leaves' stories, the buttons'
-## stories and the layout primitives' stories, and loads each in the pinned Chromium, WebKit
+## stories, the layout primitives' stories, and the data tables',
+## navigation and raw-markup and targeting stories, and loads each in the pinned Chromium, WebKit
 ## and Firefox at a phone (375 px at 3×) and a desktop width
 ## (`tools/capture/edge_ink.ts`): the first two device-pixel rows of
 ## every page hold no ink, only the background of whatever band starts
@@ -19,6 +20,9 @@ import stories/email_stories
 import stories/seed_primitives
 import stories/seed_leaves
 import stories/seed_buttons
+import stories/seed_table
+import stories/seed_navigation
+import stories/seed_raw
 
 const repoRoot = parentDir(parentDir(currentSourcePath()))
 
@@ -47,6 +51,12 @@ suite "text at the edges":
       writeFile(work / s.name & ".html", renderPrimitiveStory(s.name).html)
     for s in buttonStories:
       writeFile(work / s.name & ".html", renderButtonStory(s.name).html)
+    for s in tableStories:
+      writeFile(work / s.name & ".html", renderTableStory(s.name).html)
+    for s in navigationStories:
+      writeFile(work / s.name & ".html", renderNavigationStory(s.name).html)
+    for s in rawStories:
+      writeFile(work / s.name & ".html", renderRawStory(s.name).html)
     let outFile = work / "edges.json"
     let (output, code) = execCmdEx("node " & quoteShell(repoRoot /
       "tools/capture/edge_ink.ts") & " " & quoteShell(work) & " " &
@@ -55,7 +65,8 @@ suite "text at the edges":
     check code == 0
     let pages = parseJson(readFile(outFile))
     check pages.len == (3 + leafStories.len + primitiveStories.len +
-      buttonStories.len) * 3 * 2
+      buttonStories.len + tableStories.len + navigationStories.len +
+      rawStories.len) * 3 * 2
     for page in pages:
       checkpoint($page)
       check page["inkTop"].getInt == 0

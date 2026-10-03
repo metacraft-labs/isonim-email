@@ -69,15 +69,16 @@ const altStyle = "font-family:Helvetica, Arial, sans-serif;" &
 
 suite "elements without a lowering are errors, never raw tags":
   test "test_unlowered_elements_error_and_keep_their_content":
-    # `mailHero` and `mailNavbar` have no lowering yet (the section and
-    # the button that stood here have one now: tests/t5_scaffolding.nim,
-    # tests/t5_button.nim).
+    # `mailHero` and `textOnly` have no lowering yet (the section, the
+    # button and the navbar that stood here have one now:
+    # tests/t5_scaffolding.nim, tests/t5_button.nim,
+    # tests/t5_navigation.nim).
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
       let hero = r.createElement("mailHero")
       let p = r.createElement("p")
       r.setTextContent(p, "Inside the section")
       r.appendChild(hero, p)
-      let nav = r.createElement("mailNavbar")
+      let nav = r.createElement("textOnly")
       r.setTextContent(nav, "Open dashboard")
       r.appendChild(hero, nav)
       r.appendChild(doc, hero))
@@ -85,10 +86,10 @@ suite "elements without a lowering are errors, never raw tags":
     check codesOf(res.diagnostics) == @[codeLowerMissing, codeLowerMissing]
     check hasErrors(res.diagnostics)
     check "<mailHero>" in res.diagnostics[0].message
-    check "<mailNavbar>" in res.diagnostics[1].message
+    check "<textOnly>" in res.diagnostics[1].message
     # Never a raw custom tag, in any spelling.
     check "<mailhero" notin res.html.toLowerAscii()
-    check "<mailnavbar" notin res.html.toLowerAscii()
+    check "<textonly" notin res.html.toLowerAscii()
     # The content survives, so the output stays inspectable.
     check "Inside the section" in res.html
     check "Open dashboard" in res.html
@@ -98,27 +99,30 @@ suite "elements without a lowering are errors, never raw tags":
   test "test_every_vocabulary_element_without_a_lowering_errors":
     # Every non-leaf vocabulary element other than the ones with a
     # lowering, plus a pattern-shaped tag the vocabulary does not know.
+    # Patterns lower by their expansion (mailSocial, mailNavbar and
+    # their items: tests/t5_navigation.nim), so they are not listed.
     let lowered = @loweredHere & @loweredElsewhere
     check lowered.sorted() == @["mailBox", "mailButton", "mailCluster",
       "mailColumn", "mailColumns", "mailDivider", "mailDocument", "mailGrid", "mailGroup",
-      "mailImage", "mailSection", "mailSidebar", "mailSpacer", "mailStack",
-      "mailText", "mailWrapper"]
+      "mailIf", "mailImage", "mailRaw", "mailSection", "mailSidebar",
+      "mailSpacer", "mailStack", "mailTable", "mailText", "mailWrapper"]
     var nonLeaf = 0
+    var expandedOnly = 0
     var tags: seq[string] = @[]
     for t in buildEmailVocabulary().tags:
       if not t.allowAnyStyle:
         inc nonLeaf
-        if t.name notin lowered:
+        if t.name notin lowered and isPattern(t.name):
+          inc expandedOnly
+        elif t.name notin lowered:
           tags.add(t.name)
     tags.add("mailCard")
+    check expandedOnly == 4
     check nonLeaf >= 27
-    check tags.len == nonLeaf - lowered.len + 1
+    check tags.len == nonLeaf - lowered.len - expandedOnly + 1
     for tag in tags:
       let res = renderTree(docWith(proc(r: EmailRenderer; doc: EmailNode) =
         let el = r.createElement(tag)
-        if tag == "mailTable":
-          # P7 requires a caption; give it one so only P4 speaks.
-          r.setAttribute(el, "caption", "Items")
         r.setTextContent(el, "payload")
         r.appendChild(doc, el)))
       check codesOf(res.diagnostics) == @[codeLowerMissing]

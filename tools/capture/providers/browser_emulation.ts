@@ -43,7 +43,10 @@ import type {
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..", "..");
 // Story fixture images, served on the fixture host (fixture_host.ts).
-const storyAssetsDir = join(repoRoot, "tests", "stories", "assets");
+const storyAssetsDir = [
+  join(repoRoot, "tests", "stories", "assets"),
+  join(repoRoot, "src", "isonim_email", "assets", "social"),
+];
 
 export const BROWSER_EMULATION_ID = "browser-emulation";
 // Bump whenever output can change for reasons no other key field

@@ -65,6 +65,7 @@ import ../diagnostics
 import ../style/tokens
 import ../style/units
 import ../style/shorthand
+import ../lower/table_style
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -806,6 +807,23 @@ proc solveNode(node: EmailNode; context: float; s: Solve; rtl: bool;
     solveBand(node, context, s, rtl, "", diags)
   elif tag in rowTags:
     solveColumns(node, context, s, rtl, diags)
+  elif tag == "mailTable":
+    # A data table takes the box it sits in; its mobile mode and column
+    # count ride along for the head rules (R-TBL-18).
+    let w = int(trunc(context))
+    node.layout = LayoutBox(solved: true, container: w, outer: w, box: w,
+      boxExact: context, strategy: tableMode(node),
+      columns: columnCount(tableOf(node)))
+    # What a stacking table's desktop rules give back to its inner
+    # cells: their bottom border's width and bottom padding.
+    try:
+      let b = tableBorder(node)
+      node.layout.className = if b.none: "" else: b.width
+    except StyleError:
+      node.layout.className = ""
+    node.layout.gutterCss = resolveTok("tok:space.2", s.theme)
+    for c in node.children:
+      solveNode(c, context, s, rtl, diags)
   elif tag in columnTags:
     # A column outside a section (P1/F1 report the nesting): solved as
     # a lone column of the context, so its children still get a box.
@@ -890,6 +908,51 @@ const cellsGutterClass* = "e-cells-gutter"
   ## `cellsStacking`: the gutter cell between two cells, hidden once the
   ## row stacks.
 
+const
+  stackTableClass* = "e-tbl-t"
+    ## A stacking data table (R-TBL-18): a block inline, a table from
+    ## the breakpoint up.
+  stackGroupClass* = "e-tbl-g"
+    ## Its body: a row group from the breakpoint up.
+  stackHeadClass* = "e-tbl-head"
+    ## Its header row: hidden inline, shown from the breakpoint up.
+  stackRowClass* = "e-tbl-r"
+    ## A body row: a row from the breakpoint up.
+  stackCellClass* = "e-tbl-c"
+    ## A body cell: a cell from the breakpoint up; below it, its line
+    ## starts at the start of the line.
+  stackLabelClass* = "e-tbl-lbl"
+    ## The column label in a body cell: shown inline, hidden from the
+    ## breakpoint up.
+
+proc stackAlignClass*(align: string): string =
+  ## A stacked cell whose own alignment (`left`, `right`, `center`) the
+  ## desktop rules give back; stacked, its line starts at the start.
+  "e-tbl-a-" & align
+
+proc stackInnerClass*(width: string): string =
+  ## A stacked cell other than its row's last (no rule, no bottom
+  ## padding inline): the desktop rule that gives back a `width` bottom
+  ## border and the bottom padding.
+  "e-tbl-in-" & width.replace(".", "-")
+
+const
+  ifThunderbirdClass* = "e-if-tb"
+    ## A `mailIf(family = thunderbird)` block, shown by
+    ## `.moz-text-html .e-if-tb` (R-RAW-06).
+  ifThunderbirdInlineClass* = "e-if-tb-i"
+    ## The same inside text, a `span`.
+  ifInlineParents* = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "a",
+    "span", "strong", "em", "b", "i", "u", "s", "small", "sup", "sub",
+    "code", "td", "th", "caption"]
+    ## Parents whose `mailIf` content is inline: the hidden block is a
+    ## `span` there (a `div` inside a `p` is invalid HTML).
+
+proc scrollMinClass*(px: int): string =
+  ## A scrolling data table's desktop width, kept as its minimum below
+  ## the breakpoint (R-TBL-18).
+  "e-tbl-min-" & $px
+
 proc stackPadClass*(sides: array[4, int]): string =
   ## `cellsStacking`: a cell's padding once stacked (its own padding,
   ## the gutter as a top gap instead of half-gutters at its sides).
@@ -898,8 +961,11 @@ proc stackPadClass*(sides: array[4, int]): string =
 
 type ColumnRule* = object
   ## One head rule a row needs: under the `min-width` query (`desktop`)
-  ## or under the `max-width` one, for one generated class.
+  ## or under the `max-width` one, for one generated class; or, with
+  ## `thunderbird`, a rule for Thunderbird alone (`.moz-text-html`,
+  ## outside any query: `mailIf(family = thunderbird)`, R-RAW-06).
   desktop*: bool
+  thunderbird*: bool
   cls*: string
   decls*: seq[tuple[prop, value: string; important: bool]]
 
@@ -974,6 +1040,49 @@ proc collectRules(node: EmailNode; acc: var seq[ColumnRule];
       let st = fabStackedPadding(lb)
       add(acc, seen, ColumnRule(desktop: false, cls: stackPadClass(st),
         decls: @[("padding", pxSides(st), true)]))
+  if node.tag == "mailIf" and "thunderbird" in
+      node.attrs.getOrDefault("family", "").toLowerAscii():
+    # R-RAW-06: the hidden block, shown in Thunderbird only.
+    let inline = node.parent != nil and node.parent.kind == enElement and
+      node.parent.tag.toLowerAscii() in ifInlineParents
+    let cls = if inline: ifThunderbirdInlineClass else: ifThunderbirdClass
+    if "t:" & cls notin seen:
+      seen.add("t:" & cls)
+      acc.add(ColumnRule(thunderbird: true, cls: cls,
+        decls: @[("display", if inline: "inline" else: "block", true),
+          ("max-height", "none", true), ("overflow", "visible", true)]))
+  if lb.solved and node.tag == "mailTable":
+    # R-TBL-18's mobile modes, below the breakpoint.
+    proc addOnce(acc: var seq[ColumnRule]; seen: var seq[string];
+        cls: string; decls: seq[tuple[prop, value: string;
+        important: bool]]) =
+      if "m:" & cls notin seen:
+        seen.add("m:" & cls)
+        acc.add(ColumnRule(desktop: false, cls: cls, decls: decls))
+    if lb.strategy == "stack":
+      # Mobile-first: the stacked form is inline; from the breakpoint up
+      # these restore the table (copied for Thunderbird, R-LAY-12).
+      proc addDesk(acc: var seq[ColumnRule]; seen: var seq[string];
+          cls: string; decls: seq[tuple[prop, value: string;
+          important: bool]]) =
+        if "d:" & cls notin seen:
+          seen.add("d:" & cls)
+          acc.add(ColumnRule(desktop: true, cls: cls, decls: decls))
+      addDesk(acc, seen, stackTableClass, @[("display", "table", true)])
+      addDesk(acc, seen, stackGroupClass, @[("display", "table-row-group",
+        true)])
+      addDesk(acc, seen, stackHeadClass, @[("display", "table-row", true)])
+      addDesk(acc, seen, stackRowClass, @[("display", "table-row", true)])
+      addDesk(acc, seen, stackCellClass, @[("display", "table-cell", true)])
+      addDesk(acc, seen, stackLabelClass, @[("display", "none", true)])
+      let width = if lb.className.len > 0: lb.className else: "0"
+      addDesk(acc, seen, stackInnerClass(width), @[("border-bottom-width",
+        width, true), ("padding-bottom", lb.gutterCss, true)])
+      for a in ["left", "right", "center"]:
+        addDesk(acc, seen, stackAlignClass(a), @[("text-align", a, true)])
+    elif lb.strategy == "scroll":
+      addOnce(acc, seen, scrollMinClass(lb.box),
+        @[("min-width", $lb.box & "px", true)])
   if lb.solved and ((node.tag == "mailGrid" and not node.expanded and
       lb.items > 0) or (node.tag == "mailSidebar" and lb.switchPx > 0)):
     # A one-up mobile grid and a switching sidebar stack below the

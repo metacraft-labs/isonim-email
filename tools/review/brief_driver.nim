@@ -29,6 +29,9 @@ import stories/seed_layout
 import stories/seed_primitives
 import stories/seed_leaves
 import stories/seed_buttons
+import stories/seed_table
+import stories/seed_navigation
+import stories/seed_raw
 
 proc splitMatrix(s: string): seq[string] =
   for part in s.split(','):
@@ -71,6 +74,12 @@ proc registerAll() =
     registerLeafStoryTrees()
     registerButtonStories()
     registerButtonStoryTrees()
+    registerTableStories()
+    registerTableStoryTrees()
+    registerNavigationStories()
+    registerNavigationStoryTrees()
+    registerRawStories()
+    registerRawStoryTrees()
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>

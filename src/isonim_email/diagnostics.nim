@@ -207,8 +207,9 @@ const
     ## `mailCluster` closer than 8px (R-TBL-12), or a button less than
     ## 44px tall (R-BTN-06). Collected from `passes/lint.nim`.
   codeUrlEmpty* = "E-URL-EMPTY"
-    ## A button with no destination: no `href`, an empty one or `#`
-    ## (R-BTN-07). Collected from `passes/validate.nim`.
+    ## A button, navigation link or social item with no destination: no
+    ## `href`, an empty one or `#` (R-BTN-07). Collected from
+    ## `passes/validate.nim`.
   codeLayoutVmlSize* = "E-LAYOUT-VML-SIZE"
     ## A VML button without a px width (R-BTN-04). Collected from
     ## `lower/button.nim`.
@@ -220,6 +221,28 @@ const
     ## A fit check measured characters outside the text-metrics table
     ## with an average advance, so its verdict is approximate.
     ## Collected from `lower/button.nim`.
+  codeRawUsed* = "I-RAW-USED"
+    ## A `mailRaw` (information, once per element), so an audit can
+    ## count the escape hatches a template uses (R-RAW-04). Collected
+    ## from `passes/validate.nim`.
+  codeRawMalformed* = "E-RAW-MALFORMED"
+    ## `mailRaw` content that would break the message's structure: a
+    ## tag, comment or quote left open, unbalanced tags or conditional
+    ## comments, a table part outside the payload's own table, an `li`
+    ## in a list item outside the payload's own list, inline SVG,
+    ## MathML or `noscript`, a comment inside a conditional (R-RAW-02,
+    ## R-OL-01, R-OL-02).
+    ## Collected from `passes/validate.nim` (read by `raw.nim`).
+  codeRawUnsupported* = "W-RAW-UNSUPPORTED"
+    ## `mailRaw` content mail clients strip (the payload is written as
+    ## it is): the elements the vocabulary refuses in templates, event
+    ## handlers, `javascript:` URLs, VML outside Word's conditional
+    ## (R-RAW-03). Collected from `passes/validate.nim` (read by
+    ## `raw.nim`).
+  codeA11yFontSmall* = "W-A11Y-FONT-SMALL"
+    ## Text below 14px (R-TXT-03). Collected from `passes/lint.nim`.
+  codeA11yFontTiny* = "E-A11Y-FONT-TINY"
+    ## Text below 12px (R-TXT-03). Collected from `passes/lint.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

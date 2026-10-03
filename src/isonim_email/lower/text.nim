@@ -55,7 +55,7 @@
 ##
 ## Pure tree reading: identical on the C and JS targets.
 
-import std/[math, strutils, tables]
+import std/[math, strutils, tables, unicode]
 import ../renderer
 import ../style/tokens
 import ../style/units
@@ -110,6 +110,9 @@ proc isRtl*(node: EmailNode): bool =
 proc isLastElementChild*(node: EmailNode): bool =
   ## True when no element follows `node` among its siblings (text and
   ## comments do not count).
+  ## A block that is last inside a `mailIf` is last only when the
+  ## `mailIf` is (the conditional is transparent: what follows it
+  ## follows the block).
   if node.parent == nil:
     return false
   var seen = false
@@ -118,6 +121,8 @@ proc isLastElementChild*(node: EmailNode): bool =
       seen = true
     elif seen and c.kind == enElement:
       return false
+  if seen and node.parent.kind == enElement and node.parent.tag == "mailIf":
+    return isLastElementChild(node.parent)
   seen
 
 proc inherited(node: EmailNode; prop: string): string =
@@ -288,7 +293,15 @@ proc leafDefaults*(node: EmailNode;
     target: EmailTarget): seq[tuple[prop, value: string]] =
   ## The declarations the style pass prepends to a divider without a
   ## border of its own: `1px solid` in the theme's subtle border colour,
-  ## with its dark pair under `darkMode = designed`. Empty otherwise.
+  ## with its dark pair under `darkMode = designed`; and, under
+  ## `darkMode = designed`, to an image without a colour of its own: its
+  ## alt text's colour (R-IMG-03) with its dark pair, so a blocked
+  ## image's alt stays legible on a dark surface. Empty otherwise.
+  if node != nil and node.kind == enElement and node.tag == "mailImage":
+    if target.darkMode == dmDesigned and "color" notin node.styles:
+      result.add(("color", "tok:color.text.secondary"))
+      result.add(("@dark:color", "tok:color.text.secondary"))
+    return
   if node == nil or node.kind != enElement or node.tag != "mailDivider":
     return
   for k in node.styles.keys:
@@ -299,3 +312,30 @@ proc leafDefaults*(node: EmailNode;
   result.add(("border-color", "tok:" & dividerBorderToken))
   if target.darkMode == dmDesigned:
     result.add(("@dark:border-color", "tok:" & dividerBorderToken))
+
+const noLinkJoiner* = "\u200D"
+  ## The zero-width joiner R-TXT-06 writes between a digit and its
+  ## neighbours.
+
+proc noLinkText*(s: string): string =
+  ## R-TXT-06: `s` with a zero-width joiner between every digit and the
+  ## character next to it, so no run a data detector reads as a phone
+  ## number, date or address remains; the text reads and copies the
+  ## same.
+  var prevDigit = false
+  var first = true
+  for ch in s.runes:
+    let digit = ch.int >= ord('0') and ch.int <= ord('9')
+    if not first and (digit or prevDigit):
+      result.add(noLinkJoiner)
+    result.add($ch)
+    prevDigit = digit
+    first = false
+
+proc noLinkTexts*(node: EmailNode) =
+  ## Applies `noLinkText` to every text node under `node`.
+  for c in node.children:
+    if c.kind == enText:
+      c.text = noLinkText(c.text)
+    else:
+      noLinkTexts(c)

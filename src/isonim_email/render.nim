@@ -27,6 +27,7 @@ import ./diagnostics
 import ./assets
 import ./serialize
 import ./style/tokens
+import ./style/css
 import ./lower/document
 import ./lower/elements
 import ./passes/validate
@@ -37,6 +38,7 @@ import ./passes/a11y
 import ./passes/lint
 import ./patterns
 import ./primitives
+import ./navigation
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -150,7 +152,7 @@ proc isPublishedUrl(url: string): bool =
     url["https://".len] notin {'/', '?', '#'} and
     not url.contains({' ', '\t', '\r', '\n', '"', '<', '>'})
 
-proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
+proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]] =
   ## P8's asset half. Every `img`/`mailImage` source the tree
   ## references is resolved — a store name through `store.get`, a
@@ -233,6 +235,50 @@ proc resolveAssets(doc: EmailNode; store: AssetStore): tuple[
     for i in countdown(node.children.high, 0):
       stack.add(node.children[i])
 
+proc webFontRules*(target: EmailTarget; theme: EmailTheme): tuple[
+    faces: seq[seq[Declaration]]; mso: seq[Rule];
+    diagnostics: seq[EmailDiagnostic]] =
+  ## The head CSS of `target.webFonts` (R-TXT-07, R-OL-07): one
+  ## `@font-face` per font for the fonts block, and, when any is used,
+  ## the mso block's `*{font-family:{fallback} !important}`, the body
+  ## stack without its web families (Word would otherwise use Times New
+  ## Roman). A font whose URL is not absolute https is `E-URL-SCHEME`
+  ## and left out.
+  var families: seq[string] = @[]
+  for f in target.webFonts:
+    let url = f.url.strip()
+    let lower = url.toLowerAscii()
+    if not (lower.startsWith("https://") and url.len > "https://".len and
+        url["https://".len] notin {'/', '?', '#'}) or
+        url.contains({' ', '\t', '\r', '\n', '"', '\'', '<', '>', '(',
+          ')', '\\'}):
+      result.diagnostics.add(EmailDiagnostic(severity: sevError,
+        code: codeUrlScheme, message: "web font '" & f.family & "' url '" &
+          url & "' is not an absolute https URL (R-TXT-07)",
+        rules: @["R-TXT-07"]))
+      continue
+    let format = if f.format.len > 0: f.format else: "woff2"
+    result.faces.add(@[
+      Declaration(prop: "font-family", value: "'" & f.family & "'"),
+      Declaration(prop: "src", value: "url('" & url & "') format('" &
+        format & "')"),
+      Declaration(prop: "font-weight",
+        value: if f.weight.len > 0: f.weight else: "400"),
+      Declaration(prop: "font-style",
+        value: if f.style.len > 0: f.style else: "normal")])
+    families.add(f.family.toLowerAscii())
+  if result.faces.len > 0:
+    var keep: seq[string] = @[]
+    for part in theme.lightFor("font.body").split(','):
+      let name = part.strip()
+      if name.strip(chars = {'\'', '"'}).toLowerAscii() notin families:
+        keep.add(name)
+    if keep.len == 0:
+      keep = @["Arial", "sans-serif"]
+    result.mso.add(Rule(kind: rkStyle, selector: "*", decls: @[
+      Declaration(prop: "font-family", value: keep.join(", "),
+        important: true)]))
+
 proc firstError(diags: openArray[EmailDiagnostic]): EmailDiagnostic =
   for d in diags:
     if d.severity == sevError:
@@ -269,9 +315,22 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   diags.add(solveLayout(doc, theme, target))
   let styled = applyStyles(doc, theme, target, profile)
   diags.add(styled.diagnostics)
-  let headRes = assembleHead(styled.head, target,
-    columns = columnRules(doc))
+  let fonts = webFontRules(target, theme)
+  diags.add(fonts.diagnostics)
+  let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
+    msoRules = fonts.mso, columns = columnRules(doc))
   diags.add(headRes.diagnostics)
+  for blk in headRes.blocks:
+    if blk.kind == enHeadStyle and blk.priority == fontsPriority:
+      # R-TXT-07: web fonts load in a few families only; the fallback
+      # stack is the design everywhere else, an expected degradation.
+      var supported: set[ClientFamily] = {}
+      for f in ClientFamily:
+        if f notin {cfApple, cfSamsung, cfThunderbird, cfOutlookApp}:
+          supported.incl(f)
+      diags.add(lintHeadCss(blk.text, profile, [expectDegradation(
+        lkAtRule, "font-face", supported, "web fonts fall back to the " &
+        "stack's next family (R-TXT-07)")]))
   diags.add(applyA11y(doc))
   diags.add(lintTree(doc, profile))
   if target.darkMode == dmDesigned:

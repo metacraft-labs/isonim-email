@@ -30,7 +30,11 @@ import ../passes/layout
 import ../style/tokens
 import ../patterns
 import ../primitives
+import ../navigation
 import ../lower/button_style
+import ../lower/table_style
+import ../lower/conditional
+import ../raw
 from ../lower/image import altStyle, altFitsOneLine
 
 ## The client families an edit to this module can change: read by
@@ -258,8 +262,20 @@ proc headingLine(node: EmailNode; firstH1: var bool): string =
     return "Heading \"" & text & "\"."
   "Heading " & tagLower(node) & " \"" & text & "\"."
 
+proc textOutsideIf(node: EmailNode): string =
+  ## The text of `node` without what a `mailIf` inside it targets (that
+  ## part shows in some clients only; its own line says which).
+  if node == nil:
+    return ""
+  if node.kind == enText:
+    return node.text
+  if node.kind == enElement and node.tag == "mailIf":
+    return ""
+  for c in node.children:
+    result.add(textOutsideIf(c))
+
 proc paragraphLine(node: EmailNode): string =
-  let text = collectText(node).strip()
+  let text = textOutsideIf(node).strip()
   const maxLen = 45
   let shown =
     if text.runeLen > maxLen: text.runeSubStr(0, maxLen) & "…"
@@ -334,12 +350,71 @@ proc rowTexts(node: EmailNode; acc: var seq[string]) =
   if node == nil:
     return
   if tagLower(node) == "tr":
-    acc.add(collectText(node).strip())
+    var cells: seq[string] = @[]
+    for c in node.children:
+      if tagLower(c) in ["td", "th"]:
+        cells.add(collectText(c).strip())
+    acc.add(if cells.len > 0: cells.join(" | ")
+      else: collectText(node).strip())
     return
   for c in node.children:
     rowTexts(c, acc)
 
-proc tableLine(node: EmailNode; width, breakpoint: int): string =
+type CssMode* = enum
+  ## How a client treats the message's `<style>` blocks, as far as the
+  ## column arrangement is concerned.
+  cmHeadCss  ## kept: media queries apply
+  cmNoCss    ## removed (GANGA, a sanitiser that strips them)
+  cmWord     ## Word's ghost tables: desktop widths, never stacked
+
+proc rawLine(node: EmailNode; view: BriefView): string =
+  ## A `mailRaw`'s markup is the author's, emitted as written: the line
+  ## names the text it shows in the brief's client (Word's conditional
+  ## content only in Word, the rest only elsewhere) and the alt text of
+  ## its images.
+  var text = ""
+  var alts: seq[string] = @[]
+  proc walk(n: EmailNode) =
+    if (n.kind == enMsoIf and not view.word) or
+        (n.kind == enNotMso and view.word):
+      return
+    if n.kind == enText:
+      text.add(n.text & " ")
+    elif n.kind == enElement and n.tag == "img":
+      alts.add("\"" & n.attrs.getOrDefault("alt", "") & "\"")
+    for c in n.children:
+      walk(c)
+  for c in node.children:
+    if c.kind == enRaw:
+      for n in readRaw(c.text).nodes:
+        walk(n)
+  let t = strutils.splitWhitespace(text).join(" ")
+  result = "Raw markup written by the author (as written, not generated: its " &
+    "colours are the ones written, with no dark pair of their own; a " &
+    "client that recolours the whole message in dark recolours them too)" &
+    (if t.len > 0: ", showing \"" & (if t.runeLen > 80:
+      t.runeSubStr(0, 80) & "…" else: t) & "\"" else: "")
+  if alts.len > 0:
+    result &= "; images with alt text " & alts.join(", ") & " (shown as " &
+      "that text with images off)"
+  result &= "."
+
+proc ifShown(node: EmailNode; view: BriefView): tuple[shown: bool;
+    who: string] =
+  ## Whether a `mailIf`'s content shows in the brief's client, and whom
+  ## it is meant for.
+  case ifForm(node)
+  of ifMso: (view.word, "classic Outlook (Word)")
+  of ifNotMso: (not view.word, "every client but classic Outlook")
+  of ifThunderbird:
+    (view.real and view.client == "thunderbird", "Thunderbird")
+  of ifMsoAndThunderbird:
+    (view.word or (view.real and view.client == "thunderbird"),
+      "classic Outlook and Thunderbird")
+  of ifInvalid: (true, "(invalid mailIf)")
+
+proc tableLine(node: EmailNode; width, breakpoint: int;
+    mode = cmHeadCss; view = BriefView()): string =
   let rows = countTag(node, "tr")
   var title = "Table"
   let caption = attrValue(node, "caption")
@@ -360,22 +435,36 @@ proc tableLine(node: EmailNode; width, breakpoint: int): string =
       (if texts.len > shown.len: ", …" else: "")
   result &= "."
   if tagLower(node) == "mailtable":
-    case attrValue(node, "mobile").toLowerAscii()
+    if caption.len > 0:
+      result &= " The caption \"" & caption & "\" is for screen readers " &
+        "and is not visible."
+    result &= " Header cells bold, every cell with a thin line under it" &
+      (if attrValue(node, "striped").toLowerAscii() == "true":
+        ", every second body row shaded" else: "") & "."
+    case tableMode(node)
     of "stack":
-      if width < breakpoint:
-        result &= " **Stacked** (label: value) at this width."
+      # Mobile-first: stacked inline; the table comes back from the
+      # breakpoint up where media queries apply, and in Thunderbird by
+      # its own class; Word gets its own copy, a table.
+      let thunderbird = view.real and view.client == "thunderbird"
+      let stacked = not view.word and not thunderbird and
+        (not view.headCss or not view.mediaQueries or width < breakpoint)
+      if stacked:
+        result &= " **Stacked** in this client: the header row hidden, " &
+          "each row a group of \"label: value\" lines, one per cell" &
+          (if width >= breakpoint: " (the table's desktop form needs " &
+            "media queries this client does not apply)" else: "") & "."
+      else:
+        result &= " A table with its columns side by side here."
     of "scroll":
-      if width < breakpoint:
-        result &= " Scrolls horizontally at this width."
+      if width < breakpoint and mode == cmHeadCss:
+        result &= " At this width the table keeps its desktop width and " &
+          "scrolls sideways inside the message: its last columns are " &
+          "off screen until scrolled, and a phone draws no scrollbar (an " &
+          "option the author chose), while the page " &
+          "itself is never wider than the screen."
     else:
       discard
-
-type CssMode* = enum
-  ## How a client treats the message's `<style>` blocks, as far as the
-  ## column arrangement is concerned.
-  cmHeadCss  ## kept: media queries apply
-  cmNoCss    ## removed (GANGA, a sanitiser that strips them)
-  cmWord     ## Word's ghost tables: desktop widths, never stacked
 
 proc familyCssMode*(family: string): CssMode =
   ## A backend-A family's mode: GANGA strips every `<style>`, the Word
@@ -513,7 +602,22 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     items.add(line)
     images.add(alt)
   of "mailtable", "table":
-    items.add(tableLine(node, width, breakpoint))
+    items.add(tableLine(node, width, breakpoint, mode, view))
+  of "mailraw":
+    items.add(rawLine(node, view))
+  of "mailif":
+    let (shown, who) = ifShown(node, view)
+    if shown:
+      items.add("Content meant for " & who & " only (mailIf), shown here:")
+      for c in node.children:
+        walkItems(c, curBg, width, breakpoint, items, images, firstH1,
+          curAlign, mode, view)
+    else:
+      let t = collectText(node).strip()
+      items.add("NOT shown in this client: content meant for " & who &
+        " only (mailIf)" & (if t.len > 0: ", beginning \"" &
+        (if t.runeLen > 40: t.runeSubStr(0, 40) & "…" else: t) & "\""
+        else: "") & ". It must not appear.")
   of "mailcolumns":
     items.add(columnsLine(node, width, breakpoint, mode))
     for c in node.children:
@@ -1170,7 +1274,7 @@ proc clientExpectedBlock*(story: Story; id, viewport,
     else: (false, cfApple)
   let view = BriefView(client: c.id, audience: aud, family: audFam,
     headCss: c.headCss, mediaQueries: c.headCss and not c.noMediaQueries,
-    word: false, width: width, breakpoint: breakpoint)
+    word: false, width: width, breakpoint: breakpoint, real: true)
   walkItems(doc, docBackground(doc), width, breakpoint, items, images,
     firstH1, mode = if c.headCss and not c.noMediaQueries: cmHeadCss
       else: cmNoCss, view = view)

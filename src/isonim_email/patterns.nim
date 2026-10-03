@@ -70,6 +70,7 @@ type
     mediaQueries*: bool   ## …and their media queries apply
     word*: bool           ## Word's ghost tables lay the message out (classic Outlook or its approximation)
     width*: int           ## The viewport's layout width (px)
+    real*: bool           ## A real client (`client` is its id), not backend A's family
     breakpoint*: int      ## The target's mobile/desktop breakpoint (px)
 
   ExpandProc* = proc(n: EmailNode; ctx: ExpandCtx): EmailNode {.closure.}

@@ -16,11 +16,23 @@
 ## checked here too (R-LAY-11): only a non-text column may move, and
 ## never in a right-to-left row. Other nesting and vocabulary rules
 ## belong to the static vocabulary check, contrast and sizes to P10.
-## A `mailButton` must have a real destination (R-BTN-07).
+## A `mailButton`, a `mailNavLink` and a `mailSocialItem` must have a
+## real destination (R-BTN-07). A `mailIf` names exactly one of `mso`
+## (a boolean) and `family` (from the families with a selector; R-OL-02,
+## R-RAW-05, R-RAW-06), and a `mailTable` holds exactly one `table`
+## (R-TBL-18).
+##
+## `mailRaw` (R-RAW-01…04): every use is reported once as `I-RAW-USED`,
+## and each of its payloads is read by `raw.nim`: markup that would
+## break the message's structure is `E-RAW-MALFORMED`, markup mail
+## clients strip `W-RAW-UNSUPPORTED` (written all the same), and a
+## payload with no error gets this pass's own checks on what it holds
+## (alt text, sectioning elements), as authored markup does.
 
 import std/[strutils, tables, unicode]
 import ../diagnostics
 import ../renderer
+import ../raw
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -176,14 +188,15 @@ proc checkBandNesting(node: EmailNode; acc: var seq[EmailDiagnostic]) =
         through = a.tag
     a = a.parent
 
-proc checkButtonHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
-  ## R-BTN-07: a button goes somewhere real: an absolute https URL, or a
-  ## `mailto:` or `tel:` one; never nothing or `#`.
+proc checkHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## R-BTN-07: a button, a navigation link or a social item goes
+  ## somewhere real: an absolute https URL, or a `mailto:` or `tel:`
+  ## one; never nothing or `#`.
   let href = node.attrs.getOrDefault("href", "").strip()
   if href.len == 0 or href.startsWith("#"):
     diags.add(EmailDiagnostic(severity: sevError, code: codeUrlEmpty,
-      message: "mailButton without a destination (href '" & href &
-        "'): a button must link to an absolute https URL, mailto: or " &
+      message: node.tag & " without a destination (href '" & href &
+        "'): it must link to an absolute https URL, mailto: or " &
         "tel: (R-BTN-07)", origin: node.origin, rules: @["R-BTN-07"]))
     return
   let lower = href.toLowerAscii()
@@ -193,9 +206,116 @@ proc checkButtonHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
     (lower.startsWith("tel:") and href.len > "tel:".len)
   if not ok or href.contains({' ', '\t', '\r', '\n', '"', '<', '>'}):
     diags.add(EmailDiagnostic(severity: sevError, code: codeUrlScheme,
-      message: "mailButton href '" & href & "' is not an absolute https " &
-        "URL, mailto: or tel: (R-BTN-07)", origin: node.origin,
+      message: node.tag & " href '" & href & "' is not an absolute " &
+        "https URL, mailto: or tel: (R-BTN-07)", origin: node.origin,
       rules: @["R-BTN-07"]))
+
+const ifFamilies* = ["outlookWord", "thunderbird"]
+  ## The families `mailIf(family = …)` can target: Word through its
+  ## conditional (R-RAW-05), Thunderbird through `.moz-text-html`
+  ## (R-RAW-06). Any other needs a capture that backs its selector.
+
+proc ifFamiliesOf*(node: EmailNode): tuple[families: seq[string];
+    bad: seq[string]] =
+  ## The families a `mailIf(family = …)` names, from its comma- or
+  ## space-separated list, matched without case; `bad` holds the
+  ## names outside `ifFamilies`.
+  for part in node.attrs.getOrDefault("family", "").split({',', ' '}):
+    let p = part.strip()
+    if p.len == 0:
+      continue
+    var hit = ""
+    for f in ifFamilies:
+      if f.toLowerAscii() == p.toLowerAscii():
+        hit = f
+    if hit.len == 0:
+      result.bad.add(p)
+    elif hit notin result.families:
+      result.families.add(hit)
+
+proc checkIf(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## R-OL-02, R-RAW-05, R-RAW-06: `mailIf` is the authors' way to a
+  ## conditional, so its values are checked here, where the template's
+  ## location is known: exactly one of `mso` (true or false) and
+  ## `family` (from `ifFamilies`).
+  let hasMso = "mso" in node.attrs
+  let hasFamily = "family" in node.attrs
+  template bad(text: string; ruleIds: seq[string]) =
+    diags.add(EmailDiagnostic(severity: sevError, code: codeVocabBadValue,
+      message: text, origin: node.origin, rules: ruleIds))
+  if hasMso == hasFamily:
+    bad("mailIf needs exactly one of mso (true or false) and family " &
+      "(R-RAW-05)", @["R-RAW-05"])
+    return
+  if hasMso:
+    let v = node.attrs["mso"].strip().toLowerAscii()
+    if v notin ["true", "false"]:
+      bad("mailIf mso = '" & node.attrs["mso"] & "': the only conditions " &
+        "an author can ask for are mso = true and mso = false; version " &
+        "conditions are not offered (R-OL-02)", @["R-OL-02"])
+    return
+  let (families, unknown) = ifFamiliesOf(node)
+  if unknown.len > 0 or families.len == 0:
+    bad("mailIf family '" & node.attrs["family"] & "': the families " &
+      "with a selector are " & ifFamilies.join(" and ") &
+      (if unknown.len > 0: " (not " & unknown.join(", ") & ")" else: "") &
+      " (R-RAW-06)", @["R-RAW-06"])
+
+proc checkTable(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## R-TBL-18: a data table is one `table`; anything else beside it
+  ## (another table, loose content) has nowhere to go.
+  var tables, other = 0
+  for c in node.children:
+    if c.kind == enElement and c.tag == "table":
+      inc tables
+    elif c.kind == enElement or c.kind == enRaw or
+        (c.kind == enText and c.text.strip().len > 0):
+      inc other
+  if tables != 1 or other > 0:
+    diags.add(EmailDiagnostic(severity: sevError, code: codeStructNesting,
+      message: "mailTable holds " & $tables & " table" &
+        (if tables == 1: "" else: "s") &
+        (if other > 0: " and " & $other & " other node" &
+          (if other == 1: "" else: "s") else: "") &
+        ": a data table is exactly one table (R-TBL-18)",
+      origin: node.origin, rules: @["R-TBL-18"]))
+
+proc checkRawTree(node: EmailNode; origin: SourceSpan;
+    diags: var seq[EmailDiagnostic]) =
+  ## This pass's checks on what a raw payload holds (R-RAW-01): an image
+  ## carries `alt` (empty for a decorative one, as HTML says; R-IMG-04),
+  ## and no sectioning element appears (R-A11Y-10).
+  if node == nil:
+    return
+  if node.kind == enElement:
+    if node.tag == "img" and "alt" notin node.attrs:
+      diags.add(EmailDiagnostic(severity: sevError, code: codeA11yAltMissing,
+        message: "<img> without alt in mailRaw (R-IMG-04: alt is " &
+          "required; alt=\"\" marks a decorative image)", origin: origin,
+        rules: @["R-A11Y-04", "R-RAW-01"]))
+    if node.tag in sectioningTags:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codeA11ySectioning,
+        message: "<" & node.tag & "> in mailRaw is never emitted (email " &
+          "clients rewrite or strip sectioning elements)", origin: origin,
+        rules: @["R-A11Y-10", "R-RAW-01"]))
+  for c in node.children:
+    checkRawTree(c, origin, diags)
+
+proc checkRawPayload(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## Reads one payload inside `mailRaw` in the place it sits (R-RAW-02,
+  ## R-RAW-03) and, when it has no error, checks what it holds
+  ## (R-RAW-01).
+  let origin = nearestOrigin(node)
+  let read = readRaw(node.text, rawContextOf(node))
+  for p in read.problems:
+    diags.add(EmailDiagnostic(
+      severity: if p.warning: sevWarning else: sevError,
+      code: if p.warning: codeRawUnsupported else: codeRawMalformed,
+      message: "mailRaw: " & p.message, origin: origin, rules: p.rules))
+  if not read.refused:
+    for n in read.nodes:
+      checkRawTree(n, origin, diags)
 
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
@@ -245,8 +365,19 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
       checkReversal(node, result)
     if node.kind == enElement and node.tag == "mailGrid":
       checkGrid(node, result)
-    if node.kind == enElement and node.tag == "mailButton":
-      checkButtonHref(node, result)
+    if node.kind == enElement and node.tag in ["mailButton", "mailNavLink",
+        "mailSocialItem"]:
+      checkHref(node, result)
+    if node.kind == enElement and node.tag == "mailIf":
+      checkIf(node, result)
+    if node.kind == enElement and node.tag == "mailTable":
+      checkTable(node, result)
+    if node.kind == enElement and node.tag == "mailRaw":
+      result.add(EmailDiagnostic(severity: sevInfo, code: codeRawUsed,
+        message: "mailRaw used: its markup is linted but not generated " &
+          "(R-RAW-04)", origin: node.origin, rules: @["R-RAW-04"]))
+    if node.kind == enRaw and insideMailRaw(node):
+      checkRawPayload(node, result)
     if node.kind == enElement and node.tag in ["mailSection", "mailWrapper"]:
       checkBandNesting(node, result)
     if node.kind == enRaw and not insideMailRaw(node):

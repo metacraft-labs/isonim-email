@@ -220,10 +220,15 @@ suite "P1 validate":
     let rawBlock = r.createElement("mailRaw")
     r.appendChild(rawBlock, raw("<!-- audited -->"))
     let cond = r.createElement("mailIf")
-    r.appendChild(cond, raw("<!-- nested -->"))
+    r.setAttribute(cond, "mso", "true")
+    # No comment in it: inside a mailIf a comment would end the
+    # conditional (R-RAW-02, tests/t5_raw.nim).
+    r.appendChild(cond, raw("<b>nested</b>"))
     r.appendChild(rawBlock, cond)
     r.appendChild(doc, rawBlock)
-    check validate(doc).len == 0
+    # The one finding is the audit's information (R-RAW-04).
+    check codesOf(validate(doc)) == @[codeRawUsed]
+    check not hasErrors(validate(doc))
     # A raw node as the whole tree has no mailRaw ancestor either.
     check codeStructRawOutside in codesOf(validate(raw("<p>x</p>")))
 

@@ -26,3 +26,10 @@ proc msoWrap*(children: varargs[EmailNode]): EmailNode =
 proc notMsoWrap*(children: varargs[EmailNode]): EmailNode =
   ## Wraps `children` in an everyone-but-Outlook conditional.
   newNotMso(@children)
+
+proc msoCond*(cond: string; children: varargs[EmailNode]): EmailNode =
+  ## An Outlook-only conditional with any condition of the closed set
+  ## (`mso`, `gte mso 9`, `lte mso 11`; R-OL-02): the tree a raw
+  ## payload's conditional comment reads as (`raw.nim`). Raises
+  ## `EmailRenderError` on any other condition, like `newMsoIf`.
+  newMsoIf(cond, @children)

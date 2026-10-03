@@ -25,7 +25,26 @@ function hashedUrl(name: string): string {
   return `${FIXTURE_HOST}/${sha.slice(0, 16)}/${name}`;
 }
 
+const iconsDir = join(repoRoot, "src", "isonim_email", "assets", "social");
+
 describe("fixture host", () => {
+  it("serves the library's built-in icons beside the story fixtures", () => {
+    const name = "social-x-light.png";
+    const bytes = readFileSync(join(iconsDir, name));
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const url = `${FIXTURE_HOST}/${sha.slice(0, 16)}/${name}`;
+    // One directory: not found; both: served, story fixtures still first.
+    assert.equal(resolveFixture(url, assetsDir).status, 404);
+    const res = resolveFixture(url, [assetsDir, iconsDir]);
+    assert.equal(res.status, 200);
+    assert.equal(res.contentType, "image/png");
+    assert.deepEqual(res.body, bytes);
+    assert.equal(
+      resolveFixture(hashedUrl("logo.png"), [assetsDir, iconsDir]).status,
+      200,
+    );
+  });
+
   it("serves a story image at its content-hashed URL", () => {
     for (const name of ["logo.png", "shield.png"]) {
       const res = resolveFixture(hashedUrl(name), assetsDir);

@@ -4,7 +4,10 @@
 // `https://x.test/`, content-hashed like any hosted asset
 // (`/{sha256[0:16]}/{name}`, catalogue R-IMG-07). Backend A answers
 // those requests from tests/stories/assets/ through a Playwright route,
-// so story images render deterministically and without a network. A
+// and from the library's own built-in images (the social icons in
+// src/isonim_email/assets/social/, which a story publishes to the same
+// host), so story images render deterministically and without a
+// network. A
 // request whose hash prefix does not match the file's bytes, or whose
 // name is not a plain file in that directory, gets a 404 — the capture
 // then shows a broken image instead of a stale or wrong one.
@@ -44,7 +47,7 @@ function notFound(why: string): FixtureResponse {
 // Resolves one request URL against the fixture directory.
 export function resolveFixture(
   url: string,
-  assetsDir: string,
+  assetsDir: string | readonly string[],
 ): FixtureResponse {
   let path: string;
   try {
@@ -59,9 +62,11 @@ export function resolveFixture(
     /^\/([0-9a-f]{16})\/([A-Za-z0-9._@-]+)$/.exec(path) ?? [];
   if (prefix === undefined || name === undefined || name.startsWith("."))
     return notFound(`not a hashed asset path: ${path}`);
-  const file = join(assetsDir, name);
-  if (!existsSync(file) || !statSync(file).isFile())
-    return notFound(`no fixture named ${name}`);
+  const dirs = typeof assetsDir === "string" ? [assetsDir] : assetsDir;
+  const file = dirs
+    .map((dir) => join(dir, name))
+    .find((f) => existsSync(f) && statSync(f).isFile());
+  if (file === undefined) return notFound(`no fixture named ${name}`);
   const body = readFileSync(file);
   const sha = createHash("sha256").update(body).digest("hex");
   if (sha.slice(0, 16) !== prefix)
@@ -112,7 +117,7 @@ export interface BlockedRequest {
 // as they happen.
 export async function installCapturePolicy(
   context: BrowserContext,
-  assetsDir: string,
+  assetsDir: string | readonly string[],
   images: string,
 ): Promise<BlockedRequest[]> {
   const blocked: BlockedRequest[] = [];

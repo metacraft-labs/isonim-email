@@ -42,6 +42,15 @@ import type { AssetRequest, AssetsHandle, ServiceHandle } from "./types.ts";
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..", "..");
 export const STORY_ASSETS_DIR = join(repoRoot, "tests", "stories", "assets");
+// The library's built-in images a story publishes to the fixture host
+// (the social icons), served beside the story fixtures.
+export const LIBRARY_ASSETS_DIR = join(
+  repoRoot,
+  "src",
+  "isonim_email",
+  "assets",
+  "social",
+);
 
 // A fresh delivery token: 16 lowercase hex digits.
 export function captureToken(): string {
@@ -79,12 +88,14 @@ export class AssetsService implements LocalService {
   private server: Server | null = null;
   private readonly log: AssetRequest[] = [];
   private readonly sockets = new Set<Socket>();
-  private readonly assetsDir: string;
+  private readonly assetsDir: string | readonly string[];
   private readonly bodyDelayMs: number;
   private readonly timers = new Set<NodeJS.Timeout>();
 
-  constructor(opts: { assetsDir?: string; bodyDelayMs?: number } = {}) {
-    this.assetsDir = opts.assetsDir ?? STORY_ASSETS_DIR;
+  constructor(
+    opts: { assetsDir?: string | readonly string[]; bodyDelayMs?: number } = {},
+  ) {
+    this.assetsDir = opts.assetsDir ?? [STORY_ASSETS_DIR, LIBRARY_ASSETS_DIR];
     this.bodyDelayMs = opts.bodyDelayMs ?? 0;
   }
 

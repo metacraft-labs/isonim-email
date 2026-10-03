@@ -36,7 +36,7 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_welcome_golden.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
@@ -46,7 +46,8 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # out, so they are C-only,
 # as is t3_snapshot_reproducible: the generator reads JSON object insertion
 # order, which the JS backend does not preserve; t3_metrics_reproducible
-# reads font files and runs fc-match and the metrics generator. t6_roundtrip is C-only
+# reads font files and runs fc-match and the metrics generator. t3_icons_reproducible
+# runs the social-icon generator and reads its files. t6_roundtrip is C-only
 # too: it spawns a real Mailpit plus a fixture HTTP server and reads
 # fixtures and docs/ off disk; t6_header_fuzz runs the dev shell's
 # python3 as its decoding oracle; t6_dot_stuff exercises the SMTP
@@ -58,7 +59,7 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # to node for the findings.ts rating and writes its baseline to
 # tmp), and e2e_dom_assertions (two gated CLI runs plus run-dir
 # reads).)
-tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_welcome_golden.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim"
+tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim"
 
 # --- Default targets ---
 
@@ -126,6 +127,13 @@ theme-snapshot:
 # update shows up as a hash and advance diff.
 text-metrics:
     "$ISONIM_EMAIL_FONTTOOLS_PYTHON" tools/text-metrics/generate.py src/isonim_email/metrics_data.nim
+
+# Regenerate the built-in social icons (src/isonim_email/assets/social/,
+# monogram plates drawn from the pinned Roboto Bold with fonttools).
+# Re-running on the same font is a byte-identical no-op
+# (tests/t3_icons_reproducible.nim).
+social-icons:
+    "$ISONIM_EMAIL_FONTTOOLS_PYTHON" tools/social-icons/generate.py src/isonim_email/assets/social
 
 # Test: the full suite on the C backend, plus the backend-independent
 # passes on the JS backend, plus the capture emulation-transform tests,

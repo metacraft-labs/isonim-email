@@ -48,19 +48,26 @@
 ##
 ## The a11y lint covers meaningless link text (R-A11Y-06),
 ## light-scheme text/background contrast (R-A11Y-07), and the
-## R-IMG-04 alt-length heuristic. All three are warnings.
+## R-IMG-04 alt-length heuristic. All three are warnings. Text sizes
+## (R-TXT-03): text below 14px warns, below 12px is an error.
+##
+## Raw markup (R-RAW-01): a payload inside `mailRaw` that `raw.nim`
+## reads with no error is linted like everything else, in place, its
+## tree under the raw node's ancestors; one with an error is P1's to
+## report and is not linted.
 ## `lintDarkContrast` adds R-DRK-04's dark scheme under
 ## `darkMode = designed`: each pair as the dark head rules paint it,
 ## an error (`E-A11Y-CONTRAST`). The partial and full inversion
 ## models are not checked yet.
 
-import std/[math, strutils, tables]
+import std/[math, strutils, tables, unicode]
 import ../diagnostics
 import ../renderer
 import ../style/colors
 import ../style/units
 import ../style/shorthand
 import ../support/families
+import ../raw
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -962,7 +969,8 @@ const msoClosedList* = ["mso-line-height-rule", "mso-table-lspace",
 
 const nonCssProps = [("mailstack", "gap"), ("mailcluster", "gap"),
   ("mailcluster", "row-gap"), ("mailcluster", "row_gap"),
-  ("mailsidebar", "gap"), ("mailbox", "shadow")]
+  ("mailsidebar", "gap"), ("mailbox", "shadow"), ("mailsocial", "gap"),
+  ("mailnavbar", "gap")]
   ## Vocabulary props that arrive as style keywords but are lowered to
   ## other markup, never emitted as the CSS property of that name.
 
@@ -1266,6 +1274,66 @@ proc lintTableDepth*(root: EmailNode): seq[EmailDiagnostic] =
   ## below the document's wrapper table, warn once per too-deep chain.
   lintDepthImpl(root, 0, false, result)
 
+proc stampOrigin(node: EmailNode; origin: SourceSpan) =
+  ## A raw payload's tree has no template locations of its own: every
+  ## finding in it points at the `mailRaw` that holds it.
+  if node == nil:
+    return
+  if node.origin.file.len == 0:
+    node.origin = origin
+  for c in node.children:
+    stampOrigin(c, origin)
+
+proc holdsDirectText(node: EmailNode): bool =
+  ## True when a text child holds something a reader sees: not only
+  ## white space (a no-break space included) or zero-width characters,
+  ## which spacers and accents carry to keep a box from collapsing.
+  for c in node.children:
+    if c.kind != enText:
+      continue
+    for ch in c.text.runes:
+      if not ch.isWhiteSpace() and ch.int notin [0x200B, 0x200C, 0x200D,
+          0xFEFF, 0x034F]:
+        return true
+  false
+
+proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
+    seq[EmailDiagnostic] =
+  ## R-TXT-03: text a reader sees is at least 14px (a warning below,
+  ## an error below 12px), at the size it renders with: the element's
+  ## own font size, else the nearest ancestor's (16px, the default
+  ## body, when none sets one). Text hidden from readers is skipped.
+  if node.kind != enElement or not holdsDirectText(node):
+    return
+  if node.attrs.getOrDefault("aria-hidden", "") == "true":
+    return
+  for a in ancestors:
+    if a.kind == enElement and a.attrs.getOrDefault("aria-hidden", "") ==
+        "true":
+      return
+  var size = node.styles.getOrDefault("font-size", "")
+  var i = ancestors.high
+  while size.len == 0 and i >= 0:
+    if ancestors[i].kind == enElement:
+      size = ancestors[i].styles.getOrDefault("font-size", "")
+    dec i
+  if size.len == 0 or size.startsWith("tok:"):
+    return
+  let px = fontSizePx(size)
+  if px <= 0:
+    return
+  if px < 12:
+    result.add(EmailDiagnostic(severity: sevError, code: codeA11yFontTiny,
+      message: "<" & node.tag & "> text is " & formatPx(px) & ": text " &
+        "below 12px is unreadable on a phone (R-TXT-03)",
+      origin: node.origin, rules: @["R-TXT-03"]))
+  elif px < 14:
+    result.add(EmailDiagnostic(severity: sevWarning,
+      code: codeA11yFontSmall,
+      message: "<" & node.tag & "> text is " & formatPx(px) & ": body " &
+        "text is at least 14px (R-TXT-03)",
+      origin: node.origin, rules: @["R-TXT-03"]))
+
 proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
                   expected: openArray[ExpectedDegradation];
                   ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
@@ -1298,9 +1366,27 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     result.add(lintRagged(node))
     result.add(lintTapSpacing(node))
     result.add(lintButtonTap(node))
+    result.add(lintFontSize(node, ancestors))
   of enHeadStyle:
     result.add(lintHeadCss(node.text, profile, expected, node.origin))
-  of enText, enRaw, enMsoIf, enNotMso, enVml:
+  of enRaw:
+    var inRaw = false
+    var origin = node.origin
+    for i in countdown(ancestors.high, 0):
+      let a = ancestors[i]
+      if origin.file.len == 0 and a.origin.file.len > 0:
+        origin = a.origin
+      if a.kind == enElement and a.tag == "mailRaw":
+        inRaw = true
+    if inRaw:
+      let read = readRaw(node.text)
+      if not read.refused:
+        var next = ancestors
+        next.add(node)
+        for n in read.nodes:
+          stampOrigin(n, origin)
+          result.add(lintTreeImpl(n, profile, expected, next))
+  of enText, enMsoIf, enNotMso, enVml:
     discard
   var next = ancestors
   next.add(node)

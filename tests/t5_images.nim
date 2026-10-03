@@ -201,19 +201,23 @@ suite "alt text":
   test "test_narrow_image_alone_in_its_holder_is_written_inline":
     # A 32px icon whose alt is wider than it, alone in its cluster item:
     # inline (its whole alt shows in Chromium and Gecko), reported for
-    # WebKit. A short alt fits and stays a block. The same narrow icon
-    # beside text stays a block (it is not alone).
+    # WebKit. Below 40px even a short alt takes the inline form
+    # (Chromium's broken-image icon covers a one-letter alt in a 24px
+    # box, catalogue R-IMG-03); at 48px a short alt fits and stays a
+    # block. The same narrow icon beside text stays a block (it is not
+    # alone).
     let r = EmailRenderer()
     let (doc, s) = newDoc(r)
     let c = r.child(s, "mailCluster", [("gap", "16px")])
     discard r.img(c, "32px", "Mastodon")
-    discard r.img(c, "32px", "X")
+    discard r.img(c, "48px", "X")
+    discard r.img(c, "24px", "X")
     let p = r.child(s, "mailText")
     discard r.img(p, "32px", "Mastodon icon")
     discard r.child(p, "p", text = "Follow us")
     let res = renderTree(doc)
     let tags = imgTags(res.html)
-    check tags.len == 3
+    check tags.len == 4
     let mastodon = styleOfTag(tags[0])
     check "display:" notin mastodon
     check "vertical-align:middle;" in mastodon
@@ -221,7 +225,9 @@ suite "alt text":
     check "width:32px;" in mastodon
     check "max-width" notin mastodon
     check "display:block;" in styleOfTag(tags[1])
-    check "display:block;" in styleOfTag(tags[2])
+    check "display:" notin styleOfTag(tags[2])
+    check "vertical-align:middle;" in styleOfTag(tags[2])
+    check "display:block;" in styleOfTag(tags[3])
     var fits: seq[string] = @[]
     for d in res.diagnostics:
       if d.code == codeImgAltFit:
@@ -232,6 +238,29 @@ suite "alt text":
     check fits.len == 2
     check "'Mastodon'" in fits[0]
     check "'Mastodon icon'" in fits[1]
+
+  test "test_alt_text_has_its_dark_pair":
+    # rule: R-IMG-03
+    # Under darkMode = designed a blocked image's alt text takes the
+    # secondary text colour's dark value, so it stays legible on a dark
+    # surface; an image's own colour wins, and without the designed dark
+    # mode nothing is added.
+    proc imgDoc(colour = ""): EmailNode =
+      let r = EmailRenderer()
+      let (doc, s) = newDoc(r)
+      let img = r.img(s, "120px", "The hill at dawn")
+      if colour.len > 0:
+        img.styles["color"] = colour
+      doc
+    var t = defaultTarget()
+    t.darkMode = dmDesigned
+    let dark = renderTree(imgDoc(), target = t).html
+    let tag = imgTags(dark)[0]
+    check "class=\"e-" in tag
+    check "color:#c3c8d0 !important" in dark[0 ..< dark.find("<body")]
+    let own = renderTree(imgDoc("#000000"), target = t).html
+    check "color:#c3c8d0 !important" notin own[0 ..< own.find("<body")]
+    check "class=" notin imgTags(renderTree(imgDoc()).html)[0]
 
   test "test_known_height_keeps_a_box_one_alt_line_tall":
     let r = EmailRenderer()

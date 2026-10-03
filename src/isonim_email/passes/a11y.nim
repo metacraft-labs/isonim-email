@@ -3,7 +3,8 @@
 ## Backfills roles and aria attributes the authoring tree leaves implicit,
 ## and warns on skipped heading levels (R-TXT-10):
 ##
-## - `role="presentation"` on every `table` lacking `role`, and
+## - `role="presentation"` on every `table` lacking `role` (a
+##   `mailTable`'s own table gets `role="table"`), and
 ##   `role="table"` on every `mailTable` lacking it (R-A11Y-02); a
 ##   data table without a `caption` child or a non-empty `caption`
 ##   attribute is an `E-A11Y-TABLE-CAPTION` error instead;
@@ -115,7 +116,10 @@ proc applyA11y*(root: EmailNode): seq[EmailDiagnostic] =
       continue
     if node.kind == enElement and node.tag == "table" and
         "role" notin node.attrs:
-      node.attrs["role"] = "presentation"
+      # A `mailTable`'s own table is data (R-A11Y-02, R-TBL-18).
+      node.attrs["role"] = if node.parent != nil and
+          node.parent.kind == enElement and node.parent.tag == "mailTable":
+        "table" else: "presentation"
     elif node.kind == enElement and node.tag == "mailTable":
       if "role" notin node.attrs:
         node.attrs["role"] = "table"
@@ -125,6 +129,11 @@ proc applyA11y*(root: EmailNode): seq[EmailDiagnostic] =
           if c.kind == enElement and c.tag == "caption":
             hasCaption = true
             break
+          if c.kind == enElement and c.tag == "table":
+            # The vocabulary places a caption in the table.
+            for t in c.children:
+              if t.kind == enElement and t.tag == "caption":
+                hasCaption = true
       if not hasCaption:
         result.add(EmailDiagnostic(
           severity: sevError, code: codeA11yTableCaption,

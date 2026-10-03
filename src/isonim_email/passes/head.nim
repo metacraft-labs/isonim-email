@@ -344,7 +344,12 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     for d in c.decls:
       ds.add(Declaration(prop: d.prop, value: d.value,
         important: d.important))
-    if c.desktop:
+    if c.thunderbird:
+      # R-RAW-06: Thunderbird alone, by its own class, outside any
+      # query (Thunderbird applies none), whatever `thunderbirdMq` says:
+      # the author asked for it by name.
+      mozCopies.add((".moz-text-html ." & c.cls, ds))
+    elif c.desktop:
       # R-LAY-02 with its copies, both outside the query: Thunderbird
       # (R-LAY-12) and OWA (R-LAY-13) apply no media query in a
       # message, and both are desktop clients. Only the desktop column

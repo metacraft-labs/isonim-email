@@ -11,7 +11,9 @@
 ## `mailSidebar`: `lower/box.nim`, `grid.nim`, `cluster.nim`,
 ## `sidebar.nim`), `mailImage` (`lower/image.nim`), the content leaves
 ## `mailSpacer`, `mailDivider` and `mailText` (`lower/leaves.nim`),
-## `mailButton` (`lower/button.nim`), and
+## `mailButton` (`lower/button.nim`), `mailTable` (`lower/data_table.nim`),
+## `mailIf` (`lower/conditional.nim`), `mailRaw` (its payloads, as
+## written: R-RAW-01), a `span` marked `nolink` (R-TXT-06), and
 ## every expanded
 ## pattern (`patterns.nim`), which leaves its expansion in its place.
 ## `mailDocument` is lowered separately, around
@@ -45,6 +47,7 @@ import ../renderer
 import ../diagnostics
 import ../assets
 import ../vocabulary as emailVocabulary
+import ../raw
 import ../style/tokens
 import ./image
 import ./section
@@ -57,6 +60,10 @@ import ./cluster
 import ./sidebar
 import ./leaves
 import ./button
+import ./data_table
+import ./table_style
+import ./conditional
+import ./text
 import ../passes/layout
 import ../patterns
 import ../target
@@ -68,7 +75,7 @@ const affects*: set[ClientFamily] = allFamilies
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
   "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
   "mailGrid", "mailCluster", "mailSidebar", "mailSpacer", "mailDivider",
-  "mailText", "mailButton"]
+  "mailText", "mailButton", "mailTable", "mailIf", "mailRaw"]
   ## Elements this pass lowers (plus every expanded pattern, which it
   ## replaces by its expansion).
 const loweredElsewhere* = ["mailDocument"]
@@ -136,6 +143,38 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       let (nodes, found) = lowerButton(c, ctx)
       diags.add(found)
       replaceChild(parent, c, nodes)
+    elif c.kind == enElement and c.tag == "mailTable":
+      if tableOf(c) == nil:
+        # P1 reports it (R-TBL-18); the content stays inspectable.
+        walk(c, ctx, assets, diags)
+        replaceChild(parent, c, c.children)
+      else:
+        let stack = tableMode(c) == "stack"
+        let (nodes, inner, found) = lowerTable(c, ctx)
+        diags.add(found)
+        replaceChild(parent, c, nodes)
+        walk(inner, ctx, assets, diags)
+        if stack:
+          # Mobile-first, and Word's own copy (R-TBL-18).
+          replaceChild(parent, inner, finishStack(inner, ctx))
+    elif c.kind == enElement and c.tag == "mailRaw":
+      # R-RAW-01: the payloads as written (P1 read and checked them; the
+      # ones it refused were dropped before lowering, see
+      # `dropRefusedRaw`).
+      walk(c, ctx, assets, diags)
+      let kept = c.children
+      replaceChild(parent, c, kept)
+    elif c.kind == enElement and c.tag == "mailIf":
+      # R-RAW-05, R-RAW-06: the content first, then its conditional.
+      walk(c, ctx, assets, diags)
+      replaceChild(parent, c, lowerIf(c, ctx.target))
+    elif c.kind == enElement and c.tag == "span" and "nolink" in c.attrs:
+      # R-TXT-06: no number a data detector would link.
+      let on = c.attrs["nolink"].strip().toLowerAscii() == "true"
+      c.attrs.del("nolink")
+      if on:
+        noLinkTexts(c)
+      walk(c, ctx, assets, diags)
     elif c.kind == enElement and c.tag == "mailText":
       let (nodes, inner, found) = lowerText(c, ctx)
       diags.add(found)
@@ -213,6 +252,32 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
     else:
       walk(c, ctx, assets, diags)
 
+proc dropRefusedRaw(node: EmailNode) =
+  ## Removes every `raw` payload inside a `mailRaw` that P1 refuses
+  ## (R-RAW-02): it would break the markup around it, and its error
+  ## blocks sending anyway. Warnings (R-RAW-03) do not remove it. Runs before any lowering,
+  ## while the authoring ancestors that decide a payload's place are
+  ## still there.
+  var kept: seq[EmailNode] = @[]
+  var changed = false
+  for k in node.children:
+    if k.kind == enRaw:
+      var inRaw = false
+      var p = node
+      while p != nil:
+        if p.kind == enElement and p.tag == "mailRaw":
+          inRaw = true
+          break
+        p = p.parent
+      if inRaw and readRaw(k.text, rawContextOf(k)).refused:
+        changed = true
+        continue
+    kept.add(k)
+  if changed:
+    node.children = kept
+  for k in node.children:
+    dropRefusedRaw(k)
+
 proc lowerElements*(root: EmailNode; theme: EmailTheme;
     assets: openArray[AssetRef] = []; target = defaultTarget()):
     seq[EmailDiagnostic] =
@@ -224,6 +289,7 @@ proc lowerElements*(root: EmailNode; theme: EmailTheme;
     return
   if not root.layout.solved:
     result.add(solveLayout(root, theme, target))
+  dropRefusedRaw(root)
   let ctx = LowerCtx(theme: theme, target: target,
     dir: root.attrs.getOrDefault("dir", "ltr"))
   walk(root, ctx, assets, result)

@@ -117,6 +117,10 @@ const
     ## screen less two 20px paddings): the floor of the min-height check.
   webkitAltInset* = 2.0
     ## What WebKit's broken-image box takes from the alt text's width.
+  iconAltBelow* = 40
+    ## An image narrower than this, alone in its holder, always takes the
+    ## inline form: in a box that small Chromium's broken-image icon
+    ## covers even a one-letter alt (a social icon's "X").
   chromiumAltInset* = 6.0
     ## What Chromium's takes: a border and a padding on each side, and
     ## room for the last glyph's overhang.
@@ -197,7 +201,9 @@ proc isImageContent(n: EmailNode): bool =
   let tag = n.tag.toLowerAscii()
   if tag in ["img", "mailimage"]:
     return true
-  if tag != "a":
+  # A link, or an expanded pattern still standing around what it became
+  # (a social item around its linked icon), holding images only.
+  if tag != "a" and not n.expanded:
     return false
   var any = false
   for c in n.children:
@@ -217,9 +223,11 @@ proc isImageContent(n: EmailNode): bool =
 proc imageOnlyHolder*(node: EmailNode): EmailNode =
   ## The block `node` (an image) sits in when that block holds nothing
   ## but images and links around them; nil otherwise. Links between
-  ## the image and the block are looked through.
+  ## the image and the block are looked through, and so is an expanded
+  ## pattern around an image (a social item, `navigation.nim`).
   var h = node.parent
-  while h != nil and h.kind == enElement and h.tag.toLowerAscii() == "a":
+  while h != nil and h.kind == enElement and (h.tag.toLowerAscii() == "a" or
+      h.expanded):
     h = h.parent
   if h == nil or h.kind != enElement or h.tag.toLowerAscii() notin holderTags:
     return nil
@@ -416,7 +424,8 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
   var minHeight = false
   if alt.len > 0 and px > 0 and not fluid:
     let oneLine = altFitsOneLine(alt, px, st)
-    if not altWordsFit(alt, px, st) and holder != nil:
+    if (not altWordsFit(alt, px, st) or px < iconAltBelow) and
+        holder != nil:
       inline = true
     # WebKit draws the alt of either form when it fits on one line.
     if not oneLine:

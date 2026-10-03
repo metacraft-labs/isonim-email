@@ -49,6 +49,7 @@ import ./lint
 import ../target
 import ../lower/text
 import ../lower/button_style
+import ../lower/table_style
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -88,6 +89,9 @@ const
   defaultTextColorToken = "color.text.primary"
     ## The theme token a text element without a colour of its own gets.
 
+  valignCarriers = ["td", "th", "tr"]
+    ## Elements whose `valign` mirrors `vertical-align` (R-OL-09).
+
   alignCarriers = ["td", "th", "tr", "div", "p", "h1", "h2", "h3", "h4",
     "h5", "h6"]
     ## Elements whose `align` mirrors `text-align`. `table` is excluded:
@@ -120,6 +124,49 @@ proc isColorProp(prop: string): bool =
 
 proc isLengthProp(prop: string): bool =
   prop in lengthProps
+
+const genericFamilies* = ["serif", "sans-serif", "monospace", "cursive",
+  "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
+  "math", "emoji", "fangsong"]
+  ## The CSS generic families a stack may end in (R-TXT-05).
+
+proc familiesOf*(stack: string): seq[string] =
+  ## The families of a `font-family` value, unquoted, in order.
+  for part in stack.split(','):
+    var f = part.strip()
+    if f.len >= 2 and f[0] in {'"', '\''} and f[^1] == f[0]:
+      f = f[1 ..< ^1]
+    if f.len > 0:
+      result.add(f)
+
+proc endsGeneric*(stack: string): bool =
+  ## True when a `font-family` value ends in a generic family
+  ## (R-TXT-05); a CSS-wide keyword (`inherit`, …) has no stack.
+  let fams = familiesOf(stack)
+  if fams.len == 0:
+    return true
+  if fams.len == 1 and fams[0].toLowerAscii() in ["inherit", "initial",
+      "unset", "revert"]:
+    return true
+  fams[^1].toLowerAscii() in genericFamilies
+
+proc isWebFamily*(family: string; target: EmailTarget): bool =
+  for f in target.webFonts:
+    if f.family.toLowerAscii() == family.toLowerAscii():
+      return true
+  false
+
+proc msoFontAlt*(stack: string; target: EmailTarget): string =
+  ## R-OL-07: for a stack whose first family is a web font, the family
+  ## Word should use instead: the first that is neither a web font nor
+  ## generic, else Arial. "" when the first family is not a web font.
+  let fams = familiesOf(stack)
+  if fams.len == 0 or not isWebFamily(fams[0], target):
+    return ""
+  for f in fams:
+    if not isWebFamily(f, target) and f.toLowerAscii() notin genericFamilies:
+      return f
+  "Arial"
 
 proc cssSizeToAttr(css: string): string =
   ## `600px` → `600`, `50%` → `50%` (both valid attribute forms).
@@ -591,8 +638,14 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       entries.add((k, v))
     for (k, v) in buttonDefaults(node, theme, target):
       entries.add((k, v))
+    for (k, v) in tableDefaults(node, theme, target):
+      entries.add((k, v))
   except ThemeError as e:
     diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TXT-02"]))
+  except StyleError as e:
+    # A `mailTable` border that is neither `none` nor a Border; the
+    # table's own declaration reports it.
+    discard e
   for k, v in node.styles.pairs:
     entries.add((k, v))
   if tag == "mailimage" and
@@ -663,6 +716,29 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     if not resolveToken(node, raw, theme, diags, val, fromToken, tkey):
       res[prop] = raw
       continue
+    if tag == "mailtable" and prop == "border":
+      # A data table's `border` is its cells' (R-TBL-18): `none` is a
+      # value here, and the table's lowering, not CSS, places it.
+      try:
+        discard tableBorder(node)
+      except StyleError as e:
+        diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TBL-18"]))
+      res[prop] = raw
+      continue
+    if prop == "font-family" and not fromToken and not endsGeneric(val):
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codeVocabBadValue, message: "font-family '" & val &
+          "' does not end in a generic family (serif, sans-serif, " &
+          "monospace, …): a client without its fonts falls back to its " &
+          "own default (R-TXT-05)", origin: node.origin,
+        rules: @["R-TXT-05"]))
+    if prop in ["text-size-adjust", "-webkit-text-size-adjust",
+        "-ms-text-size-adjust", "-moz-text-size-adjust"] and
+        val.strip().toLowerAscii() notin ["100%", "auto"]:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codeVocabBadValue, message: prop & ":" & val & " stops " &
+          "readers from scaling the text; only the reset's 100% is " &
+          "written (R-TXT-08)", origin: node.origin, rules: @["R-TXT-08"]))
     if isHarmfulDeclaration(prop, val):
       # P5 is the remover lint warns about: the declaration goes on every
       # element, with lint's R-OL-10 severity — an error on a layout
@@ -747,7 +823,14 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       node.attrs["bgcolor"] = fallbacks["background-color"]
     elif "background-color" in res:
       try:
-        node.attrs["bgcolor"] = normaliseColor(res["background-color"])
+        let c = parseColor(res["background-color"])
+        # R-OL-09: an attribute cannot carry rgba(), so a translucent
+        # background's `bgcolor` is its blend over what is behind the
+        # cell, whatever the target (without Word the inline value is
+        # rgba() alone, R-CSS-14).
+        node.attrs["bgcolor"] = if c.a < 1.0:
+            blendOver(c, resolveBg(node.parent, theme)).toHex()
+          else: normaliseColor(res["background-color"])
       except StyleError:
         discard
     elif "bgcolor" in node.attrs:
@@ -770,6 +853,23 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       let v = node.attrs["align"].strip().toLowerAscii()
       if v in aligns:
         res["text-align"] = v
+  if tag in valignCarriers:
+    # R-OL-09: `valign` mirrors `vertical-align`, CSS first.
+    const valigns = ["top", "middle", "bottom"]
+    if "vertical-align" in res:
+      let v = res["vertical-align"].strip().toLowerAscii()
+      if v in valigns:
+        node.attrs["valign"] = v
+    elif "valign" in node.attrs:
+      let v = node.attrs["valign"].strip().toLowerAscii()
+      if v in valigns:
+        res["vertical-align"] = v
+  if target.outlookWord and target.webFonts.len > 0 and "font-family" in res:
+    # R-OL-07: an element whose first family is a web font names Word's
+    # fallback for it.
+    let alt = msoFontAlt(res["font-family"], target)
+    if alt.len > 0 and "mso-font-alt" notin res:
+      res["mso-font-alt"] = alt
   node.styles = res
   node.fallbacks = initOrderedTable[string, string]()
   for k, v in fallbacks.pairs:

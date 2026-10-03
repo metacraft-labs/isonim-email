@@ -20,6 +20,16 @@ type
   DarkModeStrategy* = enum
     dmNone, dmAccommodate, dmDesigned
 
+  WebFont* = object
+    ## One web font the message loads (catalogue R-TXT-07): an
+    ## `@font-face` in the fonts block, hidden from Word, whose fallback
+    ## Word gets instead (R-OL-07). Stacks name it by `family`.
+    family*: string       ## The family name stacks use (`Inter`)
+    url*: string          ## Absolute https URL of the font file
+    format*: string       ## `woff2` (default when empty), `woff` or `truetype`
+    weight*: string       ## `400` when empty
+    style*: string        ## `normal` when empty
+
   EmailTarget* = object
     outlookWord*: bool    ## Emit MSO conditionals, ghost tables, VML
     thunderbirdMq*: bool  ## Emit `.moz-text-html`-prefixed MQs
@@ -30,6 +40,7 @@ type
     sizeBudget*: int      ## Decoded HTML bytes; warn above
     headStyleBudget*: int ## Bytes of head CSS across all blocks
     preheaderPad*: string ## R-PRE-02 unit sequence (the measured sequence lands later)
+    webFonts*: seq[WebFont] ## Fonts loaded with `@font-face` (R-TXT-07, R-OL-07); none by default
 
 const allFamilies* = {low(ClientFamily) .. high(ClientFamily)}
   ## Every client family: the `affects` value of a module whose edits

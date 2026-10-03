@@ -182,15 +182,18 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("align", akAttr, "Align"),
         attr("icon_size", akAttr, "Len"),
         attr("mode", akAttr, "light|dark|auto"),
+        attr("gap", akStyle, "Len"),
       ]),
       TagDef(name: "mailSocialItem",
         allowedParents: @["mailSocial"] & trio, attrs: @[
         attr("network", akAttr, "string"),
         attr("href", akAttr, "Url"),
+        attr("icon", akAttr, "Url"),
       ]),
       TagDef(name: "mailNavbar", attrs: @[
         attr("align", akAttr, "Align"),
         attr("separator", akAttr, "string"),
+        attr("gap", akStyle, "Len"),
       ]),
       TagDef(name: "mailNavLink",
         allowedParents: @["mailNavbar"] & trio, attrs: @[
@@ -279,7 +282,7 @@ proc buildEmailVocabulary*(): VocabularyRef =
       ]),
       TagDef(name: "span", allowAnyStyle: true, attrs: @[
         attr("lang", akAttr, "string"), attr("dir", akAttr, "string"),
-        attr("title", akAttr, "string"),
+        attr("title", akAttr, "string"), attr("nolink", akAttr, "bool"),
       ]),
       TagDef(name: "strong", allowAnyStyle: true, attrs: @[
         attr("lang", akAttr, "string"), attr("dir", akAttr, "string"),

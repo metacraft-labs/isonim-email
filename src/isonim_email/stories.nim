@@ -26,6 +26,7 @@ import ./render
 import ./serialize
 import ./target
 import ./diagnostics
+import ./assets
 import ./lower/document
 import ./lower/elements
 import ./passes/validate
@@ -36,6 +37,7 @@ import ./passes/a11y
 import ./style/tokens
 import ./patterns
 import ./primitives
+import ./navigation
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -139,11 +141,14 @@ proc getStory*(name: string): Story =
       "' (registered: " & listStories().join(", ") & ")")
   storyRegistry[name]
 
-proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
+proc renderPipeline*(doc: EmailNode; target: EmailTarget;
+    assets: AssetStore = nil): string =
   ## The current render path (lower/document.nim over the passes):
   ## pattern expansion → validate → P3 layout → P5 styles → P6 head → P7 a11y → P4 element
   ## lowering,
-  ## then the document shell and the serialiser. The `mailDocument`
+  ## then the document shell and the serialiser. With `assets`, the
+  ## images are published through the store before lowering (R-IMG-07).
+  ## The `mailDocument`
   ## node's own children become the wrapper-cell sections. Raises
   ## `StoryError` when the tree fails validation or holds an element
   ## with no lowering (`E-LOWER-MISSING`): stories are fixed, so
@@ -159,10 +164,21 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget): string =
     raise newException(StoryError,
       "story tree failed layout: " & laid[0].code & ": " & laid[0].message)
   let styled = applyStyles(doc, defaultTheme(), target)
-  let headRes = assembleHead(styled.head, target,
-    columns = columnRules(doc))
+  let fonts = webFontRules(target, defaultTheme())
+  if hasErrors(fonts.diagnostics):
+    raise newException(StoryError,
+      "story web fonts: " & fonts.diagnostics[0].message)
+  let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
+    msoRules = fonts.mso, columns = columnRules(doc))
   discard applyA11y(doc)
-  let lowered = lowerElements(doc, defaultTheme(), target = target)
+  # With a store, every image is published first and its `src` is the
+  # URL the store returned (a story's built-in icons, for one).
+  let published = resolveAssets(doc, assets)
+  if hasErrors(published.diagnostics):
+    raise newException(StoryError, "story assets: " &
+      published.diagnostics[0].message)
+  let lowered = lowerElements(doc, defaultTheme(), published.assets,
+    target = target)
   if hasErrors(lowered):
     var first = lowered[0]
     for d in lowered:
