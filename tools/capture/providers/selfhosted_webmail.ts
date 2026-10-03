@@ -170,14 +170,18 @@ function decodeEntities(s: string): string {
 
 // The story asset paths (/{hash}/{name}) of every <img src> a browser
 // renders from the story HTML: comments, and so the MSO-only
-// conditional blocks, are left out.
+// conditional blocks, are left out, and so is an image hidden inline
+// with display:none (the dark copy of a dark_src pair, shown only by
+// the dark rules): a sanitiser may drop it (SnappyMail removes hidden
+// elements), and a client need not load what it never shows.
 export function storyImagePaths(html: string): string[] {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   const out: string[] = [];
   const origin = `${FIXTURE_HOST}/`;
   for (const m of visible.matchAll(
-    /<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+    /<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
   )) {
+    if (/\sstyle\s*=\s*["']\s*display\s*:\s*none\b/i.test(m[0])) continue;
     const url = decodeEntities((m[1] ?? m[2] ?? m[3] ?? "").trim());
     if (url.toLowerCase().startsWith(origin)) {
       const path = `/${url.slice(origin.length)}`.split(/[?#]/)[0]!;

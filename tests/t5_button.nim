@@ -54,6 +54,14 @@ proc codes(res: RenderedEmail): seq[string] =
   for d in res.diagnostics:
     result.add(d.code)
 
+proc problems(res: RenderedEmail): seq[string] =
+  ## The codes of the render's warnings and errors: what "renders
+  ## cleanly" means (information, such as the inversion simulation's
+  ## findings under an uncalibrated model, is not a problem).
+  for d in res.diagnostics:
+    if d.severity >= sevWarning:
+      result.add(d.code)
+
 proc render(build: proc(r: EmailRenderer; s: EmailNode);
     target = defaultTarget(); rtl = false): RenderedEmail =
   let r = EmailRenderer()
@@ -79,7 +87,7 @@ suite "the table button":
   test "test_table_button_carries_colour_on_cell_and_link":
     let res = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Open dashboard"))
-    check codes(res).len == 0
+    check problems(res).len == 0
     let html = body(res.html)
     check "<mailbutton" notin html.toLowerAscii()
     # R-BTN-01: colour on the cell (bgcolor + CSS) and the link; the
@@ -125,7 +133,7 @@ suite "the table button":
       discard r.button(s, "Danger", attrs = [("tone", "danger")])
       discard r.button(s, "Outline", attrs = [("variant", "outline")])
       discard r.button(s, "Link", attrs = [("variant", "link")]))
-    check codes(res).len == 0
+    check problems(res).len == 0
     let html = body(res.html)
     check "bgcolor=\"#cf222e\"" in html
     # Outline: no fill, the link colour, a 2px border taken out of the
@@ -168,7 +176,7 @@ suite "the table button":
       discard r.button(s, "Pay now", [("width", "100%")])
       discard r.button(s, "A label long enough to wrap onto lines",
         [("width", "240px")], [("vml", "never")]))
-    check codes(res).len == 0
+    check problems(res).len == 0
     let html = body(res.html)
     # R-BTN-03: full width needs no placement; the link is a block.
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
@@ -196,7 +204,7 @@ suite "the VML button":
     # button inside NotMso.
     let fits = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Start free trial", [("width", "220px")]))
-    check codes(fits).len == 0
+    check problems(fits).len == 0
     let html = body(fits.html)
     check "<!--[if mso]><div align=\"left\"><v:roundrect " &
       "xmlns:v=\"urn:schemas-microsoft-com:vml\" " &
@@ -231,6 +239,32 @@ suite "the VML button":
         discard r.button(s, "Start free trial", [("width", $w & "px")]))
       checkpoint($w)
       check (codeLayoutLabelOverflow in codes(edge)) == over
+    # The label is measured as drawn. Uppercase, "START FREE TRIAL" is
+    # 159.59px with the margin: it fits a 208px button (160px inside
+    # the padding), not a 207px one, where the source text would fit.
+    for (w, over) in [(208, false), (207, true)]:
+      let upper = render(proc(r: EmailRenderer; s: EmailNode) =
+        discard r.button(s, "Start free trial", [("width", $w & "px"),
+          ("text-transform", "uppercase")]))
+      checkpoint("uppercase " & $w)
+      check (codeLayoutLabelOverflow in codes(upper)) == over
+    # A 2px letter-spacing adds 16 x 2px to the 109.24px label: it fits
+    # a 190px button (142px inside), not a 189px one. A negative
+    # spacing counts as none (the 158px boundary above holds).
+    for (w, spacing, over) in [(190, "2px", false), (189, "2px", true),
+        (158, "-2px", false)]:
+      let spaced = render(proc(r: EmailRenderer; s: EmailNode) =
+        discard r.button(s, "Start free trial", [("width", $w & "px"),
+          ("letter-spacing", spacing)]))
+      checkpoint("letter-spacing " & spacing & " " & $w)
+      check (codeLayoutLabelOverflow in codes(spaced)) == over
+    # Word's label carries both, so the label Word draws is the one
+    # measured.
+    let both = body(render(proc(r: EmailRenderer; s: EmailNode) =
+      discard r.button(s, "Start free trial", [("width", "260px"),
+        ("letter-spacing", "2px"), ("text-transform", "uppercase")])).html)
+    check "font-weight:600;letter-spacing:2px;text-transform:uppercase;\">" &
+      "Start free trial</center>" in both
     # The same label fits as a table button (no VML): no error.
     let never = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Start your free trial today", [("width",
@@ -253,19 +287,19 @@ suite "the VML button":
     # `auto` with a % width keeps the fluid table button.
     let fluid = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Go", [("width", "100%")]))
-    check codes(fluid).len == 0
+    check problems(fluid).len == 0
     check "v:roundrect" notin fluid.html
     # `always` with 100% takes the box it sits in: 600 - 2 x 24.
     let full = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Go", [("width", "100%")], [("vml", "always")]))
-    check codes(full).len == 0
+    check problems(full).len == 0
     check "width:552px;\" arcsize" in full.html
 
   test "test_outline_vml_is_unfilled_with_a_stroke":
     let res = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Changelog", [("width", "260px"),
         ("height", "48px")], [("variant", "outline")]))
-    check codes(res).len == 0
+    check problems(res).len == 0
     check "style=\"height:48px;v-text-anchor:middle;width:260px;\" " &
       "arcsize=\"13%\" strokecolor=\"#0969da\" strokeweight=\"2px\" " &
       "filled=\"f\">" in res.html
@@ -273,7 +307,8 @@ suite "the VML button":
   test "test_labels_outside_the_metrics_are_approximate":
     let res = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "ابدأ التجربة", [("width", "220px")]), rtl = true)
-    check codes(res) == @[codeLayoutMetricsApprox]
+    check codeLayoutMetricsApprox in codes(res)
+    check problems(res).len == 0
     check not hasErrors(res.diagnostics)
     # Negative control: a Latin label is measured, not estimated.
     let latin = render(proc(r: EmailRenderer; s: EmailNode) =
@@ -322,7 +357,7 @@ suite "tap target and destination":
   test "test_button_shorter_than_44px_warns":
     let small = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Small", [("padding", "8px 16px")]))
-    check codes(small) == @[codeA11yTapTarget]
+    check problems(small) == @[codeA11yTapTarget]
     check "36px" in small.diagnostics[0].message
     # The defaults meet it: 20 + 2 x 12 = 44.
     let ok = render(proc(r: EmailRenderer; s: EmailNode) =
@@ -333,7 +368,7 @@ suite "tap target and destination":
     let small14 = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Small", [("font-size", "14px"),
         ("padding", "13px 16px")]))
-    check codes(small14).len == 0
+    check problems(small14).len == 0
     check "line-height:18px;" in small14.html
 
   test "test_button_destination_rules":
@@ -352,7 +387,7 @@ suite "tap target and destination":
         discard r.child(s, "mailButton", attrs = [("href", href)],
           text = "Go"))
       checkpoint(href)
-      check codes(res).len == 0
+      check problems(res).len == 0
 
 suite "the brief and the declared degradations":
   test "test_word_degradations_are_declared":

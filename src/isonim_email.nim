@@ -42,6 +42,7 @@ import isonim_email/mime/headers
 import isonim_email/mime/message
 import isonim_email/mime/one_click
 import isonim_email/assets
+import isonim_email/imaging
 when not defined(js):
   import isonim_email/transport/smtp
   import isonim_email/transport/mailpit
@@ -96,6 +97,7 @@ export headers
 export message
 export one_click
 export assets
+export imaging
 when not defined(js):
   export smtp
   export mailpit

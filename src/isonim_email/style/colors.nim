@@ -425,3 +425,11 @@ proc darkerStep*(value: string; step = colourStep): string =
   let (l, ch, h) = rgbToOklch(parseColor(value))
   let (r, g, b) = oklchToRgb(max(0.0, l - step), ch, h)
   Rgba(r: r, g: g, b: b, a: 1.0).toHex()
+
+proc invertLightness*(c: Rgba): Rgba =
+  ## `c` with its OKLCH lightness inverted (L → 1 − L), chroma and hue
+  ## kept, opaque: R-DRK-04's model of how a client that recolours a
+  ## message turns a colour around.
+  let (l, ch, h) = rgbToOklch(c)
+  let (r, g, b) = oklchToRgb(clamp(1.0 - l, 0.0, 1.0), ch, h)
+  Rgba(r: r, g: g, b: b, a: 1.0)

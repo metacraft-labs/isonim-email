@@ -133,4 +133,5 @@ proc registerKit*(stories: openArray[KitStory];
 
 proc registerKitTrees*(stories: openArray[KitStory]) =
   for s in stories:
-    registerStoryTree(s.name, s.build)
+    registerStoryTree(s.name, s.build,
+      if s.dark: dmDesigned else: dmAccommodate)

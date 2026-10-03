@@ -13,6 +13,15 @@
 ## Golden recorded 2026-10-03 from the render below; changed only on
 ## purpose, with the reason recorded here.
 ##
+## The `darkMode = dmDesigned` golden, `tests/golden/welcome-minimal-designed.html`,
+## recorded 2026-10-03 from the same template rendered designed: the
+## accommodate golden plus block 3 and the dark classes, which its
+## structural test checks by removing both. Changed only on purpose.
+##
+## Both renders carry one diagnostic, pinned below: information on the
+## button's label under the inversion simulation's full model, not yet
+## calibrated (catalogue R-DRK-04).
+##
 ## Backend-independent (tree building + pure passes; the golden loads
 ## via `staticRead`), so `just test` also runs it on JS. No test doubles.
 # rule: R-BTN-01
@@ -21,6 +30,8 @@ import isonim_email
 
 const golden = staticRead(parentDir(currentSourcePath()) / "golden" /
   "welcome-minimal.html")
+const designedGolden = staticRead(parentDir(currentSourcePath()) /
+  "golden" / "welcome-minimal-designed.html")
 
 type Welcome = object
   name, url: string
@@ -43,7 +54,14 @@ suite "the worked example's golden":
   test "test_welcome_minimal_golden":
     let res = renderEmail(welcomeMinimal, Welcome(name: "Ada",
       url: "https://app.example.com/"))
-    check res.diagnostics.len == 0
+    # One diagnostic, information: the button's white label on the
+    # accent falls below 4.5:1 under R-DRK-04's full-inversion model,
+    # which is not calibrated yet (the Gmail app on iOS). Nothing else.
+    check res.diagnostics.len == 1
+    check res.diagnostics[0].code == codeA11yContrastInvertedInfo
+    check res.diagnostics[0].severity == sevInfo
+    check "#ffffff on #1f6feb" in res.diagnostics[0].message
+    check "full inversion" in res.diagnostics[0].message
     check res.html == golden
     # The registered story renders the same bytes.
     check getStory("welcome/minimal").render().html == golden
@@ -70,3 +88,52 @@ suite "the worked example's golden":
     check "mso-padding-alt:12px 24px;" in html
     # The preheader padding: 100 - 22 characters.
     check html.count("&#847;&zwnj;&nbsp;") == 78
+
+proc designedTarget(): EmailTarget =
+  result = defaultTarget()
+  result.darkMode = dmDesigned
+
+proc withoutDarkCss(html: string): string =
+  ## `html` less block 3 (the third `<style>` element, the one holding
+  ## the dark rules) and every generated class attribute.
+  result = html
+  let q = result.find("(prefers-color-scheme: dark)")
+  if q >= 0:
+    let a = result.rfind("<style>", last = q)
+    let b = result.find("</style>", q) + "</style>".len
+    result = result[0 ..< a] & result[b .. ^1]
+  while true:
+    let i = result.find(" class=\"e-")
+    if i < 0:
+      break
+    let j = result.find('"', i + " class=\"".len)
+    result = result[0 ..< i] & result[j + 1 .. ^1]
+
+suite "the worked example's designed golden":
+  test "test_welcome_minimal_designed_golden":
+    # The `dmDesigned` variant: the same story, its dark palette from
+    # the tokens it already uses (no `@dark:` in the template).
+    let res = renderEmail(welcomeMinimal, Welcome(name: "Ada",
+      url: "https://app.example.com/"), target = designedTarget())
+    # The designed dark scheme passes; the inversion simulation's one
+    # finding (information) is the accommodate golden's (the button
+    # under full inversion).
+    check res.diagnostics.len == 1
+    check res.diagnostics[0].code == codeA11yContrastInvertedInfo
+    check res.html == designedGolden
+
+  test "test_welcome_minimal_designed_is_the_golden_plus_dark_css":
+    # Removing block 3 and the dark classes gives the accommodate golden
+    # back byte for byte: designed adds dark CSS and nothing else.
+    check designedGolden != golden
+    check withoutDarkCss(designedGolden) == golden
+    # Block 3: the media query and the Outlook copies, the page below
+    # the message on `body`, and a class on every recoloured element:
+    # the wrapper and its table (the canvas), the card, the heading, the
+    # paragraph, and the button's cell and link.
+    check "@media (prefers-color-scheme: dark){" in designedGolden
+    check "body{background-color:#0f1115 !important}" in designedGolden
+    check "[data-ogsb] ." in designedGolden
+    check "[data-ogsc] ." in designedGolden
+    check designedGolden.count(" class=\"e-") == 7
+    check "<body xml:lang=\"en\" style=" in designedGolden

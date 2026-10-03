@@ -271,3 +271,29 @@ suite "the default palette's link colour":
         parseColor(theme.darkFor(key)))
       checkpoint(key & " (dark): " & $darkRatio)
       check darkRatio >= 4.5
+
+  test "test_default_palette_light_and_dark_pairs_pass":
+    # The default palette's pairs pass R-DRK-04's light and dark schemes
+    # (4.5:1) on their own, as the library paints them: body and
+    # secondary text on every surface, a filled button's label on its
+    # fill (the accent, and each status tone with the inverse text) and
+    # an outline button's tone on a card. Under darkMode = designed each
+    # side takes its dark value. (The inversion models are a separate
+    # check: tests/t5_dark.nim pins what they say of this palette.)
+    let t = defaultTheme()
+    proc both(fg, bg: string) =
+      for dark in [false, true]:
+        let f = parseColor(if dark: t.darkFor(fg) else: t.lightFor(fg))
+        let b = parseColor(if dark: t.darkFor(bg) else: t.lightFor(bg))
+        let ratio = contrastRatio(f, b)
+        checkpoint(fg & " on " & bg & (if dark: " (dark): " else: ": ") &
+          $ratio)
+        check ratio >= 4.5
+    for text in ["color.text.primary", "color.text.secondary"]:
+      for surface in ["color.surface.canvas", "color.surface.card",
+          "color.surface.subtle"]:
+        both(text, surface)
+    both("color.accent.primaryText", "color.accent.primary")
+    for tone in ["info", "success", "warning", "danger"]:
+      both("color.text.inverse", "color.status." & tone)
+      both("color.status." & tone, "color.surface.card")

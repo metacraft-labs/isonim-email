@@ -170,7 +170,8 @@ proc backgroundSlot(node: EmailNode): tuple[inStyles: bool; key: string] =
 
 proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]] =
-  ## P8's asset half. Every `img`/`mailImage` source and every band's
+  ## P8's asset half. Every `img`/`mailImage` source (and dark source,
+  ## `dark_src`) and every band's
   ## background image (`background_image`, catalogue R-VML-04) the tree
   ## references is resolved — a store name through `store.get`, a
   ## compile-time `asset"…"` path through the program's embedded
@@ -253,9 +254,13 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
       continue
     if node.kind == enElement and
         node.tag.toLowerAscii() in ["img", "mailimage"]:
-      let url = resolveOne(node.attrs.getOrDefault("src", ""), node)
-      if url.len > 0:
-        node.attrs["src"] = url
+      # An image's dark copy (R-IMG-06) publishes like its source.
+      for key in ["src", "dark_src"]:
+        if key == "dark_src" and key notin node.attrs:
+          continue
+        let url = resolveOne(node.attrs.getOrDefault(key, ""), node)
+        if url.len > 0:
+          node.attrs[key] = url
     elif node.kind == enElement and node.tag in bandTagsWithImages:
       let (inStyles, key) = backgroundSlot(node)
       if key.len > 0:
@@ -266,6 +271,20 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     for i in countdown(node.children.high, 0):
       stack.add(node.children[i])
   result = (listedAssets, diags)
+
+proc darkSwapImages*(doc: EmailNode): seq[EmailNode] =
+  ## The `mailImage`s with a `dark_src` (R-IMG-06), in document order:
+  ## the light images P6 pairs with a dark copy.
+  var stack: seq[EmailNode] = @[doc]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node == nil:
+      continue
+    if node.kind == enElement and node.tag == "mailImage" and
+        node.attrs.getOrDefault("dark_src", "").strip().len > 0:
+      result.add(node)
+    for i in countdown(node.children.high, 0):
+      stack.add(node.children[i])
 
 proc checkBackgroundUrls*(doc: EmailNode): seq[EmailDiagnostic] =
   ## P8's check of every band's background image (catalogue R-VML-04):
@@ -377,7 +396,8 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   let fonts = webFontRules(target, theme)
   diags.add(fonts.diagnostics)
   let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
-    msoRules = fonts.mso, columns = columnRules(doc))
+    msoRules = fonts.mso, columns = columnRules(doc),
+    swaps = darkSwapImages(doc))
   diags.add(headRes.diagnostics)
   for blk in headRes.blocks:
     if blk.kind == enHeadStyle and blk.priority == fontsPriority:
@@ -392,6 +412,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
         "stack's next family (R-TXT-07)")]))
   diags.add(applyA11y(doc))
   diags.add(lintTree(doc, profile))
+  if target.darkMode != dmNone:
+    # R-DRK-04's inversion simulation: the clients that recolour a
+    # message themselves do so under `accommodate` and `designed` alike.
+    diags.add(lintInversion(doc, profile))
   if target.darkMode == dmDesigned:
     # R-DRK-04's dark scheme, as painted by the dark block when it
     # survived the head budget (a dropped block paints nothing dark).
@@ -407,6 +431,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
       diags.add(lintDarkContrast(doc, dark))
   let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
+  if target.darkMode != dmNone:
+    # R-DRK-06: a pair's light image shows unswapped in dark mode
+    # wherever the dark block does not apply.
+    diags.add(lintDarkLogos(doc, found.assets))
   diags.add(checkBackgroundUrls(doc))
 
   # Lowering reads the same tree the passes just walked. P4 lowers the

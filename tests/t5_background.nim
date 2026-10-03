@@ -20,7 +20,7 @@
 ##
 ## Backend-independent (tree building + pure passes), so `just test`
 ## also runs it on JS.
-import std/[sequtils, strutils, unittest]
+import std/[sequtils, strutils, tables, unittest]
 import isonim_email
 import stories/story_kit
 import stories/seed_backgrounds
@@ -256,7 +256,11 @@ suite "a section's background image":
     var t = defaultTarget()
     t.darkMode = dmDesigned
     let res = renderTree(doc, target = t)
-    let inner = between(res.html, "class=\"e-", ">")
+    # The section's own class (the designed document has one too).
+    let cls = s.attrs.getOrDefault("class", "")
+    check cls.startsWith("e-")
+    let inner = between(res.html, "align=\"left\" class=\"" & cls & "\"",
+      ">")
     check "background-image:url(" in inner
     check "padding:24px;" in inner
 
@@ -594,6 +598,62 @@ suite "a fixed-height hero's content fits (R-VML-08)":
     discard r2.child(h2, "mailButton", attrs = [("href",
       "https://app.example.com/")], text = "Shop")
     check codeLayoutHeroOverflow in codesOf(renderTree(doc2).diagnostics)
+
+  test "test_hero_overflow_measures_spacing_and_transform":
+    # The heading is measured as drawn. "Spring sale on everything" is
+    # one line of the 552px cell (359px at 28px bold); with a 12px
+    # letter-spacing it is 659px, two lines: 72px in a 36px cell.
+    proc headed(text, height: string;
+        styles: openArray[(string, string)]): EmailNode =
+      let r = EmailRenderer()
+      result = r.newDoc()
+      let h = r.child(result, "mailHero", [("background-color", "#223344"),
+        ("background-image", bg), ("height", height)])
+      var s = @[("color", "#ffffff"), ("margin", "0"),
+        ("line-height", "36px")]
+      for x in styles:
+        s.add(x)
+      discard r.child(h, "h1", s, text = text)
+    let plain = "Spring sale on everything"
+    check codeLayoutHeroOverflow notin codesOf(renderTree(headed(plain,
+      "84px", [])).diagnostics)
+    check codeLayoutHeroOverflow in codesOf(renderTree(headed(plain,
+      "84px", [("letter-spacing", "12px")])).diagnostics)
+    check codeLayoutHeroOverflow notin codesOf(renderTree(headed(plain,
+      "120px", [("letter-spacing", "12px")])).diagnostics)
+    # Uppercase, "Spring sale on everything today" grows from 446px (one
+    # line) to 562px (two).
+    let longer = "Spring sale on everything today"
+    check codeLayoutHeroOverflow notin codesOf(renderTree(headed(longer,
+      "84px", [])).diagnostics)
+    check codeLayoutHeroOverflow in codesOf(renderTree(headed(longer,
+      "84px", [("text-transform", "uppercase")])).diagnostics)
+    # Inherited from the hero itself.
+    let r = EmailRenderer()
+    let doc = r.newDoc()
+    let h = r.child(doc, "mailHero", [("background-color", "#223344"),
+      ("background-image", bg), ("height", "84px"),
+      ("text-transform", "uppercase")])
+    discard r.child(h, "h1", [("color", "#ffffff"), ("margin", "0"),
+      ("line-height", "36px")], text = longer)
+    check codeLayoutHeroOverflow in codesOf(renderTree(doc).diagnostics)
+
+  test "test_hero_overflow_measures_the_widest_face":
+    # "Spring sale on almost everything" is 462px in Arial (one line of
+    # 552px) and 567px in Courier: a stack that may fall back to
+    # Courier New is measured in Courier.
+    proc stacked(stack: string): EmailNode =
+      let r = EmailRenderer()
+      result = r.newDoc()
+      let h = r.child(result, "mailHero", [("background-color", "#223344"),
+        ("background-image", bg), ("height", "84px")])
+      discard r.child(h, "h1", [("color", "#ffffff"), ("margin", "0"),
+        ("line-height", "36px"), ("font-family", stack)],
+        text = "Spring sale on almost everything")
+    check codeLayoutHeroOverflow notin codesOf(renderTree(stacked(
+      "Arial, sans-serif")).diagnostics)
+    check codeLayoutHeroOverflow in codesOf(renderTree(stacked(
+      "Arial, 'Courier New', monospace")).diagnostics)
 
   test "test_hero_overflow_reports_approximate_metrics":
     let r = EmailRenderer()

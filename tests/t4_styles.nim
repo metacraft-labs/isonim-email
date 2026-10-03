@@ -606,7 +606,8 @@ suite "an uncoloured text element gets the colour it would inherit":
     let (head, diags) = applyStyles(box, defaultTheme(), designed)
     check diags.len == 0
     check own.styles["color"] == "#0969da"
-    check darkColorsOf(head, own).len == 0
+    # Its own token's dark value, not the box's (R-DRK-02, token-driven).
+    check darkColorsOf(head, own) == @["#7aa7ff"]
     check ownDark.styles["color"] == "#0969da"
     check darkColorsOf(head, ownDark) == @["#7aa7ff"]
 

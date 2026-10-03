@@ -37,7 +37,8 @@
 ##
 ## A `height` hero's rectangle never grows, so its content must fit
 ## (R-VML-08): `contentHeight` estimates it at the text metrics' worst
-## case, and more than the cell holds is `E-LAYOUT-HERO-OVERFLOW`.
+## case, text drawn with its `letter-spacing` and `text-transform`, and
+## more than the cell holds is `E-LAYOUT-HERO-OVERFLOW`.
 ##
 ## Ghost tables and VML come from `mso/` only. Pure tree building:
 ## identical on the C and JS targets.
@@ -117,11 +118,13 @@ proc textRuns(node: EmailNode; runs: var seq[string]) =
       textRuns(c, runs)
 
 proc wrappedLines(text, stack: string; size: float; bold: bool;
-    width: float; approx: var bool): int =
-  ## Lines of `text` wrapped greedily at `width`, worst-case face.
+    width: float; spacing: float; transform: string;
+    approx: var bool): int =
+  ## Lines of `text` wrapped greedily at `width`, worst-case face, drawn
+  ## with its `letter-spacing` and `text-transform` (`measureStyled`).
   var line = ""
   for word in text.splitWhitespace():
-    let w = measureText(word, stack, size, bold)
+    let w = measureStyled(word, stack, size, bold, spacing, transform)
     approx = approx or w.approx
     if w.width > width:
       # A word wider than the line breaks over as many lines as it needs.
@@ -132,13 +135,26 @@ proc wrappedLines(text, stack: string; size: float; bold: bool;
       line = word
       continue
     let cand = if line.len == 0: word else: line & " " & word
-    if line.len > 0 and measureText(cand, stack, size, bold).width > width:
+    if line.len > 0 and measureStyled(cand, stack, size, bold, spacing,
+        transform).width > width:
       inc result
       line = word
     else:
       line = cand
   if line.len > 0:
     inc result
+
+proc inheritedStyle(node, stop: EmailNode; prop: string): string =
+  ## `prop` on `node`, else on the nearest ancestor below `stop` (an
+  ## inherited property: `letter-spacing`, `text-transform`).
+  var n = node
+  while n != nil and n != stop:
+    if n.kind == enElement and prop in n.styles:
+      return n.styles[prop]
+    n = n.parent
+  if stop != nil and prop in stop.styles:
+    return stop.styles[prop]
+  ""
 
 proc contentHeight*(node: EmailNode; width: float;
     approx: var bool): float =
@@ -158,11 +174,15 @@ proc contentHeight*(node: EmailNode; width: float;
       let stack = c.styles.getOrDefault("font-family", "sans-serif")
       let bold = isBoldWeight(c.styles.getOrDefault("font-weight",
         if c.tag.startsWith("h"): "700" else: "400"))
+      let spacing = letterSpacingPx(inheritedStyle(c, node,
+        "letter-spacing"), size)
+      let transform = inheritedStyle(c, node, "text-transform")
       var runs = @[""]
       textRuns(c, runs)
       var lines = 0
       for run in runs:
-        lines += max(1, wrappedLines(run, stack, size, bold, width, approx))
+        lines += max(1, wrappedLines(run, stack, size, bold, width, spacing,
+          transform, approx))
       result += float(lines) * lh + verticalMargins(c)
     of "mailButton":
       var ignored: seq[EmailDiagnostic] = @[]

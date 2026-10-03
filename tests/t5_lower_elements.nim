@@ -11,9 +11,9 @@
 ##   `width` attribute, the canonical inline stack, alt-text styling on
 ##   the `img` itself, an optional `height` attribute, the linked-image
 ##   wrap, and the width from the asset's intrinsic size (halved for
-##   `@2x` assets). An image whose width cannot be known is an error,
-##   and so is every prop whose lowering does not exist yet (dark
-##   source, fluid on mobile, explicit alignment, percentage widths).
+##   `@2x` assets). An image whose width cannot be known is an error.
+##   Its other props lower now (the dark source: one image outside
+##   `designed`, here; the pair: tests/t5_dark.nim).
 ##
 ## The seed stories are pinned here too: both reach the output with
 ## their images as real `img` elements.
@@ -143,7 +143,14 @@ suite "elements without a lowering are errors, never raw tags":
       r.appendChild(doc, p)
       r.appendChild(doc, image(r, "https://x.test/logo.png", "Logo",
         styles = [("width", "120px")]))))
-    check res.diagnostics.len == 0
+    # Nothing to warn about (information, such as the inversion
+    # simulation's findings under an uncalibrated model, is not a
+    # problem).
+    var problems: seq[EmailDiagnostic] = @[]
+    for d in res.diagnostics:
+      if d.severity >= sevWarning:
+        problems.add(d)
+    check problems.len == 0
 
   test "test_strict_raises_and_stories_refuse_unlowered_elements":
     # `mailMarkdown` has no lowering yet (the spacer and the hero that
@@ -307,19 +314,15 @@ suite "mailImage lowers to the fixed-size image":
     check codesOf(res.diagnostics) == @[codeLayoutImageWidth]
     check res.diagnostics[0].rules == @["R-IMG-01"]
 
-  test "test_props_without_a_lowering_are_reported":
-    # `dark_src` is the one prop left without a lowering (the dark
-    # swap); `fluid_on_mobile`, `align` and percentage widths lower now
-    # (tests/t5_images.nim).
-    for (attrs, styles, rule) in [
-        (@[("dark_src", "https://x.test/logo-dark.png")],
-          @[("width", "120px")], "R-IMG-06")]:
-      let res = renderOne(image(EmailRenderer(), "https://x.test/logo.png",
-        "Acme logo", attrs = attrs, styles = styles))
-      check codesOf(res.diagnostics) == @[codeLowerMissing]
-      check res.diagnostics[0].rules == @[rule]
-      # The image itself still lowers.
-      check "<img src=\"https://x.test/logo.png\"" in res.html
+  test "test_dark_src_lowers_to_the_light_image_outside_designed":
+    # `dark_src` lowers now (the dark swap, tests/t5_dark.nim); without
+    # a dark block (`accommodate`) the light image is the only one.
+    let res = renderOne(image(EmailRenderer(), "https://x.test/logo.png",
+      "Acme logo", attrs = [("dark_src", "https://x.test/logo-dark.png")],
+      styles = [("width", "120px")]))
+    check codeLowerMissing notin codesOf(res.diagnostics)
+    check "<img src=\"https://x.test/logo.png\"" in res.html
+    check "logo-dark.png" notin res.html
 
 suite "seed stories reach the output with their images":
   test "test_seed_stories_render_images_as_img":

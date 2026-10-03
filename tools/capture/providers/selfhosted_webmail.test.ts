@@ -856,10 +856,22 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
       /class="[^"]*\brcmBody\b/,
     );
     assert.ok(countColour(rcControl.png!, DARK_BG) < 1500);
+    // The designed document's own surface (catalogue R-DRK-02): its dark
+    // value paints the wrapper, and the page below the message is
+    // selected as `body`, which Roundcube scopes to its message wrapper,
+    // so the heading's light dark-scheme colour sits on a dark ground.
+    assert.match(
+      rc,
+      /#message-htmlpart1 div\.rcmBody\{ background-color: #1a1d23 !important; \}/,
+    );
+    assert.ok(
+      countColour(get("sanitiserProbe", "roundcube").png!, [0x1a, 0x1d, 0x23]) >
+        5000,
+    );
     // Kept: the hidden preheader, the image (on the assets service),
     // lang and dir on the wrapper; removed: role and aria-*.
     assert.match(rc, /Head CSS under a webmail sanitiser\./);
-    assert.match(rc, /<div lang="en" dir="ltr" style=/);
+    assert.match(rc, /<div lang="en" dir="ltr" class="[^"]*" style=/);
     assert.doesNotMatch(rc, /\srole=|\saria-/);
     assert.match(
       rc,
@@ -1295,13 +1307,14 @@ describe(
 );
 
 describe("selfhosted webmail helpers", () => {
-  it("expects the story images a browser renders, not those in conditional comments", () => {
+  it("expects the story images a browser renders, not those in conditional comments or hidden inline", () => {
     const html =
       `<img src="https://x.test/aaaaaaaaaaaaaaaa/a.png">` +
       `<!--[if mso]><img src="https://x.test/bbbbbbbbbbbbbbbb/b.png"><![endif]-->` +
       `<!--[if !mso]><!--><img alt="x" SRC='https://x.test/cccccccccccccccc/c.png?v=1'><!--<![endif]-->` +
       `<img src="https:&#x2F;&#x2F;x.test/dddddddddddddddd/d.png">` +
-      `<img src="http://elsewhere.test/e.png"><a href="https://x.test/f">f</a>`;
+      `<img src="http://elsewhere.test/e.png"><a href="https://x.test/f">f</a>` +
+      `<img src="https://x.test/gggggggggggggggg/g-dark.png" alt="g" class="e-dk-show" style="display:none;border:0;">`;
     assert.deepEqual(storyImagePaths(html), [
       "/aaaaaaaaaaaaaaaa/a.png",
       "/cccccccccccccccc/c.png",

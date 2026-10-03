@@ -62,7 +62,7 @@
 ## button inside `<!--[if !mso]>`:
 ##
 ## ```html
-## <!--[if mso]><div align="{align}"><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:{h}px;v-text-anchor:middle;width:{w}px;" arcsize="{round(r/h*100)}%" strokecolor="{border or bg}" [strokeweight="{bw}px"] fillcolor="{bg}" | filled="f"><w:anchorlock /><center style="color:{fg};font-family:{ff};font-size:{fs};font-weight:{fw};">{label}</center></v:roundrect></div><![endif]-->
+## <!--[if mso]><div align="{align}"><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:{h}px;v-text-anchor:middle;width:{w}px;" arcsize="{round(r/h*100)}%" strokecolor="{border or bg}" [strokeweight="{bw}px"] fillcolor="{bg}" | filled="f"><w:anchorlock /><center style="color:{fg};font-family:{ff};font-size:{fs};font-weight:{fw};[letter-spacing:{ls};][text-transform:{tt};]">{label}</center></v:roundrect></div><![endif]-->
 ## ```
 ##
 ## The roundrect is the link, so Word's whole button is clickable and
@@ -436,8 +436,13 @@ proc lowerButton*(node: EmailNode; ctx: LowerCtx):
   let h = g.height
   let available = float(w - g.padding[1] - g.padding[3] - 2 * g.border)
   let family = node.styles.getOrDefault("font-family", "")
-  let m = measureText(label, family, g.fontSize,
-    isBoldWeight(node.styles.getOrDefault("font-weight", "400")))
+  # The label as drawn: its `text-transform` and `letter-spacing` widen
+  # it as much as its face does (Word's label carries both, below).
+  let spacing = letterSpacingPx(node.styles.getOrDefault("letter-spacing",
+    ""), g.fontSize)
+  let m = measureStyled(label, family, g.fontSize,
+    isBoldWeight(node.styles.getOrDefault("font-weight", "400")), spacing,
+    node.styles.getOrDefault("text-transform", ""))
   if m.approx:
     diags.add(EmailDiagnostic(severity: sevInfo,
       code: codeLayoutMetricsApprox,
@@ -460,7 +465,8 @@ proc lowerButton*(node: EmailNode; ctx: LowerCtx):
     elif bg.len > 0: bg else: fg
   let center = r.createElement("center")
   var cst: seq[(string, string)] = @[("color", fg)]
-  for k in ["font-family", "font-size", "font-weight"]:
+  for k in ["font-family", "font-size", "font-weight", "letter-spacing",
+      "text-transform"]:
     cst.add((k, node.styles.getOrDefault(k, "")))
   r.declare(center, cst)
   for c in vmlLabel:

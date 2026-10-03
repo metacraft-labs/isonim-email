@@ -3,7 +3,12 @@
 ## Resolves every declaration to its final inline form: `tok"…"` sentinels
 ## (stored by the `setStyle` overload) become light literals (R-CSS-01) —
 ## except under the `@dark:` variant, where they become the token's dark
-## literal (`darkFor`), the value the dark head rules exist to carry —
+## literal (`darkFor`), the value the dark head rules exist to carry.
+## Under `darkMode = designed` a colour resolved from a token whose dark
+## value differs gets that `@dark:` twin itself (R-DRK-02, token-driven;
+## an element's own `@dark:` declaration wins), a designed document
+## without a background is painted with `color.surface.card`, and a
+## shadowed box's derived border gets its dark colour (R-TBL-09) —
 ## variant keys (`@sm:`/`@dark:`/`@hover:`) move into the head
 ## list P6 serialises, units/colours/shorthands normalise through
 ## `style/*`, the closed MSO list applies when `outlookWord`, and
@@ -623,6 +628,75 @@ proc linkDefaults(node: EmailNode; theme: EmailTheme; target: EmailTarget;
   except ThemeError, StyleError:
     discard
 
+const designedDocumentSurface* = "color.surface.card"
+  ## The surface a `darkMode = designed` document without a background of
+  ## its own is painted with: the token whose light value is the
+  ## skeleton's `#ffffff` in the default theme, so its dark value comes
+  ## with it (R-DRK-02, catalogue §1).
+
+proc pairsDark(prop: string): bool =
+  ## The properties R-DRK-02 pairs with a token's dark value: the text
+  ## colour, the background (either spelling) and the border colours.
+  prop in ["color", "background-color", "background"] or
+    isSideProp(prop, "color")
+
+proc tokenDarkPairs(entries: seq[(string, string)];
+                    theme: EmailTheme): seq[(string, string)] =
+  ## R-DRK-02, token-driven: for every colour declaration resolved from a
+  ## `tok"…"` whose dark value differs from its light one, the `@dark:`
+  ## twin that carries the dark value, unless the element declares that
+  ## variant itself (its own `@dark:` wins). Only under `designed`.
+  var explicit: seq[string] = @[]
+  for (k, _) in entries:
+    let (variant, base) = splitVariantKey(k)
+    if variant == "dark":
+      explicit.add(base.toLowerAscii())
+  for (k, v) in entries:
+    let (variant, base) = splitVariantKey(k)
+    let prop = base.toLowerAscii()
+    if variant != "" or not pairsDark(prop):
+      continue
+    let tkey = splitTokenKey(v)
+    if tkey == "" or prop in explicit or
+        (prop == "background" and "background-color" in explicit) or
+        (prop == "background-color" and "background" in explicit):
+      continue
+    try:
+      if normaliseColor(theme.darkFor(tkey)) ==
+          normaliseColor(theme.lightFor(tkey)):
+        continue
+    except ThemeError, StyleError:
+      # A missing token or a non-colour value: the inline path reports it.
+      continue
+    explicit.add(prop)
+    result.add(("@dark:" & k, v))
+
+proc darkBackgroundOf(node: EmailNode; head: seq[HeadDecl]): string =
+  ## The dark `background-color` the dark rules give `node` itself (its
+  ## last one), or "".
+  for d in head:
+    if d.node == node and d.variant == "dark" and
+        d.prop == "background-color":
+      result = d.value
+
+proc shadowBorderDark(node: EmailNode; head: seq[HeadDecl]): string =
+  ## R-TBL-09 under `designed`: the dark colour of the border a shadowed
+  ## `mailBox` without a border of its own gets, one step darker than the
+  ## background it shows in the dark scheme (its own dark background,
+  ## else the nearest ancestor's); "" when no dark rule paints one, and
+  ## the light border then stands.
+  var n = node
+  while n != nil:
+    if n.kind == enElement:
+      let d = darkBackgroundOf(n, head)
+      if d.len > 0:
+        try:
+          return darkerStep(d)
+        except StyleError:
+          return ""
+    n = n.parent
+  ""
+
 proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
                   profile: AudienceProfile; head: var seq[HeadDecl];
                   diags: var seq[EmailDiagnostic]) =
@@ -646,8 +720,20 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     # A `mailTable` border that is neither `none` nor a Border; the
     # table's own declaration reports it.
     discard e
+  if tag == "maildocument" and target.darkMode == dmDesigned and
+      "background-color" notin node.styles and
+      "background" notin node.styles and
+      "background_color" notin node.styles and
+      "background_color" notin node.attrs and
+      "background-color" notin node.attrs:
+    # The skeleton's surface under `designed` is a token, so it has a
+    # dark value like every other colour of a designed message (R-DRK-02).
+    entries.add(("background-color", "tok:" & designedDocumentSurface))
   for k, v in node.styles.pairs:
     entries.add((k, v))
+  if target.darkMode == dmDesigned:
+    for e in tokenDarkPairs(entries, theme):
+      entries.add(e)
   if tag == "mailimage" and
       node.attrs.getOrDefault("fluid_on_mobile", "").toLowerAscii() == "true":
     # R-IMG-09: full width below the breakpoint, through a class; the
@@ -774,6 +860,17 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       if target.darkMode == dmDesigned and dark != "" and dark != light:
         head.add(HeadDecl(variant: "dark", prop: "color", value: dark,
           node: node, origin: node.origin))
+  if tag == "mailbox" and target.darkMode == dmDesigned and
+      "border" notin res and "border-color" notin res and
+      (res.getOrDefault("shadow", node.attrs.getOrDefault("shadow",
+        "")).strip().toLowerAscii() in ["sm", "md"]):
+    # R-TBL-09: the border that marks a shadowed box's edge is derived
+    # from its light background; in the dark scheme it follows the dark
+    # one, or it turns near-white on the dark box.
+    let dark = shadowBorderDark(node, head)
+    if dark.len > 0:
+      head.add(HeadDecl(variant: "dark", prop: "border-color", value: dark,
+        node: node, origin: node.origin))
   if target.outlookWord:
     # The closed MSO list: each addition checks for an
     # author-set value first and never overwrites one. With outlookWord

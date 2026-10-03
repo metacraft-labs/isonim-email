@@ -77,10 +77,18 @@
 ## The width comes from the element (P5-normalised `width` style or a
 ## plain `width` attribute), else from the published asset's intrinsic
 ## size, halved for `@2x` assets (R-IMG-05). A width that is still
-## unknown is an error (`E-LAYOUT-IMAGE-WIDTH`). `dark_src` (R-IMG-06,
-## two images swapped by the dark block) is reported as
-## `E-LOWER-MISSING`: the image still lowers, but the error blocks
-## sending.
+## unknown is an error (`E-LAYOUT-IMAGE-WIDTH`).
+##
+## **`dark_src`** (R-IMG-06): under `darkMode = designed`, when the dark
+## block survives (P6 then gives the light image `e-dk-hide`), the image
+## is written twice, the dark copy right after the light one: the same
+## element but for its `src` (`dark_src`) and class (`e-dk-show`), and
+## hidden inline with `display:none` (and `mso-hide:all` for Word, R-OL-14;
+## a fluid image's dark copy sits beside its web image, out of Word's
+## sight). The dark block swaps them. Both carry the alt: the hidden one
+## is out of the accessibility tree through `display:none`, so neither
+## is `aria-hidden` (R-A11Y-05). Under `none` and `accommodate` there is
+## no dark block and the light image is the only one.
 ##
 ## The `img` is P5-final: P5 has already run over the authoring
 ## element, so the literals written here are what the serialiser
@@ -100,6 +108,7 @@ import ../style/metrics
 import ../target
 import ../mso/cond
 import ../style/colors
+from ../passes/head import darkHideClass, darkShowClass
 from ../passes/lint import contrastRatio
 from ./document import contentCellAlign
 from ./section import zeroFontSize
@@ -268,12 +277,6 @@ proc backgroundOf(node: EmailNode): string =
     p = p.parent
   ""
 
-proc lowerMissing(node: EmailNode; what, rule: string): EmailDiagnostic =
-  EmailDiagnostic(severity: sevError, code: codeLowerMissing,
-    message: "mailImage " & what & " has no lowering yet (" & rule &
-      "); it is reported, never dropped silently",
-    origin: node.origin, rules: @[rule])
-
 type AltStyle* = object
   ## The alt text's type (R-IMG-03).
   family*, color*: string
@@ -375,8 +378,13 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
     height = int(round(float(width) * float(asset.height) /
       float(asset.width)))
 
-  if "dark_src" in node.attrs:
-    diags.add(lowerMissing(node, "dark_src", "R-IMG-06"))
+  # R-IMG-06: a `dark_src` image is written twice, the dark copy hidden
+  # inline and swapped in by the dark block. P6 marks the light image
+  # `e-dk-hide` only when that block exists (`darkMode = designed`, the
+  # block kept); otherwise the light image is the only one.
+  let darkSrc = node.attrs.getOrDefault("dark_src", "").strip()
+  let swap = darkSrc.len > 0 and
+    darkHideClass in node.attrs.getOrDefault("class", "").splitWhitespace()
   let fluidOnMobile =
     node.attrs.getOrDefault("fluid_on_mobile", "").toLowerAscii() == "true"
   # A px image fills its box only when it is wider than a phone's box:
@@ -443,18 +451,34 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
     minHeight = true
 
   proc buildImg(attrWidth, cssWidth, cssMax: string; display: string;
-      withClass, withAlt: bool; withHeight = true): EmailNode =
+      withClass, withAlt: bool; withHeight = true;
+      dark = false; hideFromWord = false): EmailNode =
+    ## One `img`; `dark` builds the pair's dark copy: `dark_src`, the
+    ## same alt (whichever copy is `display:none` is out of the
+    ## accessibility tree, so neither carries `aria-hidden`, R-A11Y-05),
+    ## `e-dk-show` for `e-dk-hide`, hidden inline, and from Word with
+    ## `mso-hide:all` when `hideFromWord` (R-OL-14).
     let img = r.createElement("img")
     img.origin = node.origin
-    r.setAttribute(img, "src", src)
+    r.setAttribute(img, "src", if dark: darkSrc else: src)
     r.setAttribute(img, "alt", alt)
     if attrWidth.len > 0:
       r.setAttribute(img, "width", attrWidth)
     if height > 0 and withHeight:
       r.setAttribute(img, "height", $height)
     if withClass and "class" in node.attrs:
-      r.setAttribute(img, "class", node.attrs["class"])
-    r.baseStack(img, display, if display == "block": margin else: "")
+      if dark:
+        var parts: seq[string] = @[]
+        for c in node.attrs["class"].splitWhitespace():
+          parts.add(if c == darkHideClass: darkShowClass else: c)
+        r.setAttribute(img, "class", parts.join(" "))
+      else:
+        r.setAttribute(img, "class", node.attrs["class"])
+    if dark:
+      r.setStyle(img, "display", "none")
+      r.baseStack(img, "inline", if display == "block": margin else: "")
+    else:
+      r.baseStack(img, display, if display == "block": margin else: "")
     if cssWidth.len > 0:
       r.setStyle(img, "width", cssWidth)
     if cssMax.len > 0:
@@ -479,6 +503,8 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
     for k, v in node.styles.pairs:
       if k notin consumedStyles:
         r.setStyle(img, k, v)
+    if dark and hideFromWord:
+      r.setStyle(img, "mso-hide", "all")
     img
 
   var images: seq[EmailNode] = @[]
@@ -488,6 +514,11 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
     images.add(buildImg(if width > 0: $width else: "",
       if width > 0: $width & "px" else: "", if inline: "" else: "100%",
       if inline: "inline" else: "block", true, true))
+    if swap:
+      images.add(buildImg(if width > 0: $width else: "",
+        if width > 0: $width & "px" else: "", if inline: "" else: "100%",
+        if inline: "inline" else: "block", true, true, dark = true,
+        hideFromWord = target.outlookWord))
   else:
     let cssW = if fluidOnMobile and percent == 0 and not fullWidth:
         $px & "px"
@@ -497,12 +528,20 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
       else: $px & "px"
     let web = buildImg("100%", cssW, cssMax, "block", true, true,
       withHeight = false)
+    # The dark copy of a fluid image is the web image's twin; Word never
+    # sees it (it sits beside the web image, hidden from Word).
+    let darkWeb = if swap: buildImg("100%", cssW, cssMax, "block", true,
+        true, withHeight = false, dark = true) else: nil
     if target.outlookWord:
       let word = buildImg($px, $px & "px", "100%", "block", false, true)
       images.add(msoWrap(word))
       images.add(notMsoWrap(web))
+      if darkWeb != nil:
+        images.add(notMsoWrap(darkWeb))
     else:
       images.add(web)
+      if darkWeb != nil:
+        images.add(darkWeb)
 
   if holder != nil and not inline:
     markImageOnlyHolder(holder)

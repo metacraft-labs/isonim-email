@@ -53,7 +53,14 @@
 ## `dmDesigned` the Outlook copies split by property (R-DRK-03):
 ## `[data-ogsc]` rules carry `color` only and `[data-ogsb]` rules
 ## `background-color` only, while the media query carries every dark
-## declaration.
+## declaration (border colours included). The media query also paints
+## the page below the message: the document's dark background on the
+## `body` element, which carries no class (R-DOC-14). With `dark_src`
+## images (`swaps`) it holds R-IMG-06's fixed swap rules,
+## `.e-dk-hide{display:none}` and `.e-dk-show{display:block}`, with
+## their `[data-ogsc]` copies; the light image of each pair gets
+## `e-dk-hide` only when the dark block survives, and the image
+## lowering writes the dark copy only then.
 ##
 ## Rule order (R-CSS-16): the rules P6 generates are sorted, which is
 ## cascade-safe because each generated class is one rule per variant.
@@ -309,10 +316,38 @@ proc ogsCopies(cls: string; decls: seq[Declaration]): seq[string] =
   if bg.len > 0:
     result.add(emitStyleRule("[data-ogsb] ." & cls, bg))
 
+const
+  darkHideClass* = "e-dk-hide"
+    ## The light image of a `dark_src` pair (R-IMG-06): hidden by the
+    ## dark block.
+  darkShowClass* = "e-dk-show"
+    ## The dark image of a pair: inline `display:none`, shown by the dark
+    ## block.
+
+proc swapRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
+  ## R-IMG-06's swap: in the dark scheme the light image goes and the
+  ## dark one shows.
+  @[("." & darkHideClass, @[Declaration(prop: "display", value: "none",
+      important: true)]),
+    ("." & darkShowClass, @[Declaration(prop: "display", value: "block",
+      important: true)])]
+
+proc documentDarkBackground(groups: seq[HeadGroup]): seq[Declaration] =
+  ## The document's dark background, for the page below the message
+  ## (`<body>`, which carries no class: R-DOC-14): the `body` element is
+  ## selected instead.
+  for g in groups:
+    if g.node != nil and g.node.kind == enElement and
+        g.node.tag == "mailDocument":
+      for d in g.decls:
+        if d.prop.toLowerAscii() == "background-color":
+          result = @[d]
+
 proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     webfonts: seq[seq[Declaration]] = @[];
     msoRules: seq[Rule] = @[];
-    columns: seq[ColumnRule] = @[]
+    columns: seq[ColumnRule] = @[];
+    swaps: seq[EmailNode] = @[]
   ): tuple[blocks: seq[EmailNode]; diagnostics: seq[EmailDiagnostic]] =
   ## P6 over one render: prioritised head blocks plus the budget
   ## diagnostics, in block order (mso last). `webfonts`/`msoRules` are
@@ -396,12 +431,24 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     seenDark.add(cls)
     darkGroups.add((cls, g.decls))
   var darkText = ""
-  if darkGroups.len > 0:
+  let designed = target.darkMode == dmDesigned
+  if darkGroups.len > 0 or (designed and swaps.len > 0):
     var copies: seq[string] = @[]
     var inner: seq[tuple[selector: string; decls: seq[Declaration]]] = @[]
     for (cls, ds) in darkGroups:
       inner.add(("." & cls, ds))
       copies.add(ogsCopies(cls, ds))
+    let page = documentDarkBackground(darkGroupsIn)
+    if page.len > 0:
+      # The page below the message keeps the body's colour, and the body
+      # carries no class (R-DOC-14): the element is selected. Outlook's
+      # recolouring has no body to paint, so no copy.
+      inner.add(("body", page))
+    if designed and swaps.len > 0:
+      # R-IMG-06: the image swap, with its Outlook copy (R-DRK-03).
+      for (sel, ds) in swapRules():
+        inner.add((sel, ds))
+        copies.add(emitStyleRule("[data-ogsc] " & sel, ds))
     copies.sort()
     darkText = copies.join("") &
       emitMediaRule("(prefers-color-scheme: dark)", inner)
@@ -487,6 +534,11 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   if "dark" in kept:
     for (node, cls) in darkAttach:
       node.attachClass(cls)
+    if designed:
+      # The image lowering writes the dark copy only for a light image
+      # carrying this class: a dropped dark block leaves one image.
+      for node in swaps:
+        node.attachClass(darkHideClass)
   if "decorative" in kept:
     for (node, cls) in hoverAttach:
       node.attachClass(cls)

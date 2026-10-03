@@ -69,6 +69,8 @@ import ../style/shorthand
 import ../support/families
 import ../raw
 import ../target
+import ../assets
+import ../imaging
 import ./layout
 
 ## The client families an edit to this module can change: read by
@@ -740,27 +742,28 @@ proc hasBackgroundImage(node: EmailNode): bool =
   ## style or an attribute, either spelling: `rawValue`).
   rawValue(node, "background-image").len > 0
 
-proc lintContrast(node: EmailNode;
-                 ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
-  ## R-A11Y-07: WCAG contrast below 4.5:1 warns (below 3:1 for large
-  ## text: 24px+, or 18.66px+ bold). Foreground from the element's
-  ## own `color` (absent means skipped), background from the nearest
-  ## ancestor `background-color` (a button's own fill first), else white. Unparseable colours
-  ## are skipped: P2 owns bad values, not this check.
-  ##
-  ## Light-scheme pairs only: dark-mode and inversion simulation
-  ## (R-DRK-04, `E-A11Y-CONTRAST` / `W-A11Y-CONTRAST-INVERTED`)
-  ## arrive with calibrated Gmail/Outlook.com models — this check
-  ## never inverts.
-  if node.kind != enElement:
-    return @[]
-  if node.tag.toLowerAscii() notin ["h1", "h2", "h3", "h4", "h5", "h6",
-      "p", "li", "span", "a", "td", "mailbutton"]:
-    return @[]
-  if "color" notin node.styles:
-    return @[]
+type TextPair = object
+  ## A text element's light-scheme pair: its colour, the background it
+  ## sits on, whether it is large text (the 3:1 threshold), and whether
+  ## a band's background image is on the way (the background is then
+  ## the image's fallback colour).
+  ok: bool
+  fg, bg: Rgba
+  large, overImage: bool
+
+const contrastTags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
+  "span", "a", "td", "mailbutton"]
+  ## The elements whose text the contrast checks read.
+
+proc textPairOf(node: EmailNode; ancestors: seq[EmailNode]): TextPair =
+  ## Foreground from the element's own `color` (absent: not ok),
+  ## background from the nearest ancestor `background-color` (a
+  ## button's own fill first), else white. Unparseable colours are not
+  ## ok: P2 owns bad values, not the contrast checks.
+  if node.kind != enElement or
+      node.tag.toLowerAscii() notin contrastTags or "color" notin node.styles:
+    return
   var bgValue = ""
-  var overImage = false
   if node.tag == "mailButton":
     # A button's label sits on its own fill, when it has one.
     bgValue = node.styles.getOrDefault("background-color", "")
@@ -776,30 +779,42 @@ proc lintContrast(node: EmailNode;
       # be blocked, so the pair checked is the text and the fallback
       # colour that shows instead (the band's own, else the nearest
       # enclosing one, as the lowering paints it).
-      overImage = true
+      result.overImage = true
     if "background-color" in a.styles:
       bgValue = a.styles["background-color"]
       break
   let white = Rgba(r: 255, g: 255, b: 255, a: 1.0)
-  var fg, bg: Rgba
   try:
-    fg = parseColor(node.styles["color"])
-    bg = if bgValue.len > 0: parseColor(bgValue) else: white
+    result.fg = parseColor(node.styles["color"])
+    result.bg = if bgValue.len > 0: parseColor(bgValue) else: white
   except ValueError:
-    return @[]
-  if bg.a < 1.0:
-    bg = blendOver(bg, white)
-  if fg.a < 1.0:
-    fg = blendOver(fg, bg)
+    return
+  if result.bg.a < 1.0:
+    result.bg = blendOver(result.bg, white)
+  if result.fg.a < 1.0:
+    result.fg = blendOver(result.fg, result.bg)
   let size = fontSizePx(node.styles.getOrDefault("font-size", ""))
-  let large = size >= 24.0 or
+  result.large = size >= 24.0 or
     (size >= 18.66 and isBoldWeight(node.styles.getOrDefault(
       "font-weight", "")))
-  let threshold = if large: 3.0 else: 4.5
-  let ratio = contrastRatio(fg, bg)
+  result.ok = true
+
+proc lintContrast(node: EmailNode;
+                 ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
+  ## R-A11Y-07: WCAG contrast below 4.5:1 warns (below 3:1 for large
+  ## text: 24px+, or 18.66px+ bold), over `textPairOf`'s pair.
+  ##
+  ## Light-scheme pairs only: the designed dark scheme is
+  ## `lintDarkContrast`'s and the inverted ones `lintInversion`'s
+  ## (R-DRK-04).
+  let pair = textPairOf(node, ancestors)
+  if not pair.ok:
+    return @[]
+  let threshold = if pair.large: 3.0 else: 4.5
+  let ratio = contrastRatio(pair.fg, pair.bg)
   if ratio < threshold:
-    let threshText = if large: "3" else: "4.5"
-    if overImage:
+    let threshText = if pair.large: "3" else: "4.5"
+    if pair.overImage:
       return @[EmailDiagnostic(
         severity: sevWarning, code: codeA11yContrast,
         message: "<" & node.tag & "> text over a background image has " &
@@ -817,6 +832,285 @@ proc lintContrast(node: EmailNode;
       origin: node.origin, rules: @["R-A11Y-07"],
     )]
   @[]
+
+# ----------------------------------------------------------------------------
+# Inversion simulation (R-DRK-04, spec: inversion safety)
+# ----------------------------------------------------------------------------
+
+type InversionModel* = enum
+  ## R-DRK-04's two models of a client that recolours a message itself.
+  imPartial ## light backgrounds darkened, dark text lightened
+  imFull    ## every colour inverted
+
+const
+  partialInverters* = {cfGmailApp, cfOutlookWeb, cfOutlookWord}
+    ## The families R-DRK-04's partial model stands for: the Gmail app on
+    ## Android, Outlook.com's automatic dark mode and Outlook 365 for
+    ## Windows.
+  fullInverters* = {cfGmailApp}
+    ## The family the full model stands for: the Gmail app on iOS.
+  inversionPivot* = 0.5
+    ## The relative luminance above which a background, and below which
+    ## a text colour, is inverted by the partial model.
+  modelCalibrated*: array[InversionModel, bool] = [false, false]
+    ## Whether each model has been calibrated against captures of the
+    ## clients it stands for (catalogue R-DRK-04). An uncalibrated
+    ## model's findings are `I-A11Y-CONTRAST-INVERTED`, information only;
+    ## a calibrated one's are `W-A11Y-CONTRAST-INVERTED`. Calibrating a
+    ## model records its formula in the catalogue and sets its flag.
+
+proc modelName*(m: InversionModel): string =
+  case m
+  of imPartial: "partial"
+  of imFull: "full"
+
+proc relLuminance*(c: Rgba): float =
+  ## WCAG 2 relative luminance of an opaque colour.
+  relativeLuminance(c)
+
+proc invertPair*(fg, bg: Rgba; model: InversionModel): tuple[fg, bg: Rgba] =
+  ## The pair as R-DRK-04's model recolours it (an uncalibrated model:
+  ## OKLCH lightness inverted, chroma and hue kept). Partial: a
+  ## background lighter than the pivot and a text colour darker than it
+  ## are inverted, the rest kept. Full: both are inverted.
+  case model
+  of imPartial:
+    let f = if relativeLuminance(fg) < inversionPivot: invertLightness(fg)
+      else: fg
+    let b = if relativeLuminance(bg) > inversionPivot: invertLightness(bg)
+      else: bg
+    (f, b)
+  of imFull:
+    (invertLightness(fg), invertLightness(bg))
+
+proc inversionFamilies(model: InversionModel): set[ClientFamily] =
+  case model
+  of imPartial: partialInverters
+  of imFull: fullInverters
+
+proc lintInversion*(root: EmailNode;
+                    profile: AudienceProfile): seq[EmailDiagnostic] =
+  ## R-DRK-04's inversion simulation (P10): every text/background pair of
+  ## the light scheme, recoloured by the partial and the full model, must
+  ## keep 4.5:1 (3:1 for large text); below is
+  ## `W-A11Y-CONTRAST-INVERTED` for a calibrated model and
+  ## `I-A11Y-CONTRAST-INVERTED` for one that is not (`modelCalibrated`),
+  ## naming the pair before and after and the
+  ## families the model stands for, weighted by `profile`. One warning
+  ## per model and pair, at its first element, counting the others: a
+  ## palette that inverts into mud does so wherever it is used. A model
+  ## whose families have no weight in `profile` is not checked.
+  ##
+  ## The models are R-DRK-04's own; until one is calibrated against the
+  ## clients it stands for, its findings are information and the message
+  ## says so.
+  type Seen = tuple[model: InversionModel; fg, bg: string; large: bool]
+  var seen: seq[Seen] = @[]
+  var at: seq[int] = @[]
+  var counts: seq[int] = @[]
+  var diags: seq[EmailDiagnostic] = @[]
+  proc walk(node: EmailNode; ancestors: var seq[EmailNode]) =
+    if node == nil:
+      return
+    if node.kind == enElement:
+      let pair = textPairOf(node, ancestors)
+      if pair.ok:
+        for model in InversionModel:
+          var fams: set[ClientFamily] = {}
+          var weight = 0.0
+          for f in inversionFamilies(model):
+            if profile.weights[f] > 0:
+              fams.incl(f)
+              weight += profile.weights[f]
+          if fams == {}:
+            continue
+          let (fg2, bg2) = invertPair(pair.fg, pair.bg, model)
+          let threshold = if pair.large: 3.0 else: 4.5
+          let ratio = contrastRatio(fg2, bg2)
+          if ratio >= threshold:
+            continue
+          let key: Seen = (model, pair.fg.toHex(), pair.bg.toHex(),
+            pair.large)
+          let idx = seen.find(key)
+          if idx >= 0:
+            inc counts[idx]
+            continue
+          seen.add(key)
+          counts.add(1)
+          at.add(diags.len)
+          let calibrated = modelCalibrated[model]
+          diags.add(EmailDiagnostic(
+            severity: if calibrated: sevWarning else: sevInfo,
+            code: if calibrated: codeA11yContrastInverted
+              else: codeA11yContrastInvertedInfo,
+            message: "<" & node.tag & "> text " & pair.fg.toHex() &
+              " on " & pair.bg.toHex() & " becomes " & fg2.toHex() &
+              " on " & bg2.toHex() & " under " & modelName(model) &
+              " inversion (" & formatFamilies(fams) & "): contrast " &
+              formatFloat(ratio, ffDecimal, 2) & ":1, below " &
+              (if pair.large: "3" else: "4.5") & ":1 (R-DRK-04" &
+              (if calibrated: ")" else: ", an uncalibrated model: " &
+                "for information)"),
+            origin: node.origin, families: fams, weight: weight,
+            rules: @["R-DRK-04"]))
+    ancestors.add(node)
+    for c in node.children:
+      walk(c, ancestors)
+    discard ancestors.pop()
+  var ancestors: seq[EmailNode] = @[]
+  walk(root, ancestors)
+  for i, idx in at:
+    if counts[i] > 1:
+      diags[idx].message.add("; the same pair on " & $(counts[i] - 1) &
+        " more element" & (if counts[i] > 2: "s" else: ""))
+  diags
+
+# ----------------------------------------------------------------------------
+# A logo with no swap (R-DRK-06, spec: images in dark mode)
+# ----------------------------------------------------------------------------
+
+const
+  nearBlack* = Rgba(r: 0x12, g: 0x12, b: 0x12, a: 1.0)
+    ## The dark surface a logo must read on where no swap happens: a
+    ## dark mail client's near-black reading pane (#121212).
+  logoEdgePx* = 2
+    ## How far in from its transparent surroundings a logo's edge is
+    ## read: R-DRK-06's 2px outline or plate.
+  noSwapFamilies* = {cfGmailWeb, cfGmailApp, cfGanga, cfYahoo,
+    cfOutlookWord, cfProton, cfHey}
+    ## The families that never apply the dark block (R-DRK-01), so show
+    ## the light image of a pair in dark mode too.
+
+type LogoVerdict* = enum
+  lvSafe       ## legible on white and on near-black
+  lvUnsafe     ## illegible on one of them
+  lvUnknown    ## not a PNG this check reads
+  lvTooLarge   ## over `maxDecodePixels`: not decoded
+
+proc logoVerdict*(bytes: string): tuple[verdict: LogoVerdict;
+    failsOn: string] =
+  ## R-DRK-06's alpha heuristic. An image with no transparent pixel
+  ## carries its own plate: safe. Otherwise its **edge** is the opaque
+  ## pixels within `logoEdgePx` of a transparent one, and on a
+  ## background the image is legible when at least half of its edge
+  ## contrasts at least 3:1 with that background (WCAG's non-text
+  ## threshold: the silhouette shows, as a dark logo's does on white
+  ## or a light outline's on black), or its edge is a **plate**: one
+  ## colour (90% of it within 1.5:1 of its mean) holding content that
+  ## contrasts 3:1 with it (5% of the pixels inside). The image is safe
+  ## when it is legible on white and on near-black. `failsOn` names the
+  ## background it fails on.
+  let px = decodePng(bytes)
+  if px.tooLarge:
+    return (lvTooLarge, "")
+  if not px.ok:
+    return (lvUnknown, "")
+  let w = px.width
+  let h = px.height
+  var transparent = newSeq[bool](w * h)
+  var anyTransparent, anyOpaque = false
+  for i in 0 ..< w * h:
+    transparent[i] = px.rgba[i * 4 + 3] < 128
+    if transparent[i]: anyTransparent = true
+    else: anyOpaque = true
+  if not anyTransparent:
+    return (lvSafe, "")
+  if not anyOpaque:
+    return (lvUnknown, "")
+  var edge = newSeq[bool](w * h)
+  for y in 0 ..< h:
+    for x in 0 ..< w:
+      if not transparent[y * w + x]:
+        continue
+      for dy in -logoEdgePx .. logoEdgePx:
+        for dx in -logoEdgePx .. logoEdgePx:
+          let (xx, yy) = (x + dx, y + dy)
+          if xx >= 0 and yy >= 0 and xx < w and yy < h and
+              not transparent[yy * w + xx]:
+            edge[yy * w + xx] = true
+  proc colourAt(i: int; over: Rgba): Rgba =
+    let fg = Rgba(r: int(px.rgba[i * 4]), g: int(px.rgba[i * 4 + 1]),
+      b: int(px.rgba[i * 4 + 2]), a: float(px.rgba[i * 4 + 3]) / 255.0)
+    if fg.a >= 1.0: fg else: blendOver(fg, over)
+  proc legibleOn(bg: Rgba): bool =
+    var edgeN, visible = 0
+    var sr, sg, sb = 0.0
+    for i in 0 ..< w * h:
+      if edge[i]:
+        let c = colourAt(i, bg)
+        inc edgeN
+        if contrastRatio(c, bg) >= 3.0:
+          inc visible
+        sr += float(c.r); sg += float(c.g); sb += float(c.b)
+    if edgeN == 0:
+      return true
+    if visible * 2 >= edgeN:
+      return true
+    # A plate: a uniform edge holding contrasting content.
+    let mean = Rgba(r: int(sr / float(edgeN)), g: int(sg / float(edgeN)),
+      b: int(sb / float(edgeN)), a: 1.0)
+    var near = 0
+    for i in 0 ..< w * h:
+      if edge[i] and contrastRatio(colourAt(i, bg), mean) < 1.5:
+        inc near
+    if near * 10 < edgeN * 9:
+      return false
+    var inner, content = 0
+    for i in 0 ..< w * h:
+      if not transparent[i] and not edge[i]:
+        inc inner
+        if contrastRatio(colourAt(i, bg), mean) >= 3.0:
+          inc content
+    inner > 0 and content * 20 >= inner
+  let white = Rgba(r: 255, g: 255, b: 255, a: 1.0)
+  if not legibleOn(white):
+    return (lvUnsafe, "white")
+  if not legibleOn(nearBlack):
+    return (lvUnsafe, "near-black")
+  (lvSafe, "")
+
+proc lintDarkLogos*(root: EmailNode;
+                    assets: openArray[AssetRef]): seq[EmailDiagnostic] =
+  ## R-DRK-06 for the light image of every `dark_src` pair (P10, after
+  ## P8 resolved the images): Gmail and the other families that never
+  ## apply the dark block show it in dark mode too, so it must read on
+  ## near-black as well as on white (`logoVerdict`).
+  ## `W-DARK-LOGO-UNSAFE` names the background it fails on. An image
+  ## whose bytes the render does not have (not resolved through the
+  ## asset store, or not a PNG it reads) is not checked; one over
+  ## `maxDecodePixels` is not decoded and reports
+  ## `I-DARK-LOGO-UNCHECKED`.
+  var stack = @[root]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node == nil:
+      continue
+    if node.kind == enElement and node.tag == "mailImage" and
+        node.attrs.getOrDefault("dark_src", "").strip().len > 0:
+      let src = node.attrs.getOrDefault("src", "")
+      for a in assets:
+        if a.url.len > 0 and a.url == src and a.bytes.len > 0:
+          let (verdict, failsOn) = logoVerdict(a.bytes)
+          if verdict == lvTooLarge:
+            result.add(EmailDiagnostic(severity: sevInfo,
+              code: codeDarkLogoUnchecked,
+              message: "the light image of this dark_src pair ('" &
+                a.name & "') is too large to check for dark safety (over " &
+                $maxDecodePixels & " pixels); not checked (R-DRK-06)",
+              origin: node.origin, rules: @["R-DRK-06"]))
+          if verdict == lvUnsafe:
+            result.add(EmailDiagnostic(severity: sevWarning,
+              code: codeDarkLogoUnsafe,
+              message: "the light image of this dark_src pair ('" &
+                a.name & "') is not legible on " & failsOn & ": where " &
+                "no swap happens (" & formatFamilies(noSwapFamilies) &
+                ") it shows in dark mode too; give it a 2px " &
+                "contrasting outline or a plate (R-DRK-06)",
+              origin: node.origin, families: noSwapFamilies,
+              rules: @["R-DRK-06"]))
+          break
+    for i in countdown(node.children.high, 0):
+      stack.add(node.children[i])
 
 type DarkDecl* = tuple[node: EmailNode; prop, value: string]
   ## One dark-scheme declaration as P6 paints it: the element, `color`
@@ -866,8 +1160,10 @@ proc darkContrastAdvice(bg: SchemeBackground): string =
   if bg.darkened:
     return ""
   let where =
-    if bg.document: "the document background, which has no dark value " &
-      "under darkMode = designed yet"
+    if bg.document: "the document background, a raw colour with no dark " &
+      "value (give mailDocument a tok\"color.surface.…\" " &
+      "background_color, or none: a designed document defaults to " &
+      "color.surface.card)"
     else: "a background with no dark value"
   "; the text sits on " & where & ": put it in a container with a " &
     "dark background (a `dark:bg-…` class or `@dark:background-color`), " &
@@ -969,7 +1265,10 @@ proc lintImageFormat(node: EmailNode;
   ## provider's account) any weight: neither shows them.
   if node.kind != enElement or node.tag notin ["mailImage", "img"]:
     return @[]
-  let fmt = imageFormat(node.attrs.getOrDefault("src", ""))
+  # A pair's dark copy (R-IMG-06) is an image like any other.
+  var fmt = imageFormat(node.attrs.getOrDefault("src", ""))
+  if fmt notin ["webp", "svg"]:
+    fmt = imageFormat(node.attrs.getOrDefault("dark_src", ""))
   if fmt notin ["webp", "svg"]:
     return @[]
   var fams: set[ClientFamily] = {}

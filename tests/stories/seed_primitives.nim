@@ -596,4 +596,5 @@ proc registerPrimitiveStories*() =
 proc registerPrimitiveStoryTrees*() =
   ## The trees the briefs of those stories render from.
   for s in primitiveStories:
-    registerStoryTree(s.name, s.build)
+    registerStoryTree(s.name, s.build,
+      if s.dark: dmDesigned else: dmAccommodate)

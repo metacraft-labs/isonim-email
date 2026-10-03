@@ -184,7 +184,7 @@ proc designedDoc(r: EmailRenderer; body: EmailNode): EmailNode =
   r.setAttribute(doc, "preheader", "Dark scheme contrast.")
   let h1 = r.createElement("h1")
   r.setTextContent(h1, "Dark scheme")
-  r.setStyle(h1, "color", "#111827")
+  r.setStyle(h1, "color", "tok:color.text.primary")
   r.appendChild(doc, h1)
   r.appendChild(doc, body)
   doc
@@ -236,22 +236,42 @@ suite "P10 dark-scheme contrast under darkMode=designed":
     check cls != ""
     check ("." & cls & "{color:#f3f4f6 !important}") in res.html
 
-  test "test_render_default_text_on_the_undarkened_skeleton_errors":
+  test "test_render_default_text_on_the_designed_skeleton_passes":
     # No ancestor colour and no dark background: the default text gets
     # its dark value (#f3f4f6) and sits on the document background,
-    # which has no dark value yet, so the dark pair fails.
+    # which under designed is `color.surface.card`: #ffffff light,
+    # #1a1d23 dark, so the dark pair passes and the skeleton's
+    # carriers (and the page below the message) take the dark value.
     let r = EmailRenderer()
     let p = r.createElement("p")
     r.setTextContent(p, "On the document background.")
     var designed = defaultTarget()
     designed.darkMode = dmDesigned
-    let res = renderTree(designedDoc(r, p), target = designed)
-    let found = withCode(res.diagnostics, codeA11yContrastDark)
+    let doc = designedDoc(r, p)
+    let res = renderTree(doc, target = designed)
+    check withCode(res.diagnostics, codeA11yContrastDark).len == 0
+    check "background-color:#ffffff;" in res.html
+    let cls = doc.attrs.getOrDefault("class", "")
+    check cls.startsWith("e-")
+    check ("." & cls & "{background-color:#1a1d23 !important}") in res.html
+    check "body{background-color:#1a1d23 !important}" in res.html
+    # A raw light document background has no dark value: the pair
+    # fails, and the error says why and what to do about it.
+    let r3 = EmailRenderer()
+    let p3 = r3.createElement("p")
+    r3.setTextContent(p3, "On a raw document background.")
+    let raw = designedDoc(r3, p3)
+    r3.setStyle(raw, "background-color", "#ffffff")
+    let res3 = renderTree(raw, target = designed)
+    var found: seq[EmailDiagnostic] = @[]
+    for d in withCode(res3.diagnostics, codeA11yContrastDark):
+      if d.message.startsWith("<p>"):
+        found.add(d)
+    # The heading on it fails too; the paragraph's error is the one read.
+    check withCode(res3.diagnostics, codeA11yContrastDark).len == 2
     check found.len == 1
-    check found[0].origin == p.origin
     check "#f3f4f6 on #ffffff" in found[0].message
-    # The error says why and what to do about it.
-    check "the document background, which has no dark value" in
+    check "the document background, a raw colour with no dark value" in
       found[0].message
     check "put it in a container with a dark background" in
       found[0].message

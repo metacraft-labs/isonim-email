@@ -51,6 +51,14 @@ proc codesOf(diags: openArray[EmailDiagnostic]): seq[string] =
   for d in diags:
     result.add(d.code)
 
+proc problemsOf(diags: openArray[EmailDiagnostic]): seq[string] =
+  ## The codes of the warnings and errors: what "renders cleanly" means
+  ## (information, such as the inversion simulation's findings under an
+  ## uncalibrated model, is not a problem).
+  for d in diags:
+    if d.severity >= sevWarning:
+      result.add(d.code)
+
 type DisposeProbe = ref object
   cleaned: bool
 
@@ -110,7 +118,7 @@ suite "renderEmail returns the rendered record":
 
   test "the theme resolves tokens in the output":
     let base = renderEmail(tokenTpl, 0)
-    check base.diagnostics.len == 0
+    check problemsOf(base.diagnostics).len == 0
     check "color:#1f6feb" in base.html
     var theme = defaultTheme()
     # A distinctive dark violet: passes the contrast lint on white,
@@ -118,7 +126,7 @@ suite "renderEmail returns the rendered record":
     theme.values["color.accent.primary"] =
       ThemePair(light: "#7c3aed", dark: "#7c3aed")
     let custom = renderEmail(tokenTpl, 0, theme = theme)
-    check custom.diagnostics.len == 0
+    check problemsOf(custom.diagnostics).len == 0
     check "color:#7c3aed" in custom.html
     check "#1f6feb" notin custom.html
 
@@ -135,9 +143,9 @@ suite "renderEmail returns the rendered record":
     # border-radius lacks Word: silent under consumer (2% < 5%),
     # a warning under business (25%).
     let calm = renderEmail(buttonTpl, 0, profile = consumer)
-    check codesOf(calm.diagnostics).len == 0
+    check problemsOf(calm.diagnostics).len == 0
     let loud = renderEmail(buttonTpl, 0, profile = business)
-    check codesOf(loud.diagnostics) == @[codeSupportUnsupported]
+    check problemsOf(loud.diagnostics) == @[codeSupportUnsupported]
     check loud.diagnostics[0].severity == sevWarning
     check "border-radius" in loud.diagnostics[0].message
     check not hasErrors(loud.diagnostics)

@@ -107,6 +107,21 @@ const
   codeA11yContrastDark* = "E-A11Y-CONTRAST"
     ## Text/background pair below threshold in the designed dark scheme
     ## (R-DRK-04). Collected from `passes/lint.lintDarkContrast`.
+  codeA11yContrastInverted* = "W-A11Y-CONTRAST-INVERTED"
+    ## Text/background pair below threshold after R-DRK-04's partial or
+    ## full inversion model, once that model is calibrated
+    ## (`lint.modelCalibrated`). Collected from `passes/lint.lintInversion`.
+  codeA11yContrastInvertedInfo* = "I-A11Y-CONTRAST-INVERTED"
+    ## The same pair under a model not yet calibrated against the
+    ## clients it stands for: reported for information only.
+  codeDarkLogoUnchecked* = "I-DARK-LOGO-UNCHECKED"
+    ## The light image of a `dark_src` pair is too large for R-DRK-06's
+    ## check to decode (`imaging.maxDecodePixels`): not checked.
+    ## Collected from `passes/lint.lintDarkLogos`.
+  codeDarkLogoUnsafe* = "W-DARK-LOGO-UNSAFE"
+    ## The light image of a `dark_src` pair is not legible on both white
+    ## and near-black, where no swap happens (R-DRK-06). Collected from
+    ## `passes/lint.lintDarkLogos`.
   codeImgAltFit* = "W-IMG-ALT-FIT"
     ## With images off, WebKit shows no alt text for an image whose alt
     ## does not fit its width on one line (R-IMG-03). Collected from

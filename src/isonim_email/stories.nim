@@ -169,7 +169,8 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget;
     raise newException(StoryError,
       "story web fonts: " & fonts.diagnostics[0].message)
   let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
-    msoRules = fonts.mso, columns = columnRules(doc))
+    msoRules = fonts.mso, columns = columnRules(doc),
+    swaps = darkSwapImages(doc))
   discard applyA11y(doc)
   # With a store, every image is published first and its `src` is the
   # URL the store returned (a story's built-in icons, for one).

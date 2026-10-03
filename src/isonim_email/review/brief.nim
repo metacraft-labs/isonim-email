@@ -50,9 +50,13 @@ type
     ## Unknown brief family, or a story with no registered tree.
 
 var storyTrees = initTable[string, StoryTreeProc]()
+var storyDarkModes = initTable[string, DarkModeStrategy]()
 
-proc registerStoryTree*(name: string; build: StoryTreeProc) =
-  ## Registers the tree builder for `name`. Re-registering replaces:
+proc registerStoryTree*(name: string; build: StoryTreeProc;
+    darkMode = dmAccommodate) =
+  ## Registers the tree builder for `name`, with the dark mode the story
+  ## renders under (a `designed` story's brief reads its dark palette
+  ## from the tokens, as the render does). Re-registering replaces:
   ## tests re-register fixtures freely.
   if name.len == 0:
     raise newException(BriefError, "story name must not be empty")
@@ -60,6 +64,7 @@ proc registerStoryTree*(name: string; build: StoryTreeProc) =
     raise newException(BriefError,
       "story '" & name & "' has no tree builder")
   storyTrees[name] = build
+  storyDarkModes[name] = darkMode
 
 proc hasStoryTree*(name: string): bool =
   ## True when `name` has a registered tree builder.
@@ -759,6 +764,46 @@ proc familyDarkNote(family: string): string =
       "that is expected, not a defect, as long as text stays legible."
   ""
 
+proc designedPalette(head: seq[HeadDecl]): tuple[bg, fg: seq[string];
+    swaps: int] =
+  ## The dark colours P5 gives a `designed` tree (its own `@dark:` and
+  ## the token-driven pairs, catalogue R-DRK-02), first-seen.
+  for d in head:
+    if d.variant != "dark":
+      continue
+    if d.prop == "background-color" and d.value notin result.bg:
+      result.bg.add(d.value)
+    elif d.prop == "color" and d.value notin result.fg:
+      result.fg.add(d.value)
+
+proc darkSwaps(doc: EmailNode): seq[string] =
+  ## The alt text of every `dark_src` image (R-IMG-06), in order.
+  if doc == nil:
+    return
+  if doc.kind == enElement and doc.tag == "mailImage" and
+      doc.attrs.getOrDefault("dark_src", "").len > 0:
+    result.add(doc.attrs.getOrDefault("alt", ""))
+  for c in doc.children:
+    result.add(darkSwaps(c))
+
+proc swapLine(alts: seq[string]; swapped: bool): string =
+  ## The dark-image pairs in a dark capture: whether this client shows
+  ## the dark image or the light one.
+  if alts.len == 0:
+    return ""
+  var names: seq[string] = @[]
+  for a in alts:
+    names.add("\"" & a & "\"")
+  let (verb, its) = if alts.len == 1: ("shows", "its") else: ("show", "their")
+  if swapped:
+    "Dark images: " & names.join(", ") & " " & verb & " " & its &
+      " dark image (`dark_src`) in this scheme; never both images."
+  else:
+    "Dark images: " & names.join(", ") & " " & verb & " " & its &
+      " light image here (this client does not apply the dark rules), " &
+      "which must still read on the background around it; never both " &
+      "images."
+
 proc darkLine(dark: tuple[bg, fg: seq[string]]; scheme: string): string =
   var parts: seq[string] = @[]
   if dark.bg.len > 0:
@@ -1006,16 +1051,19 @@ proc notExpectedLine(family: string; images: seq[string]): string =
 # ----------------------------------------------------------------------------
 
 proc renderedTree(story: Story): tuple[doc: EmailNode;
-    dark: tuple[bg, fg: seq[string]]] =
+    dark: tuple[bg, fg: seq[string]]; swaps: seq[string]] =
   ## The story's rendered semantic tree: a fresh builder tree through
-  ## validate → P5 → P7, plus the pre-pass `@dark:` snapshot.
+  ## validate → P5 → P7, plus its dark palette: under `designed` the
+  ## dark values P5 gives it (its own and the tokens'), otherwise the
+  ## pre-pass `@dark:` snapshot.
   if story.name notin storyTrees:
     raise newException(BriefError, "story '" & story.name &
       "' has no registered tree builder" &
       " — register one with registerStoryTree")
   let build = storyTrees[story.name]
   let doc = build()
-  let dark = darkOverrides(doc)
+  var dark = darkOverrides(doc)
+  let mode = storyDarkModes.getOrDefault(story.name, dmAccommodate)
   let found = validate(doc)
   if hasErrors(found):
     raise newException(BriefError, "story '" & story.name &
@@ -1023,9 +1071,14 @@ proc renderedTree(story: Story): tuple[doc: EmailNode;
       " diagnostic(s), first: " & found[0].message)
   # Widths for the patterns' declarations (how many items fit a row).
   discard solveLayout(doc, defaultTheme(), defaultTarget())
-  discard applyStyles(doc, defaultTheme(), defaultTarget())
+  var t = defaultTarget()
+  t.darkMode = mode
+  let styled = applyStyles(doc, defaultTheme(), t)
+  if mode == dmDesigned:
+    let pal = designedPalette(styled.head)
+    dark = (pal.bg, pal.fg)
   discard applyA11y(doc)
-  (doc, dark)
+  (doc, dark, if mode == dmDesigned: darkSwaps(doc) else: @[])
 
 proc familyView*(family, viewport: string): BriefView =
   ## The `BriefView` of a backend-A family at `viewport`.
@@ -1044,7 +1097,7 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   checkFamily(family)
   let width = viewportWidth(viewport)
   let breakpoint = defaultTarget().breakpoint
-  let (doc, dark) = renderedTree(story)
+  let (doc, dark, swaps) = renderedTree(story)
   var items: seq[string] = @[]
   var images: seq[string] = @[]
   var firstH1 = false
@@ -1055,6 +1108,8 @@ proc expectedBlock*(story: Story; family, viewport, scheme: string): string =
   if familyHonoursDark(family) and scheme != "light":
     let note = familyDarkNote(family)
     items.add(darkLine(dark, scheme) & (if note.len > 0: " " & note else: ""))
+  if scheme != "light" and swaps.len > 0:
+    items.add(swapLine(swaps, familyHonoursDark(family)))
   let backendKind =
     if familyApproximation(family): "emulation" else: "local engine"
   result = "### Expected: " & story.name & " — " & family & " — " &
@@ -1260,7 +1315,13 @@ const realClients*: array[7, RealClient] = [
         "box: a grid's items take the full row, one per row, and a " &
         "switching sidebar stacks",
       "an unbroken word longer than its box is not broken: the box " &
-        "widens to hold it"],
+        "widens to hold it",
+      "a `darkMode = designed` message shows its dark palette although " &
+        "the capture is light: litehtml's media-feature table has no " &
+        "`prefers-color-scheme`, and it drops a condition it does not " &
+        "know and keeps the rule, so the dark block always applies; the " &
+        "dark palette must then be complete and legible (one logo of a " &
+        "pair, the dark one)"],
     rtlDegradation: "right-to-left text: litehtml has no bidirectional " &
       "reordering, so the words of an Arabic or Hebrew line appear in " &
       "left-to-right order (each word itself is shaped correctly), and a " &
@@ -1268,7 +1329,8 @@ const realClients*: array[7, RealClient] = [
       "the left",
     notExpected: @["Gmail-, Outlook- or Apple-Mail-specific rendering " &
       "(this client stands in for none of them)",
-      "dark colours (Claws Mail is captured in light only)"]),
+      "dark colours in a message without a designed dark palette (Claws " &
+        "Mail is captured in light only)"]),
 ]
 
 proc realClient*(id: string): RealClient =
@@ -1309,7 +1371,7 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   let c = realClient(id)
   let width = viewportWidth(viewport)
   let breakpoint = defaultTarget().breakpoint
-  let (doc, dark) = renderedTree(story)
+  let (doc, dark, swaps) = renderedTree(story)
   var items: seq[string] = @[]
   var images: seq[string] = @[]
   var firstH1 = false
@@ -1329,6 +1391,8 @@ proc clientExpectedBlock*(story: Story; id, viewport,
     else:
       items.add("Dark palette (" & scheme & "): the message's own dark " &
         "rules do not apply in this client; it keeps its light colours.")
+    if swaps.len > 0:
+      items.add(swapLine(swaps, c.darkRules and c.headCss))
   result = "### Expected: " & story.name & " — " & c.id & " (" &
     c.family & ") — " & viewportLabel(viewport) & " — " & scheme &
     " — " & c.backend & " (real client)\n"

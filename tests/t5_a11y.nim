@@ -1,14 +1,15 @@
 ## P7 backfills accessibility attributes —
 ## `role="presentation"` on layout tables (R-A11Y-02), `aria-hidden`
 ## on the preheader padding (R-PRE-03), decorative VML and empty
-## spacers (R-A11Y-05's parts that exist so far; the rule stays
-## pending until its dark-swap duplicates exist), `mailDocument`
+## spacers (R-A11Y-05; its dark-swap part, settled as no attribute on
+## either image, is tests/t5_dark.nim's), `mailDocument`
 ## `lang`/`dir` copied onto the
 ## article wrapper (R-A11Y-01) — and warns on skipped heading
 ## levels (R-TXT-10). Backfills only add missing attributes.
 ##
 ## Backend-independent (tree walk + attribute writes), so `just test`
 ## also runs it on JS.
+# rule: R-A11Y-05
 import std/[sequtils, tables, unittest]
 import isonim_email
 

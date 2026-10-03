@@ -21,6 +21,10 @@
 ## named families map to (a generic family counts only in a stack with
 ## no named family), so whichever of them a client has, the text fits.
 ##
+## `measureStyled` adds the two properties that widen text drawn in the
+## same face: `text-transform` (measured as drawn) and `letter-spacing`
+## (added after every character). The fit checks measure through it.
+##
 ## Pure arithmetic: identical on the C and JS targets.
 
 import std/[math, strutils, unicode]
@@ -158,6 +162,73 @@ proc measureText*(text, stack: string; sizePx: float; bold = false;
     if m.width > result.width:
       result.width = m.width
     result.approx = result.approx or m.approx
+
+proc transformText*(text, transform: string): string =
+  ## `text` as CSS `text-transform` draws it: `uppercase` and
+  ## `lowercase` change every letter, `capitalize` the first letter of
+  ## each word; anything else (`none`, empty) leaves it as written.
+  case transform.strip().toLowerAscii()
+  of "uppercase":
+    result = unicode.toUpper(text)
+  of "lowercase":
+    result = unicode.toLower(text)
+  of "capitalize":
+    var atStart = true
+    for r in text.runes:
+      if r.isWhiteSpace:
+        atStart = true
+        result.add($r)
+      elif atStart:
+        result.add($r.toUpper)
+        atStart = false
+      else:
+        result.add($r)
+  else:
+    result = text
+
+proc drawnChars*(text: string): int =
+  ## The characters `measureFace` sets for `text`: each whitespace run
+  ## counts once, as HTML collapses it.
+  var lastSpace = false
+  for r in text.runes:
+    if r.isWhiteSpace:
+      if not lastSpace:
+        inc result
+      lastSpace = true
+    else:
+      inc result
+      lastSpace = false
+
+proc letterSpacingPx*(value: string; sizePx: float): float =
+  ## A `letter-spacing` value in px: a px (or unitless) length, an `em`
+  ## multiple of the font size; `normal`, an empty or unparseable value
+  ## none.
+  let v = value.strip().toLowerAscii()
+  if v.len == 0 or v == "normal":
+    return 0
+  try:
+    if v.endsWith("rem"):
+      return parseFloat(v[0 ..< ^3].strip()) * 16.0
+    if v.endsWith("em"):
+      return parseFloat(v[0 ..< ^2].strip()) * sizePx
+    if v.endsWith("px"):
+      return parseFloat(v[0 ..< ^2].strip())
+    parseFloat(v)
+  except ValueError:
+    0
+
+proc measureStyled*(text, stack: string; sizePx: float; bold = false;
+    letterSpacingPx = 0.0; transform = ""): TextMeasure =
+  ## `measureText` for text drawn with `letter-spacing` and
+  ## `text-transform`, the two properties that change a text's width
+  ## without changing its face: the transform is applied first (an
+  ## uppercase label is wider than its source), then the spacing is
+  ## added after every character set. A negative spacing counts as
+  ## none, so the estimate stays an upper bound.
+  let shown = transformText(text, transform)
+  result = measureText(shown, stack, sizePx, bold)
+  if letterSpacingPx > 0:
+    result.width += float(drawnChars(shown)) * letterSpacingPx
 
 proc isBoldWeight*(weight: string): bool =
   ## True for a CSS weight drawn with a bold face (600 and above).
