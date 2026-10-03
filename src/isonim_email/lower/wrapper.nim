@@ -8,6 +8,9 @@
 ## `W − padding − borders`, so each inner section's own ghost table is
 ## that many px wide and sits inside the wrapper's ghost cell.
 ##
+## A background image is a section's (`lower/section.nim`, catalogue
+## R-VML-01): CSS on the inner div, VML for Word with `vmlFitToText`.
+##
 ## The inner div holds sections, which reset their own font size,
 ## alignment and direction, so the wrapper sets none of those.
 ##
@@ -34,13 +37,14 @@ proc lowerWrapper*(node: EmailNode; ctx: LowerCtx):
   ## moved into `band.inner` for the caller to lower next.
   let r = EmailRenderer()
   var diags: seq[EmailDiagnostic] = @[]
-  missingProps(node, diags)
+  let image = readBackground(node, diags)
   let (border, uniform) = borderText(node)
   if not uniform:
     diags.add(lowerMissing(node, "per-side border", "R-TBL-02"))
-  var band = bandNodes(node, ctx, node.layout.padding,
-    colourOf(node, "background-color"), border, radiusOf(node), "",
-    ghostAlign = false, [], wrapperConsumed, r)
+  let background = if image.src.len > 0: image.color
+    else: colourOf(node, "background-color")
+  var band = bandNodes(node, ctx, node.layout.padding, background, border,
+    radiusOf(node), "", ghostAlign = false, [], wrapperConsumed, r, image)
   let kids = node.children # Copy: appendChild detaches as it moves.
   for c in kids:
     r.appendChild(band.inner, c)

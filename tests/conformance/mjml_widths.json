@@ -351,5 +351,85 @@
       "px": 130.0,
       "responsive": "22.836538%"
     }
+  ],
+  "section-background": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-background-tile": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 584.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-background-tile-sized": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "section-background-contain": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "wrapper-background": [
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    },
+    {
+      "kind": "table",
+      "px": 600.0
+    },
+    {
+      "kind": "cell",
+      "px": 600.0,
+      "responsive": "100%"
+    }
+  ],
+  "hero-fixed": [
+    {
+      "kind": "table",
+      "px": 600.0
+    }
+  ],
+  "hero-padded": [
+    {
+      "kind": "table",
+      "px": 600.0
+    }
   ]
 }

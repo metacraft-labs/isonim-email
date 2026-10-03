@@ -69,32 +69,34 @@ const altStyle = "font-family:Helvetica, Arial, sans-serif;" &
 
 suite "elements without a lowering are errors, never raw tags":
   test "test_unlowered_elements_error_and_keep_their_content":
-    # `mailHero` and `textOnly` have no lowering yet (the section, the
-    # button and the navbar that stood here have one now:
+    # `mailMarkdown` and `textOnly` have no lowering yet (the section,
+    # the button, the navbar and the hero that stood here have one now:
     # tests/t5_scaffolding.nim, tests/t5_button.nim,
-    # tests/t5_navigation.nim).
+    # tests/t5_navigation.nim, tests/t5_background.nim).
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      let hero = r.createElement("mailHero")
+      let section = r.createElement("mailSection")
+      let md = r.createElement("mailMarkdown")
       let p = r.createElement("p")
       r.setTextContent(p, "Inside the section")
-      r.appendChild(hero, p)
+      r.appendChild(md, p)
       let nav = r.createElement("textOnly")
       r.setTextContent(nav, "Open dashboard")
-      r.appendChild(hero, nav)
-      r.appendChild(doc, hero))
+      r.appendChild(md, nav)
+      r.appendChild(section, md)
+      r.appendChild(doc, section))
     let res = renderTree(doc)
     check codesOf(res.diagnostics) == @[codeLowerMissing, codeLowerMissing]
     check hasErrors(res.diagnostics)
-    check "<mailHero>" in res.diagnostics[0].message
+    check "<mailMarkdown>" in res.diagnostics[0].message
     check "<textOnly>" in res.diagnostics[1].message
     # Never a raw custom tag, in any spelling.
-    check "<mailhero" notin res.html.toLowerAscii()
+    check "<mailmarkdown" notin res.html.toLowerAscii()
     check "<textonly" notin res.html.toLowerAscii()
     # The content survives, so the output stays inspectable.
     check "Inside the section" in res.html
     check "Open dashboard" in res.html
     # The semantic tree is the authoring tree, untouched by lowering.
-    check res.semantic.children[1].tag == "mailHero"
+    check res.semantic.children[1].children[0].tag == "mailMarkdown"
 
   test "test_every_vocabulary_element_without_a_lowering_errors":
     # Every non-leaf vocabulary element other than the ones with a
@@ -104,7 +106,7 @@ suite "elements without a lowering are errors, never raw tags":
     let lowered = @loweredHere & @loweredElsewhere
     check lowered.sorted() == @["mailBox", "mailButton", "mailCluster",
       "mailColumn", "mailColumns", "mailDivider", "mailDocument", "mailGrid", "mailGroup",
-      "mailIf", "mailImage", "mailRaw", "mailSection", "mailSidebar",
+      "mailHero", "mailIf", "mailImage", "mailRaw", "mailSection", "mailSidebar",
       "mailSpacer", "mailStack", "mailTable", "mailText", "mailWrapper"]
     var nonLeaf = 0
     var expandedOnly = 0
@@ -144,10 +146,11 @@ suite "elements without a lowering are errors, never raw tags":
     check res.diagnostics.len == 0
 
   test "test_strict_raises_and_stories_refuse_unlowered_elements":
-    # `mailHero` has no lowering yet (the spacer that stood here has one
-    # now: tests/t5_leaves.nim).
+    # `mailMarkdown` has no lowering yet (the spacer and the hero that
+    # stood here have one now: tests/t5_leaves.nim,
+    # tests/t5_background.nim).
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      r.appendChild(doc, r.createElement("mailHero")))
+      r.appendChild(doc, r.createElement("mailMarkdown")))
     var msg = ""
     try:
       discard renderTree(doc, strict = true)
@@ -155,7 +158,7 @@ suite "elements without a lowering are errors, never raw tags":
       msg = e.msg
     check msg.startsWith(codeLowerMissing & ":")
     let again = docWith(proc(r: EmailRenderer; doc: EmailNode) =
-      r.appendChild(doc, r.createElement("mailHero")))
+      r.appendChild(doc, r.createElement("mailMarkdown")))
     var storyMsg = ""
     try:
       discard renderPipeline(again, defaultTarget())

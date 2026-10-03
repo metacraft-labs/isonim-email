@@ -75,6 +75,8 @@ const affects*: set[ClientFamily] = allFamilies
 const
   sectionTags* = ["mailSection"]
   wrapperTags* = ["mailWrapper"]
+  heroTags* = ["mailHero"]
+    ## A band whose content is one cell (a height, a vertical alignment).
   columnTags* = ["mailColumn", "mailGroup"]
     ## The children that put a section in column mode.
   rowTags* = ["mailColumns"]
@@ -523,6 +525,11 @@ proc solveBand(node: EmailNode; context: float; s: Solve; rtl: bool;
       inc content
     elif c.kind == enText and c.text.strip().len > 0:
       inc content
+  if columns > 0 and tagOf(node) in heroTags:
+    diags.add(layoutDiag(node, codeStructNesting,
+      "mailHero holds content, not columns: put the columns in a " &
+      "mailColumns row inside it (R-LAY-16)", @["R-LAY-16"]))
+    columns = 0
   if columns > 0 and content > 0:
     diags.add(layoutDiag(node, codeStructNesting,
       "mailSection mixes columns with other content: a section holds " &
@@ -801,7 +808,7 @@ proc solveNode(node: EmailNode; context: float; s: Solve; rtl: bool;
     solveCluster(node, context, s, rtl, diags)
   elif tag == "mailSidebar":
     solveSidebar(node, context, s, rtl, diags)
-  elif tag in sectionTags:
+  elif tag in sectionTags or tag in heroTags:
     solveBand(node, context, s, rtl, sectionPaddingToken, diags)
   elif tag in wrapperTags:
     solveBand(node, context, s, rtl, "", diags)

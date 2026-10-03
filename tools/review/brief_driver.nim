@@ -30,6 +30,7 @@ import stories/seed_primitives
 import stories/seed_leaves
 import stories/seed_buttons
 import stories/seed_table
+import stories/seed_backgrounds
 import stories/seed_navigation
 import stories/seed_raw
 
@@ -80,6 +81,8 @@ proc registerAll() =
     registerNavigationStoryTrees()
     registerRawStories()
     registerRawStoryTrees()
+    registerBackgroundStories()
+    registerBackgroundStoryTrees()
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>

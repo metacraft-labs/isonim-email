@@ -395,14 +395,28 @@ valign = middle)`, logo image | `mailCluster(align = right)` of links.
 
 **`mailHero`**
 
-- Two modes:
-  - `image` (default): a fluid full-width image, then text and a CTA in a
-    Stack;
-  - `background`: a background image with its VML fallback (catalogue §6).
-- _Special:_ R-IMG-11 (the Samsung split) for the image mode. The background
-  mode needs `height`/`min_height` (R-VML-02), live text only, and
-  `bgcolor` set to a dark fallback when the text is light (MJML
-  `mj-hero`; caniemail `css-background-image`).
+- _Props:_ `background_image`, `background_color` (the fallback colour),
+  `background_size` (`cover`), `background_position` (`center center`),
+  `background_repeat` (`no-repeat`), `height` or `min_height` (px),
+  `padding` (the section's), `vertical_align` (`top`).
+- A band whose content sits in one table cell, so it has a height and a
+  vertical alignment everywhere, Word included (catalogue R-VML-06).
+  Content in a hero is its implicit single column, as in a section; a
+  row of columns goes in a `mailColumns` inside it.
+- _Background:_ CSS for every client but Word and a VML rectangle for
+  Word (catalogue §6, R-VML-01). With an image and Outlook output on,
+  it needs `height` or `min_height` (R-VML-02). A `min_height` hero's
+  rectangle grows with its content only through
+  `mso-fit-shape-to-text`, which is unverified, so it is drawn only with
+  the target's `vmlFitToText`; without it Word shows the fallback colour
+  (R-VML-03). A `height` hero's content must fit its cell at the text
+  metrics' worst case (R-VML-08, `E-LAYOUT-HERO-OVERFLOW`). Live text only; light text needs a dark fallback colour,
+  which the contrast check enforces (R-VML-07; MJML `mj-hero`;
+  caniemail `css-background-image`).
+- _Image first:_ a hero with no background image is the same band
+  holding whatever it is given: a fluid full-width `mailImage`, then
+  text and a CTA, is the hero of an image-led design (R-IMG-11, the
+  Samsung split, for the image).
 - _Text:_ headline, text, `CTA: url`.
 
 **`mailMediaObject`** (thumbnail + text)

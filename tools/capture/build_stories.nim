@@ -22,6 +22,7 @@ import stories/seed_buttons
 import stories/seed_table
 import stories/seed_navigation
 import stories/seed_raw
+import stories/seed_backgrounds
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -84,6 +85,9 @@ proc main(): int =
     registerTableStories()
     registerNavigationStories()
     registerRawStories()
+    # The background images' and heroes' story set
+    # (tests/stories/seed_backgrounds.nim).
+    registerBackgroundStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

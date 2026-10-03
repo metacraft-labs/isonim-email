@@ -23,6 +23,7 @@
 # Implemented: R-TXT-02, R-TXT-04, R-TXT-09, R-OL-04 (tests/t5_text.nim; R-OL-04's conversion also in tests/t4_styles.nim), R-IMG-02, R-IMG-03, R-IMG-04, R-IMG-08, R-IMG-09, R-IMG-11, R-TBL-13, R-OL-13 (tests/t5_images.nim; R-IMG-03 also in tests/e2e_local_images_off.nim; R-OL-13's animated-GIF sentence is authoring guidance, nothing to check). R-TXT-11 was added to the catalogue with its test, never pending. R-A11Y-09 stays: P7 backfills `scope` (tests/t5_images.nim, unclaimed) but the hidden caption belongs to the data-table lowering.
 # Implemented: R-BTN-01..07, R-OL-05, R-OL-12 (tests/t5_button.nim; R-BTN-01 also tests/t5_welcome_golden.nim), R-CSS-14 (tests/t4_styles.nim: P5 now carries the pair as a fallback, the carrier the 2026-09-27 note above lacked).
 # Implemented: R-TBL-18, R-A11Y-09, R-OL-09 (tests/t5_table.nim), R-IMG-12, R-TXT-12 (tests/t5_navigation.nim; R-IMG-12 also tests/t3_icons_reproducible.nim), R-RAW-01..06, R-OL-02 (tests/t5_raw.nim), R-TXT-01, R-TXT-03, R-TXT-05, R-TXT-06, R-TXT-07, R-TXT-08, R-TXT-10, R-OL-07 (tests/t5_text_checks.nim). R-TBL-18, R-IMG-12, R-TXT-12 and R-RAW-01..06 were added to the catalogue with their tests, never pending. R-OL-14 stays: the hidden caption (tests/t5_table.nim) and the preheader carry mso-hide:all, unclaimed, but its dark-swap duplicates belong to the dark-image swap (R-IMG-06), as R-A11Y-05's do. R-OL-11 stays: Word's background images are the background-image and hero lowering's (R-VML-01).
+# Implemented: R-VML-01..05, R-OL-11 (tests/t5_background.nim; R-VML-03 and R-VML-04 stay ☐ in the catalogue, implemented behind `vmlFitToText` and as P8's URL check until a Word-engine capture settles them). R-VML-06 and R-VML-07 were added to the catalogue with their test, never pending.
 R-A11Y-05
 R-CSS-15
 R-CSS-17
@@ -38,7 +39,6 @@ R-IMG-06
 R-INT-01
 R-INT-02
 R-INT-03
-R-OL-11
 R-OL-14
 R-OL-16
 R-PRE-02
@@ -46,8 +46,3 @@ R-PRE-04
 R-RST-12
 R-SIZE-03
 R-TBL-08
-R-VML-01
-R-VML-02
-R-VML-03
-R-VML-04
-R-VML-05

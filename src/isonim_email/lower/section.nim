@@ -35,6 +35,14 @@
 ## `full_width` (R-LAY-09) wraps the band in a full-width `div` and,
 ## for Word, a 100% table, both painting the background edge to edge.
 ##
+## A background image (catalogue R-VML-01, `lower/background.nim`) goes
+## on the inner div, with its fallback colour, as CSS for everyone but
+## Word. Word gets the fallback colour on the ghost cell; with the
+## target's `vmlFitToText` (R-VML-03) it gets the image as a `v:rect`
+## that grows with the content instead, the padding on a one-cell table
+## inside it, and the inner div's tags hidden from it (`hideInner`), so
+## nothing inside the rectangle paints a background over the image.
+##
 ## The section's alignment defaults to the start of its direction (left
 ## for `ltr`, right for `rtl`); its direction defaults to the
 ## document's. Author classes (including the ones the head pass
@@ -54,6 +62,10 @@ import ../style/tokens
 import ../passes/layout
 import ../passes/styles
 import ../mso/ghost
+import ../mso/vml
+import ./background
+
+export background
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -83,11 +95,6 @@ const
     "border", "border-width", "border-style", "border-color",
     "border-radius", "border_radius", "text-align", "text_align"]
     ## Declarations a band lowering turns into its own markup.
-  bandMissing = ["background-image", "background_image",
-    "background-size", "background_size", "background-position",
-    "background_position", "background-repeat"]
-    ## Background-image props: the VML background lowering is not
-    ## built yet.
 
 proc lowerMissing*(node: EmailNode; what, rule: string): EmailDiagnostic =
   EmailDiagnostic(severity: sevError, code: codeLowerMissing,
@@ -173,17 +180,10 @@ proc carryOver(src, dst: EmailNode; consumed: openArray[string];
   ## Every declaration of `src` a lowering did not consume, then its
   ## classes, onto `dst`.
   for k, v in src.styles.pairs:
-    if k notin consumed and k notin bandMissing:
+    if k notin consumed and k notin backgroundProps:
       r.setStyle(dst, k, v)
   if "class" in src.attrs:
     r.setAttribute(dst, "class", src.attrs["class"])
-
-proc missingProps*(node: EmailNode; diags: var seq[EmailDiagnostic]) =
-  ## Background-image props on a band: reported, the band still lowers.
-  for k in bandMissing:
-    if k in node.styles or k in node.attrs:
-      diags.add(lowerMissing(node, k.replace("_", "-"), "R-VML-01"))
-      return
 
 type Band* = object
   ## A lowered band: the nodes that replace the authoring element, and
@@ -191,21 +191,33 @@ type Band* = object
   nodes*: seq[EmailNode]
   inner*: EmailNode
   row*: bool  ## The section holds a row of columns, still to be placed in `inner`
+  hideInner*: bool
+    ## Word must not see the inner div (it carries the image's CSS
+    ## inside Word's `v:rect`): once its content is lowered, the caller
+    ## replaces its tags by `!mso` conditionals (`hiddenFromWord`)
 
 proc bandNodes*(node: EmailNode; ctx: LowerCtx; padding: array[4, int];
     background, border, radius, align: string; ghostAlign: bool;
     innerStyles: openArray[(string, string)]; consumed: openArray[string];
-    r: EmailRenderer): Band =
+    r: EmailRenderer; image = BandBackground()): Band =
   ## The shared band shape (section and wrapper): ghost table open,
   ## outer div (centring, max-width, background), inner div (padding,
-  ## border, then `innerStyles`), ghost table close.
+  ## border, then `innerStyles`, then a background image's CSS),
+  ## ghost table close. With an image and `vmlFitToText`, Word gets the
+  ## image as a `v:rect` that grows with the content (R-VML-01,
+  ## R-VML-03) inside the ghost cell, and the padding on a one-cell
+  ## table inside the rectangle; without the flag Word paints the
+  ## fallback colour on the ghost cell, as when images are blocked
+  ## (R-OL-11).
   let w = node.layout.outer
   let pad = boxText(padding)
+  let vmlCase = ctx.target.outlookWord and image.src.len > 0 and
+    ctx.target.vmlFitToText
   let outer = r.createElement("div")
   outer.origin = node.origin
   r.setStyle(outer, "margin", "0 auto")
   r.setStyle(outer, "max-width", $w & "px")
-  if background.len > 0:
+  if background.len > 0 and not vmlCase:
     r.setStyle(outer, "background-color", background)
   if radius.len > 0:
     r.setStyle(outer, "border-radius", radius)
@@ -216,6 +228,12 @@ proc bandNodes*(node: EmailNode; ctx: LowerCtx; padding: array[4, int];
   r.setStyle(inner, "padding", pad)
   for (k, v) in innerStyles:
     r.setStyle(inner, k, v)
+  # The image goes on the inner div, which carries the band's classes:
+  # a dark rule repaints the colour behind the image, never over it.
+  for (k, v) in cssDeclarations(image):
+    r.setStyle(inner, k, v)
+  if image.src.len > 0 and radius.len > 0 and border.len == 0:
+    r.setStyle(inner, "border-radius", radius)
   carryOver(node, inner, consumed, r)
   if border.len > 0:
     # The border is drawn by a div of its own around the inner div. Word
@@ -239,10 +257,30 @@ proc bandNodes*(node: EmailNode; ctx: LowerCtx; padding: array[4, int];
   else:
     r.appendChild(outer, inner)
   result.inner = inner
-  if ctx.target.outlookWord:
+  let ghostAlignment = if ghostAlign and align notin ["", "left"]: align
+    else: ""
+  if vmlCase:
+    # Word sees the ghost cell (the fallback colour, the border), the
+    # rectangle and a one-cell table with the padding; no element with
+    # a background of its own inside the rectangle, where Word would
+    # paint it over the image.
+    let b = node.layout.border
+    let cell = GhostCell(background: background, border: border)
+    let f = image.fill
+    var dir = ""
+    for (k, v) in innerStyles:
+      if k == "direction":
+        dir = v
+    result.nodes = @[ghostTableOpen(w, cell),
+      vmlBackgroundOpen(w - b[1] - b[3], 0, image.src, image.color,
+        f.kind, f.origin, f.position, f.size, f.aspect, fit = true),
+      msoBoxOpen(GhostCell(padding: pad, align: ghostAlignment,
+        direction: dir)),
+      outer, ghostTableClose(), vmlBackgroundClose(), ghostTableClose()]
+    result.hideInner = true
+  elif ctx.target.outlookWord:
     let cell = GhostCell(padding: pad, background: background,
-      border: border,
-      align: if ghostAlign and align notin ["", "left"]: align else: "")
+      border: border, align: ghostAlignment)
     result.nodes = @[ghostTableOpen(w, cell), outer, ghostTableClose()]
   else:
     result.nodes = @[outer]
@@ -266,7 +304,7 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
   ## section.
   let r = EmailRenderer()
   var diags: seq[EmailDiagnostic] = @[]
-  missingProps(node, diags)
+  let image = readBackground(node, diags)
 
   var columns: seq[EmailNode] = @[]
   for c in node.children:
@@ -305,7 +343,10 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
   let (border, uniform) = borderText(node)
   if not uniform:
     diags.add(lowerMissing(node, "per-side border", "R-TBL-02"))
-  let background = colourOf(node, "background-color")
+  var background = colourOf(node, "background-color")
+  if image.src.len > 0:
+    # R-VML-01: an image always has its fallback colour behind it.
+    background = image.color
   let radius = radiusOf(node)
   var consumed = @bandConsumed
   consumed.add(["font-size", "direction"])
@@ -315,7 +356,7 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
     innerStyles = @[("font-size", fontSize), ("text-align", align),
       ("direction", "rtl")]
   var band = bandNodes(node, ctx, padding, background, border, radius,
-    align, ghostAlign = true, innerStyles, consumed, r)
+    align, ghostAlign = true, innerStyles, consumed, r, image)
   if row and node.layout.reversed:
     r.setAttribute(band.inner, "dir", "rtl")
   if not row and columns.len == 1 and "class" in columns[0].attrs:

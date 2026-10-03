@@ -11,7 +11,8 @@
 // 3: declarations whose value uses calc() are stripped (step 2).
 // 4: box-shadow is stripped (step 2).
 // 5: a cell's mso-padding-alt is its padding (step 2).
-export const WORD_APPROX_TRANSFORM_VERSION = 5;
+// 6: a shape filled with an image (v:fill src) shows the image (step 4).
+export const WORD_APPROX_TRANSFORM_VERSION = 6;
 
 import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
 import { stripBackgroundImageFromCss } from "./imagesOff.ts";
@@ -255,8 +256,52 @@ function vmlRectDiv(attrs: string, closed: boolean): string {
   return closed ? `${open}</div>` : open;
 }
 
+const VML_FILLED_OPEN_RE = new RegExp(
+  `<v:(${VML_SHAPES})\\b([^>]*)>\\s*<v:fill\\b([^>]*?)\\/?>`,
+  "gi",
+);
+
+// A VML fill fraction (`-0.5`, `0.5`) as a CSS position percentage: a
+// frame is placed by its centre, a tile by its corner.
+function fillPercent(value: string | undefined, tile: boolean): string {
+  const f = parseFloat(value ?? "0");
+  const pct = Number.isFinite(f) ? (tile ? f * 100 : 50 + f * 100) : 50;
+  return `${Math.round(pct * 100) / 100}%`;
+}
+
+function vmlImageDiv(shapeAttrs: string, fillAttrs: string): string | null {
+  const src = vmlAttr(fillAttrs, "src");
+  if (src === null || src === "") return null;
+  const color =
+    vmlAttr(fillAttrs, "color") ??
+    vmlAttr(shapeAttrs, "fillcolor") ??
+    "#cccccc";
+  const tile = (vmlAttr(fillAttrs, "type") ?? "").toLowerCase() === "tile";
+  const aspect = (vmlAttr(fillAttrs, "aspect") ?? "").toLowerCase();
+  const size =
+    aspect === "atleast" ? "cover" : aspect === "atmost" ? "contain" : "auto";
+  const [px, py] = (vmlAttr(fillAttrs, "position") ?? "0, 0").split(",");
+  const { width, height } = vmlSize(shapeAttrs);
+  const dims =
+    (width ? `width:${width};` : "") + (height ? `height:${height};` : "");
+  return (
+    `<div style="${dims}background-color:${color};` +
+    `background-image:url('${src}');background-size:${size};` +
+    `background-position:${fillPercent(px, tile)} ${fillPercent(py, tile)};` +
+    `background-repeat:${tile ? "repeat" : "no-repeat"};` +
+    `position:relative;outline:2px dashed #000">` +
+    `<span style="position:absolute;top:0;left:0;font:10px/12px monospace;` +
+    `background:#000;color:#fff">VML</span>`
+  );
+}
+
 export function replaceVml(html: string): string {
-  const shapesClosed = html.replace(
+  const filled = html.replace(
+    VML_FILLED_OPEN_RE,
+    (m: string, _t: string, shape: string, fill: string): string =>
+      vmlImageDiv(shape, fill) ?? m,
+  );
+  const shapesClosed = filled.replace(
     VML_SELF_CLOSING_RE,
     (_m: string, _t: string, attrs: string): string => vmlRectDiv(attrs, true),
   );

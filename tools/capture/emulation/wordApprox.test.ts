@@ -8,6 +8,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { imagesOff } from "./imagesOff.ts";
 import { wordApprox } from "./wordApprox.ts";
 
 // The style attribute of the first <TAG …> in `html`, read the way an
@@ -213,6 +214,40 @@ describe("wordApprox step 4: VML shapes become flat labelled rectangles", () => 
       `grey fallback missed:\n${bare}`,
     );
     assert.ok(!/<v:/i.test(bare), `v: tag survived:\n${bare}`);
+  });
+});
+
+describe("wordApprox step 4: a shape filled with an image shows it", () => {
+  it("stands a background v:rect in with its image, fill colour and size", () => {
+    const out = wordApprox(
+      `<!--[if gte mso 9]><v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:600px;height:300px;">` +
+        `<v:fill type="frame" origin="0, -0.5" position="0, -0.5" src="https://x.test/bg.png" color="#223344" size="1,1" aspect="atleast" />` +
+        `<v:textbox inset="0,0,0,0"><![endif]-->` +
+        `<p>hero</p>` +
+        `<!--[if gte mso 9]></v:textbox></v:rect><![endif]-->`,
+    );
+    assert.equal(
+      out,
+      `<div style="width:600px;height:300px;background-color:#223344;` +
+        `background-image:url('https://x.test/bg.png');background-size:cover;` +
+        `background-position:50% 0%;background-repeat:no-repeat;` +
+        `position:relative;outline:2px dashed #000">` +
+        `<span style="position:absolute;top:0;left:0;font:10px/12px monospace;` +
+        `background:#000;color:#fff">VML</span><p>hero</p></div>`,
+    );
+  });
+
+  it("tiles a type=tile fill and leaves the image to imagesOff", () => {
+    const out = wordApprox(
+      `<v:rect style="width:600px;"><v:fill type="tile" origin="0.5, 0" position="0.5, 0" src="https://x.test/t.png" color="#eeeeee" /><v:textbox><p>x</p></v:textbox></v:rect>`,
+    );
+    assert.ok(out.includes("background-repeat:repeat;"), out);
+    assert.ok(out.includes("background-position:50% 0%;"), out);
+    assert.ok(out.includes("background-size:auto;"), out);
+    assert.ok(!/<v:/i.test(out), `v: tag survived:\n${out}`);
+    const off = imagesOff(out);
+    assert.ok(!/background-image/i.test(off), off);
+    assert.ok(off.includes("background-color:#eeeeee"), off);
   });
 });
 

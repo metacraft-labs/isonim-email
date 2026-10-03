@@ -58,7 +58,18 @@ type
     top*, bottom*: int
     background*: string
 
+  VmlBox* = object
+    ## One VML shape Word draws: its kind (`v:rect`, `v:image`), its px
+    ## size (`auto` for a height that grows), whether its text box
+    ## grows with the content (`mso-fit-shape-to-text`), and its
+    ## `v:fill` as `name=value` pairs in a fixed order ("" without one).
+    shape*: string
+    width*, height*: string
+    fit*: bool
+    fill*: string
+
   Geometry* = object
+    vml*: seq[VmlBox]       ## Every VML shape, in document order
     leaves*: seq[Leaf]
     ghostTree*: string      ## e.g. `600c#ffffff[560c]`
     bleeds*: seq[string]    ## per px table, in order: bleed colour or "-"
@@ -267,6 +278,7 @@ proc rowsOf(table: WNode): seq[WNode] =
           result.add(r)
 
 type Walk = object
+  vml: seq[VmlBox]
   docBg: string
   pxDepth: int
   leaves: seq[Leaf]
@@ -366,6 +378,24 @@ proc layoutNode(w: var Walk; n: WNode; x, avail: float; top, bottom: int;
   if n.tag == "table":
     layoutTable(w, n, x, avail, top, bottom, bg, bleed, autoParent)
     return
+  if n.tag in ["v:rect", "v:image", "v:roundrect"]:
+    let st = styleOf(n)
+    var box = VmlBox(shape: n.tag,
+      width: st.getOrDefault("width", "auto"),
+      height: st.getOrDefault("height", "auto"))
+    if "mso-width-percent" in st:
+      box.width = st["mso-width-percent"] & "/1000"
+    for k in n.kids:
+      if k.tag == "v:textbox" and "mso-fit-shape-to-text" in styleOf(k):
+        box.fit = true
+      elif k.tag == "v:fill":
+        var parts: seq[string] = @[]
+        for a in ["type", "origin", "position", "size", "aspect", "color",
+            "src"]:
+          if a in k.attrs:
+            parts.add(a & "=" & k.attrs[a].replace(" ", ""))
+        box.fill = parts.join(" ")
+    w.vml.add(box)
   for k in n.kids:
     layoutNode(w, k, x, avail, top, bottom, bg, bleed, autoParent)
 
@@ -415,6 +445,7 @@ proc geometryOf*(html: string; docBg = documentBackground): Geometry =
   var w = Walk(docBg: docBg.toLowerAscii())
   for k in root.kids:
     layoutNode(w, k, 0.0, pageWidth, 0, 0, "", "", false)
+  result.vml = w.vml
   result.leaves = w.leaves
   result.ghostTree = w.tree
   result.bleeds = w.bleeds

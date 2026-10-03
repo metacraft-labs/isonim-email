@@ -60,7 +60,7 @@ No catalogue rule; models images blocked by default: empty `img[src]`/`srcset`,
 drop CSS `background-image`. `--images off` applies it after any
 family's own transform, and blocks image requests to the fixture host.
 
-## wordApprox (`wordApprox.ts`, version 5)
+## wordApprox (`wordApprox.ts`, version 6)
 
 Lint-grade (emulation steps 1–5): reveal mso conditionals; strip
 `max-width` (R-OL-03), `display:flex|grid|inline-block`, declarations
@@ -72,8 +72,10 @@ Windows; the Fab Four width, R-LAY-18), `box-shadow` (caniemail
 cell out with its `mso-padding-alt` in place of its padding, as Word
 does (R-OL-05, R-BTN-01); strip
 `<style>` media queries (R-LAY-02 excludes outlookWord); stand VML
-shapes in as flat labelled rectangles (R-VML-01/02); flatten `rgba()`
-(R-CSS-14).
+shapes in as flat labelled rectangles (R-VML-01/02), a shape filled
+with an image (`v:fill src`) as that image over the fill colour, sized
+and placed from the fill (`aspect`, `type`, `position`), its label a
+corner tag that takes no room; flatten `rgba()` (R-CSS-14).
 
 ## Real-sanitiser evidence: self-hosted webmail
 

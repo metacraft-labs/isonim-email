@@ -217,10 +217,14 @@ const
     ## A VML button whose label does not fit its width at the text
     ## metrics' worst case (R-BTN-04). Collected from
     ## `lower/button.nim`.
+  codeLayoutHeroOverflow* = "E-LAYOUT-HERO-OVERFLOW"
+    ## A fixed-height hero with a background image whose content's
+    ## estimated height exceeds its cell, so Word's fixed rectangle
+    ## would overflow (R-VML-08). Collected from `lower/hero.nim`.
   codeLayoutMetricsApprox* = "I-LAYOUT-METRICS-APPROX"
     ## A fit check measured characters outside the text-metrics table
     ## with an average advance, so its verdict is approximate.
-    ## Collected from `lower/button.nim`.
+    ## Collected from `lower/button.nim` and `lower/hero.nim`.
   codeRawUsed* = "I-RAW-USED"
     ## A `mailRaw` (information, once per element), so an audit can
     ## count the escape hatches a template uses (R-RAW-04). Collected

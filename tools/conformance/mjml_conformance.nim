@@ -15,8 +15,10 @@
 ##    view of both documents (`tests/conformance/geometry.nim`) has the
 ##    same ghost-table tree (px widths, centring, backgrounds), the same
 ##    full-bleed bands, the same content box for every marker leaf (left
-##    edge, width, vertical insets, background), and the same
-##    responsive class widths other than 100%;
+##    edge, width, vertical insets, background), the same responsive
+##    class widths other than 100%, and the same VML shapes (size,
+##    growth, fill); a hero fixture compares its leaves, VML and class
+##    widths only (`leavesOnly`, see `tests/conformance/fixtures.nim`);
 ## 4. **recorded widths**: `tests/conformance/mjml_widths.json`, which
 ##    the unit test `test_width_solver_matches_mjml` reads, still equals
 ##    what MJML emits now. `--record` rewrites it from MJML's output (a
@@ -74,12 +76,32 @@ proc sameFacts*(ours, mjml: seq[WidthFact]; why: var seq[string]): bool =
           " vs MJML " & b.responsive)
         result = false
 
-proc sameGeometry(ours, mjml: Geometry; why: var seq[string]): bool =
+proc sameVml(ours, mjml: seq[VmlBox]; why: var seq[string]): bool =
+  ## The shapes Word draws: the same count, each the same size and
+  ## growing alike; two rectangles also fill alike (a hero's `v:image`
+  ## has no fill to compare).
   result = true
-  if ours.ghostTree != mjml.ghostTree:
+  if ours.len != mjml.len:
+    why.add("VML: " & $ours.len & " shapes vs MJML " & $mjml.len)
+    return false
+  for i in 0 ..< ours.len:
+    let (a, b) = (ours[i], mjml[i])
+    if a.width != b.width or a.height != b.height or a.fit != b.fit:
+      why.add("VML #" & $i & ": " & a.shape & " " & a.width & "x" &
+        a.height & (if a.fit: " fit" else: "") & " vs MJML " & b.shape &
+        " " & b.width & "x" & b.height & (if b.fit: " fit" else: ""))
+      result = false
+    if a.shape == b.shape and a.fill != b.fill:
+      why.add("VML #" & $i & " fill: " & a.fill & " vs MJML " & b.fill)
+      result = false
+
+proc sameGeometry(ours, mjml: Geometry; why: var seq[string];
+    leavesOnly = false): bool =
+  result = sameVml(ours.vml, mjml.vml, why)
+  if not leavesOnly and ours.ghostTree != mjml.ghostTree:
     why.add("ghost tables " & ours.ghostTree & " vs MJML " & mjml.ghostTree)
     result = false
-  if ours.bleeds != mjml.bleeds:
+  if not leavesOnly and ours.bleeds != mjml.bleeds:
     why.add("full-bleed " & $ours.bleeds & " vs MJML " & $mjml.bleeds)
     result = false
   # Class widths compare as numbers, to 1e-5 as the solver check does:
@@ -173,14 +195,22 @@ proc main(): int =
       ok = false
     # Geometry: the full render, Outlook output on.
     if f.lowered:
-      let res = renderTree(f.build())
+      var target = defaultTarget()
+      target.vmlFitToText = f.vmlFit
+      let res = renderTree(f.build(), target = target)
       writeFile(outDir / "ours" / f.name & ".html", res.html)
       if hasErrors(res.diagnostics):
         for d in res.diagnostics:
           if d.severity == sevError:
             why.add("render error: " & $d)
         ok = false
-      if not sameGeometry(geometryOf(res.html), geometryOf(theirsHtml), why):
+      let ourGeometry = geometryOf(res.html)
+      if not sameGeometry(ourGeometry, geometryOf(theirsHtml), why,
+          f.leavesOnly):
+        ok = false
+      if (f.vmlFit or f.leavesOnly) and ourGeometry.vml.len == 0:
+        why.add("no VML found in a background fixture: the comparison " &
+          "would be vacuous")
         ok = false
     # Recorded widths.
     if not record and (not expected.hasKey(f.name) or

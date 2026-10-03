@@ -30,6 +30,7 @@ import ./style/tokens
 import ./style/css
 import ./lower/document
 import ./lower/elements
+import ./lower/background
 import ./passes/validate
 import ./passes/layout
 import ./passes/styles
@@ -152,15 +153,32 @@ proc isPublishedUrl(url: string): bool =
     url["https://".len] notin {'/', '?', '#'} and
     not url.contains({' ', '\t', '\r', '\n', '"', '<', '>'})
 
+const bandTagsWithImages = ["mailSection", "mailWrapper", "mailHero"]
+  ## The bands whose `background_image` P8 resolves and checks.
+
+proc backgroundSlot(node: EmailNode): tuple[inStyles: bool; key: string] =
+  ## Where a band's background image sits in the tree: a style or an
+  ## attribute, under either spelling, in the order the lowering reads
+  ## it (`rawValue`, through `backgroundImageOf`); key "" when none.
+  for k in ["background-image", "background_image"]:
+    if k in node.styles and node.styles[k].strip().len > 0:
+      return (true, k)
+  for k in ["background_image", "background-image"]:
+    if k in node.attrs and node.attrs[k].strip().len > 0:
+      return (false, k)
+  (false, "")
+
 proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]] =
-  ## P8's asset half. Every `img`/`mailImage` source the tree
+  ## P8's asset half. Every `img`/`mailImage` source and every band's
+  ## background image (`background_image`, catalogue R-VML-04) the tree
   ## references is resolved — a store name through `store.get`, a
   ## compile-time `asset"…"` path through the program's embedded
   ## assets — then published through `store.publish` before the HTML
-  ## is serialised, and the node's `src` is rewritten to the URL the
-  ## store returned (R-IMG-07: the upload completes before the message
-  ## exists). Each distinct asset is listed once, carrying that URL.
+  ## is serialised, and the node's `src` (or background image) is
+  ## rewritten to the URL the store returned (R-IMG-07: the upload
+  ## completes before the message exists). Each distinct asset is
+  ## listed once, carrying that URL.
   ##
   ## A nil store resolves and publishes nothing: sources stay as
   ## written. An unresolvable name is collected as `E-ASSET-UNKNOWN`,
@@ -174,6 +192,60 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     return
   var resolved: seq[tuple[src: string; url: string]] = @[]
   var failed: seq[string] = @[]
+  var listedAssets: seq[AssetRef] = @[]
+  var diags: seq[EmailDiagnostic] = @[]
+
+  proc resolveOne(src: string; node: EmailNode): string =
+    ## The URL `src` publishes to, "" when it stays as written.
+    for entry in resolved:
+      if entry.src == src:
+        return entry.url
+    if src.len == 0 or src in failed:
+      return ""
+    var asset: AssetRef
+    var found = false
+    let compiled = compiledAssetAt(src)
+    if isDataUri(src):
+      failed.add(src)
+      diags.add(EmailDiagnostic(
+        severity: sevError, code: codeUrlScheme,
+        message: "data: URIs are forbidden (R-IMG-08): '" & src & "'",
+        origin: node.origin, rules: @["R-IMG-08"]))
+    elif compiled.found:
+      asset = compiled.asset
+      found = true
+    elif isResolvableName(src):
+      try:
+        asset = store.get(src)
+        found = true
+      except AssetError as e:
+        failed.add(src)
+        diags.add(toDiagnostic(e.msg, origin = node.origin))
+    if not found:
+      return ""
+    let url = store.publish(asset)
+    if not isPublishedUrl(url):
+      # R-IMG-07: the HTML may only reference what the upload
+      # returned, and the upload must return where the image now
+      # lives. An empty or non-https answer means it did not.
+      failed.add(src)
+      diags.add(EmailDiagnostic(
+        severity: sevError, code: codeUrlScheme,
+        message: "publishing asset '" & asset.name & "' returned '" &
+          url & "', not an absolute https URL; the upload must " &
+          "complete before the HTML references it (R-IMG-07)",
+        origin: node.origin, rules: @["R-IMG-07"]))
+      return ""
+    asset.url = url
+    resolved.add((src, asset.url))
+    var listed = false
+    for a in listedAssets:
+      if a.url == asset.url:
+        listed = true
+    if not listed:
+      listedAssets.add(asset)
+    url
+
   var stack: seq[EmailNode] = @[doc]
   while stack.len > 0:
     let node = stack.pop()
@@ -181,57 +253,44 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
       continue
     if node.kind == enElement and
         node.tag.toLowerAscii() in ["img", "mailimage"]:
-      let src = node.attrs.getOrDefault("src", "")
-      var known = ""
-      for entry in resolved:
-        if entry.src == src:
-          known = entry.url
-      if known.len > 0:
-        node.attrs["src"] = known
-      elif src.len > 0 and src notin failed:
-        var asset: AssetRef
-        var found = false
-        let compiled = compiledAssetAt(src)
-        if isDataUri(src):
-          failed.add(src)
-          result.diagnostics.add(EmailDiagnostic(
-            severity: sevError, code: codeUrlScheme,
-            message: "data: URIs are forbidden (R-IMG-08): '" & src & "'",
-            origin: node.origin, rules: @["R-IMG-08"]))
-        elif compiled.found:
-          asset = compiled.asset
-          found = true
-        elif isResolvableName(src):
-          try:
-            asset = store.get(src)
-            found = true
-          except AssetError as e:
-            failed.add(src)
-            result.diagnostics.add(toDiagnostic(e.msg,
-              origin = node.origin))
-        if found:
-          let url = store.publish(asset)
-          if not isPublishedUrl(url):
-            # R-IMG-07: the HTML may only reference what the upload
-            # returned, and the upload must return where the image now
-            # lives. An empty or non-https answer means it did not.
-            failed.add(src)
-            result.diagnostics.add(EmailDiagnostic(
-              severity: sevError, code: codeUrlScheme,
-              message: "publishing asset '" & asset.name & "' returned '" &
-                url & "', not an absolute https URL; the upload must " &
-                "complete before the HTML references it (R-IMG-07)",
-              origin: node.origin, rules: @["R-IMG-07"]))
-          else:
-            asset.url = url
-            resolved.add((src, asset.url))
-            node.attrs["src"] = asset.url
-            var listed = false
-            for a in result.assets:
-              if a.url == asset.url:
-                listed = true
-            if not listed:
-              result.assets.add(asset)
+      let url = resolveOne(node.attrs.getOrDefault("src", ""), node)
+      if url.len > 0:
+        node.attrs["src"] = url
+    elif node.kind == enElement and node.tag in bandTagsWithImages:
+      let (inStyles, key) = backgroundSlot(node)
+      if key.len > 0:
+        let url = resolveOne(backgroundImageOf(node), node)
+        if url.len > 0:
+          if inStyles: node.styles[key] = url
+          else: node.attrs[key] = url
+    for i in countdown(node.children.high, 0):
+      stack.add(node.children[i])
+  result = (listedAssets, diags)
+
+proc checkBackgroundUrls*(doc: EmailNode): seq[EmailDiagnostic] =
+  ## P8's check of every band's background image (catalogue R-VML-04):
+  ## an absolute https URL, as the asset store publishes one. Word's
+  ## VML ignores `cid:` and relative URLs in some versions, so neither
+  ## is used; a `data:` URI is forbidden outright (R-IMG-08). A URL with
+  ## a quote, a parenthesis, a backslash or white space is refused too:
+  ## it would end the CSS `url('…')` early.
+  var stack: seq[EmailNode] = @[doc]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node == nil:
+      continue
+    if node.kind == enElement and node.tag in bandTagsWithImages:
+      let url = backgroundImageOf(node)
+      if url.len > 0:
+        if not isPublishedUrl(url) or
+            url.contains({'\'', '(', ')', '\\'}):
+          result.add(EmailDiagnostic(severity: sevError,
+            code: codeUrlScheme,
+            message: node.tag & " background_image '" & url & "' is not " &
+              "an absolute https URL: Word's VML needs one, and never " &
+              "reads cid: or relative URLs (R-VML-04); publish it " &
+              "through an AssetStore", origin: node.origin,
+            rules: @["R-VML-04"]))
     for i in countdown(node.children.high, 0):
       stack.add(node.children[i])
 
@@ -348,6 +407,7 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
       diags.add(lintDarkContrast(doc, dark))
   let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
+  diags.add(checkBackgroundUrls(doc))
 
   # Lowering reads the same tree the passes just walked. P4 lowers the
   # vocabulary elements of the clone (images read their intrinsic

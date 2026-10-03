@@ -177,6 +177,9 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget;
   if hasErrors(published.diagnostics):
     raise newException(StoryError, "story assets: " &
       published.diagnostics[0].message)
+  let urls = checkBackgroundUrls(doc)
+  if hasErrors(urls):
+    raise newException(StoryError, "story background: " & urls[0].message)
   let lowered = lowerElements(doc, defaultTheme(), published.assets,
     target = target)
   if hasErrors(lowered):

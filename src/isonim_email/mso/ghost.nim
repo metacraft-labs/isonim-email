@@ -40,6 +40,7 @@ type GhostCell* = object
   background*: string  ## 6-digit hex, mirrored as `bgcolor` and CSS
   border*: string      ## CSS `border` value (`1px solid #e5e7eb`)
   align*: string       ## `center`/`right`, mirrored as `align` and CSS (R-TBL-14)
+  direction*: string   ## `rtl`/`ltr`, CSS only (a cell Word lays a band's content in)
 
 proc tagText(tag: string; attrs: openArray[(string, string)]): string =
   ## `<tag a="v" …>`, attribute values escaped, empty values skipped.
@@ -58,6 +59,8 @@ proc cellStyle(cell: GhostCell): string =
     result.add("border:" & cell.border & ";")
   if cell.align.len > 0:
     result.add("text-align:" & cell.align & ";")
+  if cell.direction.len > 0:
+    result.add("direction:" & cell.direction & ";")
 
 proc cellTag(cell: GhostCell): string =
   tagText("td", [("bgcolor", cell.background), ("align", cell.align),
@@ -112,6 +115,24 @@ proc notMsoOpen*(tagText: string): EmailNode =
 proc notMsoClose*(tag: string): EmailNode =
   ## `<!--[if !mso]><!--></{tag}><!--<![endif]-->`.
   newNotMso(@[raw("</" & tag & ">")])
+
+proc openTagText*(node: EmailNode): string =
+  ## The start tag `node` serialises to (attributes, then its styles).
+  let shell = EmailNode(kind: enElement, tag: node.tag, attrs: node.attrs,
+    styles: node.styles, fallbacks: node.fallbacks)
+  let html = serialize(shell)
+  html[0 ..< html.len - ("</" & node.tag & ">").len]
+
+proc hiddenFromWord*(node: EmailNode): seq[EmailNode] =
+  ## `node`'s own tags hidden from Word, its children kept for everyone:
+  ## `<!--[if !mso]><!-->{start tag}<!--<![endif]-->`, the children,
+  ## `<!--[if !mso]><!--></{tag}><!--<![endif]-->`. For a box whose
+  ## background Word must not paint (inside a background `v:rect`,
+  ## R-VML-01), while the content stays Word's.
+  result = @[notMsoOpen(openTagText(node))]
+  for c in node.children:
+    result.add(c)
+  result.add(notMsoClose(node.tag))
 
 type GhostColumn* = object
   ## One cell of a multi-column ghost row (R-LAY-07): the column's px

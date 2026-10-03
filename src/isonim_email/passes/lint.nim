@@ -69,6 +69,7 @@ import ../style/shorthand
 import ../support/families
 import ../raw
 import ../target
+import ./layout
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -731,6 +732,14 @@ proc isBoldWeight(value: string): bool =
   except ValueError:
     false
 
+const imageBandTags = ["mailSection", "mailWrapper", "mailHero"]
+  ## The bands that take a background image (R-VML-01).
+
+proc hasBackgroundImage(node: EmailNode): bool =
+  ## A band with a background image, read as the lowering reads it (a
+  ## style or an attribute, either spelling: `rawValue`).
+  rawValue(node, "background-image").len > 0
+
 proc lintContrast(node: EmailNode;
                  ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
   ## R-A11Y-07: WCAG contrast below 4.5:1 warns (below 3:1 for large
@@ -751,15 +760,25 @@ proc lintContrast(node: EmailNode;
   if "color" notin node.styles:
     return @[]
   var bgValue = ""
+  var overImage = false
   if node.tag == "mailButton":
     # A button's label sits on its own fill, when it has one.
     bgValue = node.styles.getOrDefault("background-color", "")
   for i in countdown(ancestors.high, 0):
     if bgValue.len > 0:
       break
-    if ancestors[i] != nil and
-        "background-color" in ancestors[i].styles:
-      bgValue = ancestors[i].styles["background-color"]
+    let a = ancestors[i]
+    if a == nil:
+      continue
+    if a.kind == enElement and a.tag in imageBandTags and
+        hasBackgroundImage(a):
+      # Text over a band's background image (R-VML-01): the image may
+      # be blocked, so the pair checked is the text and the fallback
+      # colour that shows instead (the band's own, else the nearest
+      # enclosing one, as the lowering paints it).
+      overImage = true
+    if "background-color" in a.styles:
+      bgValue = a.styles["background-color"]
       break
   let white = Rgba(r: 255, g: 255, b: 255, a: 1.0)
   var fg, bg: Rgba
@@ -780,6 +799,16 @@ proc lintContrast(node: EmailNode;
   let ratio = contrastRatio(fg, bg)
   if ratio < threshold:
     let threshText = if large: "3" else: "4.5"
+    if overImage:
+      return @[EmailDiagnostic(
+        severity: sevWarning, code: codeA11yContrast,
+        message: "<" & node.tag & "> text over a background image has " &
+          "contrast " & formatFloat(ratio, ffDecimal, 2) & ":1 against " &
+          "the image's fallback colour, below " & threshText & ":1: the " &
+          "fallback shows when images are blocked, so it must carry the " &
+          "text (R-VML-01, R-A11Y-07)",
+        origin: node.origin, rules: @["R-VML-01", "R-A11Y-07"],
+      )]
     return @[EmailDiagnostic(
       severity: sevWarning, code: codeA11yContrast,
       message: "<" & node.tag & "> text/background contrast " &
@@ -966,6 +995,25 @@ const msoClosedList* = ["mso-line-height-rule", "mso-table-lspace",
   "mso-table-rspace", "mso-padding-alt", "mso-hide", "mso-font-alt"]
   ## R-OL-15: the only `mso-*` properties the library may emit. A new
   ## one joins only with a Word-engine capture that shows its effect.
+
+proc backgroundDegradations(node: EmailNode): seq[ExpectedDegradation] =
+  ## A band's background image is lowered with its fallbacks
+  ## (R-VML-01): Word gets VML or the fallback colour (R-OL-11), and a
+  ## client that drops the image's size, position or repeat shows it
+  ## at its own size or place, over the fallback colour that text is
+  ## checked against. Declared, so they report as degradations.
+  if node.kind != enElement or node.tag notin imageBandTags:
+    return
+  if not hasBackgroundImage(node):
+    return
+  result.add(expectDegradation(lkProperty, "background-image",
+    {cfOutlookWord}, "Word gets the image as VML, or its fallback " &
+    "colour (R-VML-01, R-OL-11)"))
+  for prop in ["background-size", "background-position",
+      "background-repeat"]:
+    result.add(expectDegradation(lkProperty, prop, allFamilies,
+      "the image shows at its own size or place over its fallback " &
+      "colour, which the text is checked against (R-VML-01)"))
 
 const nonCssProps = [("mailstack", "gap"), ("mailcluster", "gap"),
   ("mailcluster", "row-gap"), ("mailcluster", "row_gap"),
@@ -1357,7 +1405,12 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
       if (lowerTag, prop.toLowerAscii()) in nonCssProps:
         continue
       decls.add((prop, value))
-    result.add(lintStyles(node.tag, decls, profile, expected, node.origin))
+    let own = backgroundDegradations(node)
+    if own.len > 0:
+      result.add(lintStyles(node.tag, decls, profile, @expected & own,
+        node.origin))
+    else:
+      result.add(lintStyles(node.tag, decls, profile, expected, node.origin))
     result.add(lintTables(node, ancestors))
     result.add(lintLinkText(node))
     result.add(lintContrast(node, ancestors))

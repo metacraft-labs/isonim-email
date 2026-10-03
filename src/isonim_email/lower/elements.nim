@@ -5,7 +5,8 @@
 ## semantic tree) and replaces every vocabulary element that has a
 ## lowering with its email HTML: the div-first scaffolding
 ## (`mailSection`, `mailWrapper`, `mailStack`: `lower/section.nim`,
-## `lower/wrapper.nim`, `lower/stack.nim`), rows of columns
+## `lower/wrapper.nim`, `lower/stack.nim`), `mailHero`
+## (`lower/hero.nim`), rows of columns
 ## (`mailColumn`, `mailGroup` and `mailColumns`: `lower/column.nim`),
 ## the layout primitives (`mailBox`, `mailGrid`, `mailCluster`,
 ## `mailSidebar`: `lower/box.nim`, `grid.nim`, `cluster.nim`,
@@ -52,6 +53,8 @@ import ../style/tokens
 import ./image
 import ./section
 import ./wrapper
+import ./hero
+import ../mso/ghost
 import ./stack
 import ./column
 import ./box
@@ -72,7 +75,7 @@ import ../target
 ## the capture CLI to pick the families of an `--affected` run.
 const affects*: set[ClientFamily] = allFamilies
 
-const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
+const loweredHere* = ["mailImage", "mailSection", "mailWrapper", "mailHero",
   "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
   "mailGrid", "mailCluster", "mailSidebar", "mailSpacer", "mailDivider",
   "mailText", "mailButton", "mailTable", "mailIf", "mailRaw"]
@@ -187,6 +190,14 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
         discard lowerInlineRow(c, ctx, band.inner, EmailRenderer())
       replaceChild(parent, c, band.nodes)
       walk(band.inner, ctx, assets, diags)
+      if band.hideInner:
+        replaceChild(band.inner.parent, band.inner,
+          hiddenFromWord(band.inner))
+    elif c.kind == enElement and c.tag == "mailHero":
+      let (nodes, inner, found) = lowerHero(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+      walk(inner, ctx, assets, diags)
     elif c.kind == enElement and c.tag == "mailColumns":
       let (row, found) = lowerColumns(c, ctx)
       diags.add(found)
@@ -198,6 +209,9 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       diags.add(found)
       replaceChild(parent, c, band.nodes)
       walk(band.inner, ctx, assets, diags)
+      if band.hideInner:
+        replaceChild(band.inner.parent, band.inner,
+          hiddenFromWord(band.inner))
     elif c.kind == enElement and c.tag == "mailStack":
       let (nodes, wrappers, found) = lowerStack(c, ctx)
       diags.add(found)

@@ -172,7 +172,7 @@ proc checkBandNesting(node: EmailNode; acc: var seq[EmailDiagnostic]) =
   var through = ""
   while a != nil:
     if a.kind == enElement:
-      if a.tag == "mailSection" or
+      if a.tag in ["mailSection", "mailHero"] or
           (a.tag == "mailWrapper" and node.tag == "mailWrapper"):
         acc.add(EmailDiagnostic(severity: sevError,
           code: codeStructNesting,
@@ -378,7 +378,8 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
           "(R-RAW-04)", origin: node.origin, rules: @["R-RAW-04"]))
     if node.kind == enRaw and insideMailRaw(node):
       checkRawPayload(node, result)
-    if node.kind == enElement and node.tag in ["mailSection", "mailWrapper"]:
+    if node.kind == enElement and node.tag in ["mailSection", "mailWrapper",
+        "mailHero"]:
       checkBandNesting(node, result)
     if node.kind == enRaw and not insideMailRaw(node):
       let within =

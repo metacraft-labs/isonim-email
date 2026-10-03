@@ -41,6 +41,10 @@ type
     headStyleBudget*: int ## Bytes of head CSS across all blocks
     preheaderPad*: string ## R-PRE-02 unit sequence (the measured sequence lands later)
     webFonts*: seq[WebFont] ## Fonts loaded with `@font-face` (R-TXT-07, R-OL-07); none by default
+    vmlFitToText*: bool   ## R-VML-03 flag (unverified): Word's background
+      ## rectangles that grow with their content (`mso-fit-shape-to-text`):
+      ## a section's or wrapper's, and a `min_height` hero's. Off by
+      ## default: such a band shows Word its fallback colour instead
 
 const allFamilies* = {low(ClientFamily) .. high(ClientFamily)}
   ## Every client family: the `affects` value of a module whose edits

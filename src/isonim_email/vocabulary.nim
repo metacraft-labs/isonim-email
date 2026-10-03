@@ -72,6 +72,9 @@ proc buildEmailVocabulary*(): VocabularyRef =
         allowedParents: @["mailDocument"] & trio, attrs: @[
         attr("background_color", akStyle, "Color"),
         attr("background_image", akStyle, "Url"),
+        attr("background_size", akStyle, "cover|contain|auto|Len"),
+        attr("background_position", akAttr, "string"),
+        attr("background_repeat", akAttr, "no-repeat|repeat"),
         attr("padding", akStyle, "Box"),
         attr("border", akStyle, "Border"),
         attr("border_radius", akStyle, "Len"),
@@ -80,8 +83,9 @@ proc buildEmailVocabulary*(): VocabularyRef =
         allowedParents: @["mailDocument", "mailWrapper"] & trio, attrs: @[
         attr("background_color", akStyle, "Color"),
         attr("background_image", akStyle, "Url"),
-        attr("background_size", akStyle, "cover|contain|Len"),
+        attr("background_size", akStyle, "cover|contain|auto|Len"),
         attr("background_position", akAttr, "string"),
+        attr("background_repeat", akAttr, "no-repeat|repeat"),
         attr("padding", akStyle, "Box"),
         attr("border", akStyle, "Border"),
         attr("border_radius", akStyle, "Len"),
@@ -170,9 +174,13 @@ proc buildEmailVocabulary*(): VocabularyRef =
       ]),
       # No `mode` prop: the hero's image/background mode is read from
       # the props given.
-      TagDef(name: "mailHero", attrs: @[
+      TagDef(name: "mailHero",
+        allowedParents: @["mailDocument", "mailWrapper"] & trio, attrs: @[
         attr("background_image", akStyle, "Url"),
         attr("background_color", akStyle, "Color"),
+        attr("background_size", akStyle, "cover|contain|auto|Len"),
+        attr("background_position", akAttr, "string"),
+        attr("background_repeat", akAttr, "no-repeat|repeat"),
         attr("height", akStyle, "Len"),
         attr("min_height", akStyle, "Len"),
         attr("padding", akStyle, "Box"),

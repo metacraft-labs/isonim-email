@@ -549,6 +549,47 @@ proc patternLines(node: EmailNode; view: BriefView;
   except PatternError as e:
     @["(" & node.tag & ": " & e.msg & ")"]
 
+proc backgroundLine(node: EmailNode; bg: string; view: BriefView): string =
+  ## A band with a background image (catalogue R-VML-01): what the
+  ## image and its fallback colour must look like in this client.
+  var src = styleValue(node, "background-image")
+  if src.toLowerAscii().startsWith("url("):
+    src = src[4 ..< ^1].strip(chars = {'\'', '"', ' '})
+  let name = src.split('/')[^1]
+  var size = styleValue(node, "background-size")
+  if size.len == 0:
+    size = "cover"
+  var pos = attrValue(node, "background_position")
+  if pos.len == 0:
+    pos = "center center"
+  let tiled = attrValue(node, "background_repeat").toLowerAscii() == "repeat"
+  let height = styleValue(node, "height")
+  let minHeight = styleValue(node, "min-height")
+  let fallback = if bg.len > 0: bg else: "the page colour"
+  let what = case tagLower(node)
+    of "mailhero": "Hero"
+    of "mailwrapper": "Wrapper (around the sections below)"
+    else: "Band"
+  result = what & " with a background image (" & name & ", " &
+    (if tiled: "tiled" else: size & " at " & pos) & ")"
+  if height.len > 0:
+    result.add(", " & height & " tall")
+  elif minHeight.len > 0:
+    result.add(", at least " & minHeight & " tall")
+  result.add(": its text sits over the image. The fallback colour " &
+    fallback & " shows behind the image, and instead of it when images " &
+    "are blocked; the text must stay readable on both, and nothing may " &
+    "be cut at the band's edges.")
+  if view.word:
+    if tagLower(node) == "mailhero" and height.len > 0:
+      result.add(" In Word the image is a VML rectangle (in the " &
+        "approximation, a dashed box with a small \"VML\" tag that " &
+        "shows the image) the hero's size, its text inside it.")
+    else:
+      result.add(" In Word this band shows its fallback colour only, " &
+        "no image: its rectangle would have to grow with the content, " &
+        "which is not used by default.")
+
 proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
                items: var seq[string]; images: var seq[string];
                firstH1: var bool; align = "center";
@@ -583,6 +624,9 @@ proc walkItems(node: EmailNode; bg: string; width, breakpoint: int;
     # alignment of what they hold whatever the skeleton's cell says.
     curAlign = if tagLower(node) == "mailsection" and
         sectionDirection(node) == "rtl": "right" else: "left"
+  if tagLower(node) in ["mailsection", "mailwrapper", "mailhero"] and
+      styleValue(node, "background-image").len > 0:
+    items.add(backgroundLine(node, curBg, view))
   if isPattern(node.tag):
     # A primitive or pattern: its own declaration, then its content.
     items.add(patternLines(node, view, expected = true))

@@ -13,6 +13,17 @@
 ## and groups, whose lowering does not exist yet, and are compared at
 ## the width-solver level only (here and in `tests/t5_layout.nim`).
 ##
+## The background fixtures render with `vmlFitToText` on, so a band's
+## image reaches Word as the `v:rect` that grows with its content, the
+## form MJML's `mj-section` writes; their VML (the rectangle's size,
+## whether it grows, and the `v:fill`) is compared too. A hero is
+## compared by its leaves and its rectangle only (`leavesOnly`): MJML's
+## `mj-hero` draws the image as an absolutely placed `v:image` behind
+## an inner px table and gives Word its colour on an inner cell, so the
+## ghost-table trees differ by construction, while what Word lays out
+## (where the text sits, on which colour, over which rectangle) is
+## comparable.
+##
 ## `widthFacts` flattens the layout pass's annotations into the same
 ## record the harness extracts from MJML's HTML, in document order: a
 ## `table` fact per section or wrapper (its ghost-table px width), a
@@ -30,6 +41,8 @@ type
     description*: string
     lowered*: bool
     build*: proc(): EmailNode {.nimcall.}
+    vmlFit*: bool      ## Rendered with `vmlFitToText` on
+    leavesOnly*: bool  ## Geometry: leaves, VML and class widths only
 
   WidthFact* = object
     kind*: string      ## "table" or "cell"
@@ -158,6 +171,84 @@ proc documentWidth640(): EmailNode =
   let s = r.el("mailSection", [("background-color", "#f4f5f7")])
   r.leaf(s, "MK1")
   r.add(doc, s)
+  doc
+
+# --- Background images (rendered with `vmlFitToText`) and heroes.
+
+const bgImage* = "https://example.com/conformance/bg.png"
+const tileImage* = "https://example.com/conformance/tile.png"
+
+proc sectionBackground(): EmailNode =
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("background-color", "#334455"),
+    ("background-image", bgImage), ("background-size", "cover")],
+    [("background_position", "center top")])
+  r.leaf(s, "MK1")
+  r.leaf(s, "MK2")
+  r.add(doc, s)
+  doc
+
+proc sectionTile(): EmailNode =
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("padding", "16px 8px"),
+    ("background-color", "#eeeeee"), ("background-image", tileImage),
+    ("background-size", "auto")], [("background_repeat", "repeat")])
+  let c = r.el("mailColumn", [("padding", "4px 30px")])
+  r.leaf(c, "MK1")
+  r.add(s, c)
+  r.add(doc, s)
+  doc
+
+proc sectionTileSized(): EmailNode =
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("background-color", "#eeeeee"),
+    ("background-image", tileImage), ("background-size", "40px")],
+    [("background_position", "right 30%"), ("background_repeat", "repeat")])
+  r.leaf(s, "MK1")
+  r.add(doc, s)
+  doc
+
+proc sectionBackgroundContain(): EmailNode =
+  let (r, doc) = newDoc()
+  let s = r.el("mailSection", [("padding", "40px 0"),
+    ("background-color", "#102030"), ("background-image", bgImage),
+    ("background-size", "contain")],
+    [("background_position", "right bottom")])
+  r.leaf(s, "MK1")
+  r.add(doc, s)
+  doc
+
+proc wrapperBackground(): EmailNode =
+  let (r, doc) = newDoc()
+  let w = r.el("mailWrapper", [("padding", "20px 0"),
+    ("background-color", "#223344"), ("background-image", bgImage),
+    ("background-size", "cover")],
+    [("background_position", "center center")])
+  let a = r.el("mailSection")
+  r.leaf(a, "MK1")
+  let b = r.el("mailSection", [("background-color", "#f4f5f7")])
+  r.leaf(b, "MK2")
+  r.add(w, a, b)
+  r.add(doc, w)
+  doc
+
+proc heroFixed(): EmailNode =
+  let (r, doc) = newDoc()
+  let h = r.el("mailHero", [("background-color", "#2a2a2a"),
+    ("background-image", bgImage), ("height", "300px"),
+    ("padding", "40px 0")])
+  r.leaf(h, "MK1")
+  r.leaf(h, "MK2")
+  r.add(doc, h)
+  doc
+
+proc heroPadded(): EmailNode =
+  let (r, doc) = newDoc()
+  let h = r.el("mailHero", [("background-color", "#123456"),
+    ("background-image", bgImage), ("height", "240px"),
+    ("padding", "32px 36px 20px")])
+  r.leaf(h, "MK1")
+  r.add(doc, h)
   doc
 
 # --- Solver-only fixtures: column rows and groups.
@@ -353,6 +444,26 @@ proc conformanceFixtures*(): seq[ConformanceFixture] =
     ConformanceFixture(name: "gutter-odd-percent", lowered: true,
       description: "four default columns, a 15px gutter, in a wrapper",
       build: gutterOddPercent),
+    ConformanceFixture(name: "section-background", lowered: true,
+      vmlFit: true, description: "a background image, cover, centre top",
+      build: sectionBackground),
+    ConformanceFixture(name: "section-background-tile", lowered: true,
+      vmlFit: true, description: "a tiled background image (auto, " &
+        "repeat) behind a padded column", build: sectionTile),
+    ConformanceFixture(name: "section-background-tile-sized", lowered: true,
+      vmlFit: true, description: "a 40px tile placed right, 30% down",
+      build: sectionTileSized),
+    ConformanceFixture(name: "section-background-contain", lowered: true,
+      vmlFit: true, description: "a background image, contain, right " &
+        "bottom", build: sectionBackgroundContain),
+    ConformanceFixture(name: "wrapper-background", lowered: true,
+      vmlFit: true, description: "a wrapper's background image behind " &
+        "two sections", build: wrapperBackground),
+    ConformanceFixture(name: "hero-fixed", lowered: true, leavesOnly: true,
+      description: "a 300px hero with a background image (mj-hero " &
+        "fixed-height)", build: heroFixed),
+    ConformanceFixture(name: "hero-padded", lowered: true, leavesOnly: true,
+      description: "a 240px hero with uneven padding", build: heroPadded),
   ]
 
 # --- Width facts from the layout pass.
@@ -362,6 +473,10 @@ proc factsOf(node: EmailNode; acc: var seq[WidthFact]) =
     return
   if node.layout.solved:
     case node.tag
+    of "mailHero":
+      # MJML's hero: one centred px table (its inner table has no
+      # `align`, so it is not a ghost-table fact).
+      acc.add(WidthFact(kind: "table", px: float(node.layout.outer)))
     of "mailSection", "mailWrapper":
       acc.add(WidthFact(kind: "table", px: float(node.layout.outer)))
       var columns = false
@@ -400,14 +515,46 @@ proc attrText(pairs: openArray[(string, string)]): string =
 proc value(node: EmailNode; name: string): string =
   rawValue(node, name)
 
-proc leavesMjml(node: EmailNode): string =
+proc leavesMjml(node: EmailNode; padding = "0"): string =
   for c in node.children:
     if c.kind == enElement and c.tag in ["p", "h1"]:
       var text = ""
       for t in c.children:
         if t.kind == enText:
           text.add(t.text)
-      result.add("<mj-text padding=\"0\">" & text & "</mj-text>")
+      result.add("<mj-text padding=\"" & padding & "\">" & text &
+        "</mj-text>")
+
+proc backgroundMjml(n: EmailNode): seq[(string, string)] =
+  ## A band's background image as MJML's attributes, this library's
+  ## defaults written out (MJML's position default is `top center`).
+  let url = value(n, "background-image")
+  if url.len == 0:
+    return @[]
+  var size = value(n, "background-size")
+  if size.len == 0:
+    size = "cover"
+  var pos = value(n, "background_position")
+  if pos.len == 0:
+    pos = "center center"
+  var repeat = value(n, "background_repeat")
+  if repeat.len == 0:
+    repeat = "no-repeat"
+  @[("background-url", url), ("background-size", size),
+    ("background-position", pos), ("background-repeat", repeat)]
+
+proc heroMjml(h: EmailNode; theme: EmailTheme): string =
+  ## `mj-hero mode="fixed-height"`: the image box is the hero's own
+  ## size, and the implicit column's padding goes on each text.
+  let height = value(h, "height")
+  var pad = value(h, "padding")
+  if pad.len == 0:
+    pad = theme.lightFor(sectionPaddingToken)
+  "<mj-hero" & attrText([("mode", "fixed-height"), ("height", height),
+    ("padding", pad), ("background-color", value(h, "background-color")),
+    ("background-url", value(h, "background-image")),
+    ("background-width", "600px"), ("background-height", height)]) & ">" &
+    leavesMjml(h, theme.lightFor(columnPaddingToken)) & "</mj-hero>"
 
 proc columnMjml(col: EmailNode; theme: EmailTheme): string =
   if col.tag == "mailGroup":
@@ -450,10 +597,10 @@ proc sectionMjml(s: EmailNode; theme: EmailTheme): string =
       sum[i] = int(toPx(sp[i]) + toPx(cp[i]))
     pad = sideText(sum)
     gutter = value(row, "gutter")
-  result = "<mj-section" & attrText([("padding", pad),
+  result = "<mj-section" & attrText(@[("padding", pad),
     ("background-color", value(s, "background-color")),
     ("border", value(s, "border")), ("full-width", full),
-    ("gutter", gutter)]) & ">"
+    ("gutter", gutter)] & backgroundMjml(s)) & ">"
   if row != nil:
     for c in row.children:
       if c.kind == enElement and c.tag == "mailColumn":
@@ -491,14 +638,16 @@ proc toMjml*(doc: EmailNode; target = defaultTarget();
     case c.tag
     of "mailSection":
       result.add(sectionMjml(c, theme))
+    of "mailHero":
+      result.add(heroMjml(c, theme))
     of "mailWrapper":
       # A wrapper has no default padding here; MJML's is 20px 0.
       let wpad = if value(c, "padding").len > 0: value(c, "padding")
         else: "0"
-      result.add("<mj-wrapper" & attrText([("padding", wpad),
+      result.add("<mj-wrapper" & attrText(@[("padding", wpad),
         ("background-color",
-        value(c, "background-color")), ("border", value(c, "border"))]) &
-        ">")
+        value(c, "background-color")), ("border", value(c, "border"))] &
+        backgroundMjml(c)) & ">")
       for s in c.children:
         if s.kind == enElement and s.tag == "mailSection":
           result.add(sectionMjml(s, theme))
