@@ -11,23 +11,13 @@ import seed_alert
 import seed_overflow
 import seed_sanitiser_probe
 
-const receiptText = "Receipt #1234\n\nThanks for your order.\n\n" &
-  "Widget: $10.00\n"
-  ## Fixed plain-text alternative for the receipt seed (the plain-text
-  ## generator will produce these; the content mirrors the seed's
-  ## title, preheader and line item).
-
-const alertText = "تنبيه أمني\n\nتم رصد تسجيل دخول جديد.\n\n" &
-  "تسجيل دخول من جهاز جديد.\n"
-  ## Fixed plain-text alternative for the alert seed.
-
 proc renderReceipt*(): StoryHtml =
   ## The receipt seed through the current pipeline.
-  (renderPipeline(seedReceipt(), defaultTarget()), receiptText)
+  renderStoryPipeline(seedReceipt(), defaultTarget())
 
 proc renderAlert*(): StoryHtml =
   ## The alert seed through the current pipeline.
-  (renderPipeline(seedAlert(), defaultTarget()), alertText)
+  renderStoryPipeline(seedAlert(), defaultTarget())
 
 proc receiptStory*(): Story =
   ## The receipt seed as a registry entry.

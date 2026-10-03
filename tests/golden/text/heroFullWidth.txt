@@ -1,0 +1,11 @@
+Spring sale
+===========
+
+Twenty percent off everything until Sunday.
+
+Shop the sale: https://app.example.com/
+
+The discount applies at checkout. It cannot be combined with other offers.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

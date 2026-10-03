@@ -56,11 +56,6 @@ proc seedOverflow*(fluid: bool): EmailNode =
   r.appendChild(doc, foot)
   doc
 
-const overflowText* = "Overflow fixture\n\n" &
-  "A table wider than the viewport.\n"
-  ## Fixed plain-text alternative for the twins (the plain-text
-  ## generator will produce these).
-
 proc overflowFixedDoc*(): EmailNode =
   ## The fixed-700px tree (brief driver input).
   seedOverflow(false)
@@ -71,8 +66,8 @@ proc overflowFluidDoc*(): EmailNode =
 
 proc renderOverflowFixed*(): StoryHtml =
   ## The fixed twin through the current pipeline.
-  (renderPipeline(seedOverflow(false), defaultTarget()), overflowText)
+  renderStoryPipeline(seedOverflow(false), defaultTarget())
 
 proc renderOverflowFluid*(): StoryHtml =
   ## The fluid twin through the current pipeline.
-  (renderPipeline(seedOverflow(true), defaultTarget()), overflowText)
+  renderStoryPipeline(seedOverflow(true), defaultTarget())

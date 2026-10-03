@@ -1,0 +1,47 @@
+[Acme logo]
+
+Three ways to start
+===================
+
+Pick the one that fits your team.
+
+Secure
+------
+
+Every change is signed.
+
+Fast
+----
+
+Builds start in seconds and finish in minutes.
+
+Shared
+------
+
+Your whole team sees the same state.
+
+Starter
+-------
+
+One project, one seat.
+
+Team
+----
+
+Ten projects and shared reviews.
+
+Company
+-------
+
+Unlimited projects, single sign-on and an audit log for every change.
+
+12
+builds
+
+4
+reviews
+
+0
+alerts
+
+Acme Inc., 1 Example Street, Springfield

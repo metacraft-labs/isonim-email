@@ -1,0 +1,13 @@
+Your order
+==========
+
+Order 1042, shipped today.
+
+Items in order 1042
+Item | Qty | Amount
+Notebook | 2 | $12.00
+Pencils, pack of 12 | 1 | $4.50
+Eraser | 3 | $2.25
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

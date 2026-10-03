@@ -1,0 +1,8 @@
+Spring sale
+===========
+
+Light text on the dark landscape and on its dark fallback, in either scheme.
+
+Below the hero, a card band in its dark colours.
+
+Acme Inc., 1 Example Street, Springfield

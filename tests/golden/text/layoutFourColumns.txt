@@ -1,0 +1,56 @@
+[Acme logo]
+
+This week at a glance
+=====================
+
+The short version.
+
+Mon
+---
+
+Planning.
+
+Tue
+---
+
+Builds.
+
+Wed
+---
+
+Reviews.
+
+Thu
+---
+
+Release.
+
+9:00
+----
+
+Stand-up
+
+11:00
+-----
+
+Design review
+
+14:00
+-----
+
+Pairing
+
+16:00
+-----
+
+Demo
+
+[Security]
+
+[Speed]
+
+[Sharing]
+
+[Support]
+
+Acme Inc., 1 Example Street, Springfield

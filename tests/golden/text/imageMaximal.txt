@@ -1,0 +1,17 @@
+Autumn collection
+=================
+
+Hills under a yellow sun, the collection's cover
+(https://example.com/autumn)
+
+Below: a half-width picture, a right-aligned rounded one, and one that fills 
+a phone's width.
+
+[The hill at noon]
+
+[The hill at dusk]
+
+[The hill at dawn]
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

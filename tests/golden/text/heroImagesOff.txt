@@ -1,0 +1,12 @@
+Images off
+==========
+
+With images blocked, the hero shows its dark blue fallback and this text 
+stays readable.
+
+A light band: its warm fallback colour, dark text.
+
+A tiled band: its pale ground, dark text.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

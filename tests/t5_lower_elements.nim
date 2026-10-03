@@ -69,17 +69,18 @@ const altStyle = "font-family:Helvetica, Arial, sans-serif;" &
 
 suite "elements without a lowering are errors, never raw tags":
   test "test_unlowered_elements_error_and_keep_their_content":
-    # `mailMarkdown` and `textOnly` have no lowering yet (the section,
-    # the button, the navbar and the hero that stood here have one now:
+    # `mailMarkdown` has no lowering yet (the section, the button, the
+    # navbar, the hero and `textOnly` that stood here have one now:
     # tests/t5_scaffolding.nim, tests/t5_button.nim,
-    # tests/t5_navigation.nim, tests/t5_background.nim).
+    # tests/t5_navigation.nim, tests/t5_background.nim,
+    # tests/t5_text_part.nim). A misspelt `mail*` tag has none either.
     let doc = docWith(proc(r: EmailRenderer; doc: EmailNode) =
       let section = r.createElement("mailSection")
       let md = r.createElement("mailMarkdown")
       let p = r.createElement("p")
       r.setTextContent(p, "Inside the section")
       r.appendChild(md, p)
-      let nav = r.createElement("textOnly")
+      let nav = r.createElement("mailNavBarr")
       r.setTextContent(nav, "Open dashboard")
       r.appendChild(md, nav)
       r.appendChild(section, md)
@@ -88,10 +89,10 @@ suite "elements without a lowering are errors, never raw tags":
     check codesOf(res.diagnostics) == @[codeLowerMissing, codeLowerMissing]
     check hasErrors(res.diagnostics)
     check "<mailMarkdown>" in res.diagnostics[0].message
-    check "<textOnly>" in res.diagnostics[1].message
+    check "<mailNavBarr>" in res.diagnostics[1].message
     # Never a raw custom tag, in any spelling.
     check "<mailmarkdown" notin res.html.toLowerAscii()
-    check "<textonly" notin res.html.toLowerAscii()
+    check "<mailnavbarr" notin res.html.toLowerAscii()
     # The content survives, so the output stays inspectable.
     check "Inside the section" in res.html
     check "Open dashboard" in res.html
@@ -104,10 +105,11 @@ suite "elements without a lowering are errors, never raw tags":
     # Patterns lower by their expansion (mailSocial, mailNavbar and
     # their items: tests/t5_navigation.nim), so they are not listed.
     let lowered = @loweredHere & @loweredElsewhere
-    check lowered.sorted() == @["mailBox", "mailButton", "mailCluster",
+    check lowered.sorted() == @["htmlOnly", "mailBox", "mailButton", "mailCluster",
       "mailColumn", "mailColumns", "mailDivider", "mailDocument", "mailGrid", "mailGroup",
       "mailHero", "mailIf", "mailImage", "mailRaw", "mailSection", "mailSidebar",
-      "mailSpacer", "mailStack", "mailTable", "mailText", "mailWrapper"]
+      "mailSpacer", "mailStack", "mailTable", "mailText", "mailWrapper",
+      "textOnly"]
     var nonLeaf = 0
     var expandedOnly = 0
     var tags: seq[string] = @[]

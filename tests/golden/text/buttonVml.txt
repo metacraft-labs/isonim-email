@@ -1,0 +1,19 @@
+Rounded buttons
+===============
+
+A 220px rounded button (VML in Word):
+
+Start free trial: https://app.example.com/
+
+A pill, VML always, centred:
+
+Book a demo: https://app.example.com/
+
+An outline, 260px, 48px tall:
+
+Read the changelog: https://app.example.com/
+
+The end.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

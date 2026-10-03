@@ -37,7 +37,10 @@ const fixedDateSecs = 1767268800'i64
 proc buildStory(outDir, name: string): JsonNode =
   let story = getStory(name) # Raises StoryError naming the known set.
   let (html, text) = story.render()
-  let rendered = RenderedEmail(html: html, text: text)
+  # Story texts are the plain-text pass's flowed form (soft breaks
+  # end in a space).
+  let rendered = RenderedEmail(html: html, text: text,
+    textFlowed: text.len > 0)
   let msg =
     try:
       toMessage(rendered, MessageHeaders(

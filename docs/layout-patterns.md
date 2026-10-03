@@ -161,13 +161,13 @@ email lowerings are this library's own: no published framework maps them
 
 ### 3.1 `mailStack`: vertical rhythm
 
-|           |                                                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Props     | `gap: Len = tok"space.4"`; `align: Align` = the start of the direction (left, or right in a right-to-left document or section) |
-| Lowering  | each child wrapped in `<div>`; followers get `padding-top:{gap}` plus the ⟪mso⟫ spacer row (§2.2)                              |
-| NoCSS     | ✓ (all inline)                                                                                                                 |
-| Word      | ✓ (spacer rows)                                                                                                                |
-| Text part | children in order, separated by a blank line                                                                                   |
+|           |                                                                                                                                                                                                                                              |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Props     | `gap: Len = tok"space.4"`; `align: Align` = the start of the direction (left, or right in a right-to-left document or section)                                                                                                               |
+| Lowering  | each child wrapped in `<div>`; followers get `padding-top:{gap}` plus the ⟪mso⟫ spacer row (§2.2)                                                                                                                                            |
+| NoCSS     | ✓ (all inline)                                                                                                                                                                                                                               |
+| Word      | ✓ (spacer rows)                                                                                                                                                                                                                              |
+| Text part | children in order, separated by a blank line; in a column, a box, or an item of a grid or a sidebar whose children each write one line, those lines follow each other without blank lines (a figure and its caption, a number and its label) |
 
 `mailColumn`, `mailBox` and every pattern slot are implicitly a Stack with
 `gap = 0`.
@@ -182,7 +182,7 @@ email lowerings are this library's own: no published framework maps them
 | `outlook_rounded` | ☐ opt-in: the 3×3 table with VML corner arcs (kontent.ai, "Outlook containers with rounded corners"). Requires `padding ≥ border_radius`; never nest VML inside it. Shipped only once a Word-engine capture shows it works (R-TBL-16): until then it is not built, and asking for it is `E-LOWER-MISSING` (the box lowers square)                                                                                             |
 | NoCSS             | ✓                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Word              | ✓, with square corners and no shadow                                                                                                                                                                                                                                                                                                                                                                                          |
-| Text part         | content; the Box itself contributes nothing                                                                                                                                                                                                                                                                                                                                                                                   |
+| Text part         | content, as a Stack's (§3.1); the Box itself contributes nothing                                                                                                                                                                                                                                                                                                                                                              |
 
 ### 3.3 `mailColumns` / `mailColumn`: rows with an explicit strategy
 
@@ -306,7 +306,7 @@ rating scales, calendar links and footer links.
 | NoCSS          | ✓ wraps                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Word           | one row, never wraps (items that do not fit run past the box: keep Word-visible clusters short), except where every item's width can be estimated (text, by the text metrics at 16px bold; an image's own width): items that do not fit the box on one line then get a ghost row per line. Acceptable, because Word is desktop-only                                                                                                                                                                                |
 | Tap targets    | interactive items keep ≥ 8px between hit areas: a cluster of links or buttons whose `gap` or `row_gap` is below 8px is `W-A11Y-TAP-TARGET` (R-TBL-12)                                                                                                                                                                                                                                                                                                                                                              |
-| Text part      | items on one line joined by `separator` or `·`; links as `label (url)`, one per line when there are more than 3                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Text part      | items on one line joined by `separator` or `·` when none carries a URL and the line fits 76 columns; otherwise one item per line (links as `label (url)`, buttons as `label: url`)                                                                                                                                                                                                                                                                                                                                 |
 
 ### 3.6 `mailSidebar`: fixed plus fluid
 
@@ -506,7 +506,8 @@ shadow = sm for elevated)` holding a Stack of image, heading, body and
 - _Special:_ never stacks. The keys use `th scope="row"` in a real table
   (non-presentation): it reads better in screen readers than a
   presentation table and costs nothing.
-- _Text:_ `label ....... value`, aligned to 76 columns.
+- _Text:_ `label: value` lines (no dot leaders or column alignment: most
+  clients show plain text in a proportional face, where they drift).
 
 **`mailLineItems`** (invoice)
 
@@ -522,7 +523,8 @@ shadow = sm for elevated)` holding a Stack of image, heading, body and
     `mailKeyValue` card. This is the only stacking data design, and it
     works without CSS because it is the default rendering, not a media-query
     switch.
-- _Text:_ aligned table, or `label: value` blocks.
+- _Text:_ as a `mailTable`: one line per row with cells joined by `|`,
+  or `label: value` blocks.
 
 **`mailStatTiles`**
 

@@ -71,8 +71,9 @@ suite "story registry":
     check first.html.startsWith("<!doctype html><html")
     check "<title>Canary</title>" in first.html
     check "The canary sings at noon." in first.html
-    check first.text == canaryText
-    check first.text.len > 0
+    # The text part is generated from the same tree (the plain-text
+    # pass): the heading underlined, the preheader left out.
+    check first.text == "Canary\n======\n\nThe canary sings at noon.\n"
 
   test "test_seed_stories_render_full_documents":
     for name in ["receipt", "alert"]:

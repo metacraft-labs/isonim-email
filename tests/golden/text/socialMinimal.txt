@@ -1,0 +1,11 @@
+Follow us
+=========
+
+News and releases, where you read them.
+
+X: https://x.example/acme
+LinkedIn: https://linkedin.example/acme
+GitHub: https://github.example/acme
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

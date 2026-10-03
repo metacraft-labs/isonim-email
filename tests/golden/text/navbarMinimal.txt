@@ -1,0 +1,11 @@
+Home (https://example.com/home)
+Docs (https://example.com/docs)
+Pricing (https://example.com/pricing)
+
+Acme news
+=========
+
+What changed this month.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

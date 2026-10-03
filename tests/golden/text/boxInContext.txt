@@ -1,0 +1,12 @@
+Your order
+==========
+
+Thank you. Your order is confirmed and on its way.
+
+Order #1234 — 2 items — $42.00
+
+Track (https://example.com/track)
+Invoice (https://example.com/invoice)
+Help (https://example.com/help)
+
+Acme Inc., 1 Example Street, Springfield

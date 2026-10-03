@@ -14,7 +14,9 @@
 ## `mailSpacer`, `mailDivider` and `mailText` (`lower/leaves.nim`),
 ## `mailButton` (`lower/button.nim`), `mailTable` (`lower/data_table.nim`),
 ## `mailIf` (`lower/conditional.nim`), `mailRaw` (its payloads, as
-## written: R-RAW-01), a `span` marked `nolink` (R-TXT-06), and
+## written: R-RAW-01), `textOnly` (nothing: its content is the
+## plain-text part's alone), `htmlOnly` (its content, unwrapped), a
+## `span` marked `nolink` (R-TXT-06), and
 ## every expanded
 ## pattern (`patterns.nim`), which leaves its expansion in its place.
 ## `mailDocument` is lowered separately, around
@@ -78,7 +80,8 @@ const affects*: set[ClientFamily] = allFamilies
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper", "mailHero",
   "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
   "mailGrid", "mailCluster", "mailSidebar", "mailSpacer", "mailDivider",
-  "mailText", "mailButton", "mailTable", "mailIf", "mailRaw"]
+  "mailText", "mailButton", "mailTable", "mailIf", "mailRaw", "textOnly",
+  "htmlOnly"]
   ## Elements this pass lowers (plus every expanded pattern, which it
   ## replaces by its expansion).
 const loweredElsewhere* = ["mailDocument"]
@@ -167,6 +170,13 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       walk(c, ctx, assets, diags)
       let kept = c.children
       replaceChild(parent, c, kept)
+    elif c.kind == enElement and c.tag == "textOnly":
+      # The plain-text part's own content: never written to the HTML.
+      replaceChild(parent, c, @[])
+    elif c.kind == enElement and c.tag == "htmlOnly":
+      # The HTML's own content (left out of the plain-text part).
+      walk(c, ctx, assets, diags)
+      replaceChild(parent, c, c.children)
     elif c.kind == enElement and c.tag == "mailIf":
       # R-RAW-05, R-RAW-06: the content first, then its conditional.
       walk(c, ctx, assets, diags)

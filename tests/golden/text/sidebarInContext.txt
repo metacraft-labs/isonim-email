@@ -1,0 +1,18 @@
+Shipped
+=======
+
+Your order left the warehouse today.
+
+[Mountain print]
+
+Mountain print
+$24.00
+
+[Castle badge]
+
+Castle badge
+$18.00
+
+Total: $42.00
+
+Acme Inc., 1 Example Street, Springfield

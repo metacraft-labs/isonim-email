@@ -1,0 +1,43 @@
+Buttons
+=======
+
+Small, default and large:
+
+Small: https://app.example.com/
+
+Default: https://app.example.com/
+
+Large: https://app.example.com/
+
+Every tone, solid:
+
+Primary: https://app.example.com/
+Neutral: https://app.example.com/
+Info: https://app.example.com/
+Success: https://app.example.com/
+Warning: https://app.example.com/
+Danger: https://app.example.com/
+
+Outline and link:
+
+Outline: https://app.example.com/
+Neutral outline: https://app.example.com/
+Link: https://app.example.com/
+
+Full width, and a long label in a 240px button, which wraps:
+
+Pay $42.00 now: https://app.example.com/
+
+Confirm your email address and finish setting up your account:
+https://app.example.com/
+
+Centred and right:
+
+Centred: https://app.example.com/
+
+Right: https://app.example.com/
+
+This paragraph follows the right-aligned button and starts below it.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

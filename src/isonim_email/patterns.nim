@@ -279,6 +279,13 @@ proc isBand*(n: EmailNode): bool =
   ## became, never by its own name.
   if n == nil or n.kind != enElement:
     return false
+  if n.tag in ["textOnly", "htmlOnly"]:
+    # A text-only or HTML-only wrapper is what it holds: loose content
+    # in one still belongs in a section.
+    for c in n.children:
+      if c.kind == enElement:
+        return isBand(c)
+    return false
   if n.tag in bandTags:
     return true
   if n.expanded and n.tag in patternRegistry:

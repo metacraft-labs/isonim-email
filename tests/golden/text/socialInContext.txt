@@ -1,0 +1,21 @@
+Release 2.4
+===========
+
+Faster builds and a new dashboard.
+
+Read the changelog: https://app.example.com/changelog
+
+Follow the project
+
+GitHub: https://github.example/acme
+Mastodon: https://mastodon.example/acme
+Bluesky: https://bluesky.example/acme
+
+Talk to us
+
+Email: https://email.example/acme
+X: https://x.example/acme
+LinkedIn: https://linkedin.example/acme
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

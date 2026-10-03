@@ -110,18 +110,20 @@ proc isRtl*(node: EmailNode): bool =
 proc isLastElementChild*(node: EmailNode): bool =
   ## True when no element follows `node` among its siblings (text and
   ## comments do not count).
-  ## A block that is last inside a `mailIf` is last only when the
-  ## `mailIf` is (the conditional is transparent: what follows it
-  ## follows the block).
+  ## A block that is last inside a `mailIf` or an `htmlOnly` is last
+  ## only when the wrapper is (it is transparent: what follows it
+  ## follows the block), and a `textOnly`, which writes no HTML, does
+  ## not count.
   if node.parent == nil:
     return false
   var seen = false
   for c in node.parent.children:
     if c == node:
       seen = true
-    elif seen and c.kind == enElement:
+    elif seen and c.kind == enElement and c.tag != "textOnly":
       return false
-  if seen and node.parent.kind == enElement and node.parent.tag == "mailIf":
+  if seen and node.parent.kind == enElement and
+      node.parent.tag in ["mailIf", "htmlOnly"]:
     return isLastElementChild(node.parent)
   seen
 

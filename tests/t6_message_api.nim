@@ -468,6 +468,23 @@ suite "message API: packaging edge cases":
       text: "Hi there  \nline \n-- \nsig"), minimalHeaders()), "t")
     check "Hi there\r\nline\r\n--=20\r\nsig" in bytes
 
+  test "flowed text from the plain-text pass keeps its soft breaks":
+    # rule: R-MIME-06
+    # A generated text (`textFlowed`) marks its soft breaks with one
+    # trailing space: those survive (collapsed to one), every other
+    # line is a hard break and is trimmed.
+    check spaceStuffFlowed("soft \nhard\nsofter   \n   \n-- \nx",
+      softBreaks = true) == "soft \nhard\nsofter \n\n-- \nx"
+    check spaceStuffFlowed(" lead \nnext", softBreaks = true) ==
+      "  lead \nnext"
+    let flowed = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>",
+      text: "one two \nthree\n", textFlowed: true), minimalHeaders()), "t")
+    check "one two=20\r\nthree" in flowed
+    # The same text supplied by hand is all hard breaks.
+    let hand = toRfc5322(toMessage(RenderedEmail(html: "<p>x</p>",
+      text: "one two \nthree\n"), minimalHeaders()), "t")
+    check "one two\r\nthree" in hand
+
   test "a hosted message never references an unpublished asset":
     # rule: R-IMG-07
     let unpublished = AssetRef(name: "logo.png", mime: "image/png",

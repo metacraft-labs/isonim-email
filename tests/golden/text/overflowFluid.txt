@@ -1,0 +1,6 @@
+Overflow fixture
+================
+
+Widget: $10.00
+
+Unsubscribe (https://x.test/unsubscribe)

@@ -1,0 +1,13 @@
+Spacers
+=======
+
+A 4-pixel spacer follows.
+
+A 24-pixel spacer follows.
+
+A 64-pixel spacer follows.
+
+The end.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

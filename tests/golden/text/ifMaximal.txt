@@ -1,0 +1,16 @@
+Targeted content
+================
+
+Below: a band for classic Outlook only, a band for every other client, then 
+Thunderbird-only content.
+
+Every client but classic Outlook: a rounded box in a band.
+
+----
+
+Below the divider.
+
+This sentence ends the same way everywhere.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

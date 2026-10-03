@@ -1,0 +1,42 @@
+Release notes: version 2.7, the long-awaited single sign-on release
+===================================================================
+
+This release brings single sign-on, a faster editor and many small fixes. 
+The full list is on the changelog page (https://example.com/changelog).
+
+What is new
+-----------
+
+- Single sign-on with any SAML 2.0 identity provider, configured from the
+  admin page in a few minutes.
+- The editor opens large files twice as fast.
+- Reference: Supercalifragilisticexpialidociousnessless
+
+Upgrading
+---------
+
+1. Back up your workspace.
+2. Install version 2.7 and restart.
+3. Sign in again with your provider.
+
+Known issues
+
+Older browsers may need a refresh after the first sign-in.
+
+Deprecations
+
+The legacy token API stops on 1 March.
+
+Credits
+
+  "The sign-on setup took us four minutes." A customer
+
+acme upgrade --to 2.7
+
+A mailText block: smaller type and a secondary colour its paragraphs 
+inherit.
+
+Its links inherit the colour too: help centre (https://example.com/help).
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

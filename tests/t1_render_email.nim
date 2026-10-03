@@ -83,7 +83,7 @@ suite "renderEmail returns the rendered record":
     let res = renderEmail(sigTpl, "Ada")
     check res.html.startsWith("<!doctype html>")
     check "Hello, Ada!" notin res.html # no shout here; signals resolve below
-    check res.text == "" # the plain-text pass fills this later
+    check res.text == "Hello, Ada\n==========\n\nstatic\n" # the plain-text part
     check res.diagnostics.len == 0
     check res.htmlBytes == res.html.len
     check res.headCssBytes >= 0

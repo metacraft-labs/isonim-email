@@ -1,0 +1,25 @@
+All the links
+=============
+
+Eight links, separated by a dot, from the start of the line; the row wraps 
+on a phone.
+
+Home (https://example.com/home)
+Product (https://example.com/product)
+Documentation and guides (https://example.com/documentation-and-guides)
+Pricing (https://example.com/pricing)
+Blog (https://example.com/blog)
+Careers (https://example.com/careers)
+Status (https://example.com/status)
+Contact (https://example.com/contact)
+
+A centred navbar with 12px gaps:
+
+One (https://example.com/one)
+Two (https://example.com/two)
+Three (https://example.com/three)
+Supercalifragilisticexpialidociousnessless
+(https://example.com/supercalifragilisticexpialidociousnessless)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

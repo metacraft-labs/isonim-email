@@ -1,0 +1,14 @@
+Your weekly summary
+===================
+
+Three builds ran this week and one release went out. See every build 
+(https://example.com/builds).
+
+----
+
+Next release: Thursday.
+
+Open the dashboard: https://example.com/dashboard
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

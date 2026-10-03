@@ -1,0 +1,6 @@
+A box
+=====
+
+The box keeps its content 24 pixels from its edges.
+
+Acme Inc., 1 Example Street, Springfield

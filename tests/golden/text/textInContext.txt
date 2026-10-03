@@ -1,0 +1,24 @@
+Acme Billing
+
+Invoice #2041
+=============
+
+Summary
+-------
+
+Team plan, October: $120.00. Paid with the card ending 4242.
+
+Download the PDF (https://example.com/invoice/2041)
+
+Billing address
+---------------
+
+1 Example Street, Springfield
+
+Questions
+---------
+
+billing@example.com
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

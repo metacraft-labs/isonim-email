@@ -1,0 +1,13 @@
+Receipt #1234
+=============
+
+Mountain print: $24.00
+----
+Castle badge: $18.00
+----
+Total: $42.00
+
+Thank you for your order.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

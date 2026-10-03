@@ -1,0 +1,14 @@
+Usage report
+============
+
+Builds per day this week, Monday to Friday. On a phone, scroll the table 
+sideways to see every day.
+
+Builds per project and day
+Project | Mon | Tue | Wed | Thu | Fri
+api-server | 41 | 38 | 52 | 47 | 33
+web-client | 12 | 19 | 8 | 22 | 15
+docs | 3 | 0 | 5 | 2 | 1
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -1,0 +1,19 @@
+From the blog
+=============
+
+[A green hill under a yellow sun]
+
+How we made builds twice as fast
+--------------------------------
+
+We measured every step of a build on our largest workspace, found the three 
+slowest, and rewrote them. Here is what changed, what did not, and what 
+Supercalifragilisticexpialidociousnessless means for you.
+
+Release review
+Thursday 12 November, 15:00 UTC, online.
+
+NOV
+12
+
+Acme Inc., 1 Example Street, Springfield

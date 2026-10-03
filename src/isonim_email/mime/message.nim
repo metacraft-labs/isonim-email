@@ -194,14 +194,19 @@ proc formatMailbox*(m: Mailbox): string =
 
 # ------------------------------------------------------------- assembly
 
-proc spaceStuffFlowed*(text: string): string =
+proc spaceStuffFlowed*(text: string; softBreaks = false): string =
   ## Prepares a plain-text part for `format=flowed` (RFC 3676, R-MIME-06).
-  ## Every line of the input ends in a hard break, so:
-  ## - trailing spaces are trimmed (§4.2 "trim spaces before
-  ##   user-inserted hard line breaks": a line ending in a space is a
-  ##   *flowed* line, and the receiver would join it to the next);
-  ##   the signature separator `-- ` is sent as-is (§4.3);
-  ## - a line starting with a space, `>`, or `From ` gains one leading
+  ## - Trailing spaces are trimmed before hard breaks (§4.2 "trim spaces
+  ##   before user-inserted hard line breaks": a line ending in a space
+  ##   is a *flowed* line, and the receiver would join it to the next).
+  ##   Without `softBreaks` every line of the input is a hard break, so
+  ##   every line is trimmed. With `softBreaks` (a text the plain-text
+  ##   pass wrote, `RenderedEmail.textFlowed`) a line that ends in a
+  ##   space is a soft break the generator placed: it keeps exactly one
+  ##   trailing space, and the receiver may join it to the next line;
+  ##   every other line is a hard break. The signature separator `-- `
+  ##   is sent as-is (§4.3).
+  ## - A line starting with a space, `>`, or `From ` gains one leading
   ##   space (§4.4 space-stuffing), which a flowed receiver removes.
   ## Lines split on LF (a trailing CR per line is stripped); the
   ## trailing-newline shape of the input is preserved.
@@ -216,7 +221,10 @@ proc spaceStuffFlowed*(text: string): string =
       var keep = line.len
       while keep > 0 and line[keep - 1] == ' ':
         dec keep
+      let soft = softBreaks and keep > 0 and keep < line.len
       line.setLen(keep)
+      if soft:
+        line.add(' ')
     if line.len > 0 and (line[0] == ' ' or line[0] == '>' or
         line.startsWith("From ")):
       line = " " & line
@@ -495,7 +503,7 @@ proc wireRoot(m: EmailMessage; seed: string): MimePart =
       htmlOrRelated
     else:
       newAlternative(textPart("text/plain",
-        spaceStuffFlowed(m.rendered.text), flowed = true),
+        spaceStuffFlowed(m.rendered.text, m.rendered.textFlowed), flowed = true),
         htmlOrRelated, src, "alt")
   if m.attachments.len == 0:
     return alt

@@ -1,0 +1,11 @@
+Welcome aboard
+==============
+
+Your workspace is ready. Everything you set up during the trial is still 
+there.
+
+Questions? Read the getting-started guide (https://example.com/guide) or 
+reply to this message.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

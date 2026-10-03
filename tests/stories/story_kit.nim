@@ -6,7 +6,6 @@
 ## built-in social icons included) to the capture fixture host.
 ##
 ## Backend-independent (tree building only), like the seed builders.
-import std/strutils
 import isonim_email
 import fixture_images
 
@@ -85,21 +84,6 @@ proc dkFooter*(r: EmailRenderer; doc: EmailNode) =
   discard r.dkText(f, "p", "Acme Inc., 1 Example Street, Springfield",
     [("margin", "0")], tok"color.text.secondary")
 
-proc textOf*(n: EmailNode): string =
-  ## The visible text of a tree, one block per line: the stories' plain
-  ## text alternative (the plain-text generator will produce these).
-  if n.kind == enText:
-    return n.text
-  if n.kind != enElement:
-    return ""
-  var inner = ""
-  for c in n.children:
-    inner.add(textOf(c))
-  if n.tag in ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "tr",
-      "mailNavLink"]:
-    return inner.strip() & "\n"
-  inner
-
 proc kitRender*(doc: EmailNode; dark = false): StoryHtml =
   ## Renders a story, publishing its images to the capture fixture host
   ## (the built-in social icons are served from there by the capture
@@ -107,8 +91,7 @@ proc kitRender*(doc: EmailNode; dark = false): StoryHtml =
   var t = defaultTarget()
   if dark:
     t.darkMode = dmDesigned
-  let text = textOf(doc)
-  (renderPipeline(doc, t, memoryAssetStore(fixtureHost)), text)
+  renderStoryPipeline(doc, t, memoryAssetStore(fixtureHost))
 
 proc renderOf*(build: proc(): EmailNode {.nimcall.};
     dark: bool): StoryRenderProc =

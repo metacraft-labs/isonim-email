@@ -1,0 +1,32 @@
+This month's releases
+=====================
+
+Five releases, three to a row on a desktop, one to a row on a phone.
+
+Version 2.4
+-----------
+
+Faster builds on large workspaces.
+
+Version 2.5
+-----------
+
+Shared reviews across teams, with comments that follow the code they are 
+about.
+
+Version 2.6
+-----------
+
+A new audit log.
+
+Version 2.7
+-----------
+
+Single sign-on for Supercalifragilisticexpialidociousnessless.
+
+Version 2.8
+-----------
+
+Workspace templates.
+
+Acme Inc., 1 Example Street, Springfield

@@ -1,0 +1,8 @@
+Acme (https://example.com/)
+
+Welcome to Acme
+===============
+
+Your account is ready. The logo above has a dark version for dark mode.
+
+Acme Inc., 1 Example Street, Springfield

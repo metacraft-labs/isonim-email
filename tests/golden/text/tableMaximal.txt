@@ -1,0 +1,37 @@
+Invoice 2041
+============
+
+Every line of the invoice. On a phone, each line becomes a group of label 
+and value lines.
+
+Invoice 2041 lines
+
+Date: 1 Oct
+Description: Team plan, October
+Reference: INV-2041-A
+Qty: 1
+Amount: $120.00
+
+Date: 3 Oct
+Description: Extra seats (prorated for the rest of the month)
+Reference: INV-2041-B
+Qty: 4
+Amount: $36.40
+
+Date: 9 Oct
+Description: Storage add-on
+Reference: Supercalifragilisticexpialidociousnessless
+Qty: 2
+Amount: $10.00
+
+Date: 15 Oct
+Description: Support credit
+Reference: CR-77
+Qty: 1
+Amount: −$20.00
+
+Total
+Amount: $146.40
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

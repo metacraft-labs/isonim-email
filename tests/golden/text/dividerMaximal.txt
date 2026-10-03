@@ -1,0 +1,19 @@
+Dividers
+========
+
+A 2px dashed blue line, 24 pixels above and below:
+
+----
+
+A half-width line, aligned left:
+
+----
+
+A 120px line, centred, dotted:
+
+----
+
+The end.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -1,0 +1,22 @@
+What is inside
+==============
+
+[Hills under a yellow sun, the cover picture]
+
+[A green hill under a yellow sun]
+
+[The hill at dawn]
+
+[The hill at noon]
+
+[The hill at dusk]
+
+[Security] · [Support] · [Uptime]
+
+Mastodon (https://example.com/s0)
+GitHub (https://example.com/s1)
+YouTube (https://example.com/s2)
+Blog (https://example.com/s3)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

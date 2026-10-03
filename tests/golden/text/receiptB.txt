@@ -1,0 +1,6 @@
+Receipt #1234
+=============
+
+Widget: $10.00
+
+[Acme logo]

@@ -1,0 +1,16 @@
+Everything in one place
+=======================
+
+Nine links, centred; they wrap onto more lines on a phone.
+
+Dashboard (https://example.com/0)
+Projects (https://example.com/1)
+Reviews (https://example.com/2)
+Builds (https://example.com/3)
+Billing and invoices (https://example.com/4)
+Team (https://example.com/5)
+Settings (https://example.com/6)
+Help (https://example.com/7)
+Supercalifragilisticexpialidociousnessless (https://example.com/8)
+
+Acme Inc., 1 Example Street, Springfield

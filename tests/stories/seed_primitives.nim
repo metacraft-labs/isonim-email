@@ -51,26 +51,11 @@ proc footer(r: EmailRenderer; doc: EmailNode; rtl = false) =
     text = if rtl: "شركة أكمي، ١ شارع المثال، الرياض"
       else: "Acme Inc., 1 Example Street, Springfield")
 
-proc textOf(n: EmailNode): string =
-  ## The visible text of a tree, one block per line: the stories' plain
-  ## text alternative (the plain-text generator will produce these).
-  if n.kind == enText:
-    return n.text
-  if n.kind != enElement:
-    return ""
-  var inner = ""
-  for c in n.children:
-    inner.add(textOf(c))
-  if n.tag in ["h1", "h2", "h3", "p", "a", "span"]:
-    return inner.strip() & "\n"
-  inner
-
 proc render(doc: EmailNode; dark = false): StoryHtml =
   var t = defaultTarget()
   if dark:
     t.darkMode = dmDesigned
-  let text = textOf(doc)
-  (renderPipeline(doc, t), text)
+  renderStoryPipeline(doc, t)
 
 # Dark stories (`darkMode = designed`): every colour is a theme token
 # with its dark pair, the document's canvas included, so the dark scheme

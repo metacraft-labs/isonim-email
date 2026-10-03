@@ -1,0 +1,4 @@
+Forced broken
+=============
+
+Dark text over a light background image.

@@ -60,27 +60,11 @@ proc footer(r: EmailRenderer; doc: EmailNode; rtl = false) =
   discard r.el(p, "a", attrs = [("href", "https://example.com/unsubscribe")],
     text = if rtl: "إلغاء الاشتراك" else: "Unsubscribe")
 
-proc textOf(n: EmailNode): string =
-  ## The visible text of a tree, one block per line: the stories' plain
-  ## text alternative (the plain-text generator will produce these).
-  if n.kind == enText:
-    return n.text
-  if n.kind != enElement:
-    return ""
-  var inner = ""
-  for c in n.children:
-    inner.add(textOf(c))
-  if n.tag in ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
-      "mailButton"]:
-    return inner.strip() & "\n"
-  inner
-
 proc render(doc: EmailNode; dark = false): StoryHtml =
   var t = defaultTarget()
   if dark:
     t.darkMode = dmDesigned
-  let text = textOf(doc)
-  (renderPipeline(doc, t), text)
+  renderStoryPipeline(doc, t)
 
 proc buttonMinimalDoc*(): EmailNode =
   let r = EmailRenderer()

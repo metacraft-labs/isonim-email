@@ -20,11 +20,6 @@ import std/strutils
 import isonim_email
 import seed_receipt
 
-const brokenReceiptText = "Receipt #1234\n\nThanks for your order.\n\n" &
-  "Widget: $10.00\n"
-  ## The receipt's plain-text alternative (the text part is not what
-  ## the break is about).
-
 proc dropFirstImage*(html: string): string =
   ## `html` without its one `<img …>` element. Raises `StoryError` when
   ## the HTML holds no image or more than one, so the fixture can never
@@ -40,8 +35,8 @@ proc dropFirstImage*(html: string): string =
 
 proc renderReceiptLogoDropped*(): StoryHtml =
   ## The receipt seed through the current pipeline, logo removed.
-  (dropFirstImage(renderPipeline(seedReceipt(), defaultTarget())),
-    brokenReceiptText)
+  let (html, text) = renderStoryPipeline(seedReceipt(), defaultTarget())
+  (dropFirstImage(html), text)
 
 proc registerBrokenStories*() =
   ## Registers the broken receipt (env-gated; see the module comment).

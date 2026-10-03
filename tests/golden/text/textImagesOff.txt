@@ -1,0 +1,13 @@
+[Acme]
+
+Your order has shipped
+======================
+
+The parcel left our warehouse this morning and should reach you in two days.
+
+[The mountain print you ordered]
+
+Follow it on the tracking page (https://example.com/track).
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

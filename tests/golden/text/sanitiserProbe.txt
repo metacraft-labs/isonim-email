@@ -1,0 +1,12 @@
+Sanitiser probe
+===============
+
+Dark-designed paragraph.
+
+A link (https://x.test/link)
+
+[Acme logo]
+
+Left column.
+
+Right column.

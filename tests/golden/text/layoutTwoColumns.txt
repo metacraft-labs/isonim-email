@@ -1,0 +1,33 @@
+[Acme logo]
+
+Your new workspace
+==================
+
+Everything you set up this week, in one place.
+
+[A green hill under a yellow sun]
+
+A quiet start
+-------------
+
+Your workspace is ready. Invite the team when you are, and pick up where you 
+left off on any device.
+
+Projects
+--------
+
+Two projects are waiting for their first build. Each one keeps its history 
+for thirty days.
+
+Reviews
+-------
+
+One review is open.
+
+3
+builds
+
+1
+open review
+
+Acme Inc., 1 Example Street, Springfield

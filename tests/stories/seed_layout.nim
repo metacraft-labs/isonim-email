@@ -85,16 +85,8 @@ proc layoutOneColumnDoc*(): EmailNode =
   r.appendChild(doc, footer)
   doc
 
-const layoutOneColumnText* = "Your weekly summary\n\n" &
-  "Three builds finished this week and one review is waiting for you.\n\n" &
-  "No alerts were raised.\n\n" &
-  "This section has a border and its own padding.\n\n" &
-  "Acme Inc., 1 Example Street, Springfield\n"
-  ## Fixed plain-text alternative (the plain-text generator will
-  ## produce these).
-
 proc renderLayoutOneColumn*(): StoryHtml =
-  (renderPipeline(layoutOneColumnDoc(), defaultTarget()), layoutOneColumnText)
+  renderStoryPipeline(layoutOneColumnDoc(), defaultTarget())
 
 # --- Rows of columns.
 
@@ -253,39 +245,14 @@ proc layoutFourColumnsDoc*(): EmailNode =
   r.footer(doc)
   doc
 
-const layoutTwoColumnsText* = "Your new workspace\n\n" &
-  "Everything you set up this week, in one place.\n\n" &
-  "A quiet start\n\nYour workspace is ready. Invite the team when you " &
-  "are, and pick up where you left off on any device.\n\n" &
-  "Projects: Two projects are waiting for their first build. Each one " &
-  "keeps its history for thirty days.\n\nReviews: One review is open.\n\n" &
-  "3 builds, 1 open review\n\nAcme Inc., 1 Example Street, Springfield\n"
-const layoutThreeColumnsText* = "Three ways to start\n\n" &
-  "Pick the one that fits your team.\n\nSecure: Every change is signed.\n" &
-  "Fast: Builds start in seconds and finish in minutes.\n" &
-  "Shared: Your whole team sees the same state.\n\n" &
-  "Starter: One project, one seat.\nTeam: Ten projects and shared " &
-  "reviews.\nCompany: Unlimited projects, single sign-on and an audit " &
-  "log for every change.\n\n12 builds, 4 reviews, 0 alerts\n\n" &
-  "Acme Inc., 1 Example Street, Springfield\n"
-const layoutFourColumnsText* = "This week at a glance\n\nThe short " &
-  "version.\n\nMon: Planning. Tue: Builds. Wed: Reviews. Thu: Release.\n\n" &
-  "9:00 Stand-up, 11:00 Design review, 14:00 Pairing, 16:00 Demo\n\n" &
-  "Acme Inc., 1 Example Street, Springfield\n"
-  ## Fixed plain-text alternatives (the plain-text generator will
-  ## produce these).
-
 proc renderLayoutTwoColumns*(): StoryHtml =
-  (renderPipeline(layoutTwoColumnsDoc(), defaultTarget()),
-    layoutTwoColumnsText)
+  renderStoryPipeline(layoutTwoColumnsDoc(), defaultTarget())
 
 proc renderLayoutThreeColumns*(): StoryHtml =
-  (renderPipeline(layoutThreeColumnsDoc(), defaultTarget()),
-    layoutThreeColumnsText)
+  renderStoryPipeline(layoutThreeColumnsDoc(), defaultTarget())
 
 proc renderLayoutFourColumns*(): StoryHtml =
-  (renderPipeline(layoutFourColumnsDoc(), defaultTarget()),
-    layoutFourColumnsText)
+  renderStoryPipeline(layoutFourColumnsDoc(), defaultTarget())
 
 proc registerLayoutStories*() =
   ## Registers the layout reference stories (env-gated, see above).

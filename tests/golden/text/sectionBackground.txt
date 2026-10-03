@@ -1,0 +1,19 @@
+This week
+=========
+
+A light striped image behind dark text, its fallback colour the stripes' 
+average.
+
+Across the page
+---------------
+
+A full-width band: the landscape covers the 600px container, the fallback 
+colour runs to the edges.
+
+At least 200px
+--------------
+
+A hero with a minimum height, its text at the bottom.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

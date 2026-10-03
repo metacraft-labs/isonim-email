@@ -1,0 +1,15 @@
+Raw markup
+==========
+
+A two-cell table written by hand:
+
+Left & first
+
+Supercalifragilisticexpialidociousnessless
+
+Word shows a yellow table here; every other client shows a blue paragraph:
+
+Everyone else's paragraph
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

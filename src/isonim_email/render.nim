@@ -40,6 +40,7 @@ import ./passes/lint
 import ./patterns
 import ./primitives
 import ./navigation
+import ./text
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -57,6 +58,11 @@ type RenderedEmail* = object
   ## measures, the assets the HTML references, and the resolved
   ## semantic tree (briefs and the text part read from it).
   html*, text*: string
+  textFlowed*: bool
+    ## True when `text` is the plain-text pass's `format=flowed` form: a
+    ## line that ends in a space is a soft break (the receiver may join
+    ## it to the next line), every other line a hard break. False for a
+    ## text supplied by hand, whose lines are all hard breaks.
   diagnostics*: seq[EmailDiagnostic]
   htmlBytes*, headCssBytes*: int
   sizeBreakdown*: seq[(string, int)]
@@ -379,10 +385,11 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## `strict` re-raises the first one; it also raises
   ## `W-CSS-OVER-BUDGET`, since head CSS Gmail is certain to truncate
   ## is an error under `strict` (R-CSS-07), and `W-LAYOUT-MIN-COLUMN`,
-  ## a cell row too narrow at 320px (R-TBL-11). The text is empty: the
-  ## plain-text pass generates it later, and an honest absence beats
-  ## a lossy guess. MIME packaging then sends the HTML alone, never an
-  ## empty `text/plain` part (see `toMessage`).
+  ## a cell row too narrow at 320px (R-TBL-11). The plain-text part
+  ## is written by P12 (`text.nim`) from the semantic tree, after the
+  ## assets are resolved and before lowering; when it would be empty
+  ## (`E-TEXT-EMPTY`) the text is "" and MIME packaging sends the HTML
+  ## alone, never an empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
   # Patterns expand first, so their expansions go through every pass.
   var diags = expandPatterns(doc, theme, target)
@@ -436,6 +443,9 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
     # wherever the dark block does not apply.
     diags.add(lintDarkLogos(doc, found.assets))
   diags.add(checkBackgroundUrls(doc))
+  # P12: the plain-text part, from the semantic tree (never the HTML).
+  let plain = renderText(doc)
+  diags.add(plain.diagnostics)
 
   # Lowering reads the same tree the passes just walked. P4 lowers the
   # vocabulary elements of the clone (images read their intrinsic
@@ -479,7 +489,8 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
         raiseDiagnostic(d)
   RenderedEmail(
     html: html,
-    text: "",
+    text: plain.text,
+    textFlowed: plain.text.len > 0,
     diagnostics: diags,
     htmlBytes: htmlBytes,
     headCssBytes: headCssBytes,

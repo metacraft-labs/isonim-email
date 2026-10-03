@@ -38,6 +38,7 @@ import ./style/tokens
 import ./patterns
 import ./primitives
 import ./navigation
+import ./text
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -46,8 +47,7 @@ const affects*: set[ClientFamily] = allFamilies
 type
   StoryHtml* = tuple[html, text: string]
     ## One rendered story: the full document plus its plain-text
-    ## alternative (the plain-text generator will produce these;
-    ## until then each story carries a fixed literal).
+    ## alternative.
 
   StoryRenderProc* = proc(): StoryHtml {.closure.}
     ## Template proc + fixed data, fused (see the module comment).
@@ -141,18 +141,19 @@ proc getStory*(name: string): Story =
       "' (registered: " & listStories().join(", ") & ")")
   storyRegistry[name]
 
-proc renderPipeline*(doc: EmailNode; target: EmailTarget;
-    assets: AssetStore = nil): string =
+proc renderStoryPipeline*(doc: EmailNode; target: EmailTarget;
+    assets: AssetStore = nil): StoryHtml =
   ## The current render path (lower/document.nim over the passes):
-  ## pattern expansion → validate → P3 layout → P5 styles → P6 head → P7 a11y → P4 element
-  ## lowering,
+  ## pattern expansion → validate → P3 layout → P5 styles → P6 head → P7 a11y →
+  ## P8 assets → P12 plain text → P4 element lowering,
   ## then the document shell and the serialiser. With `assets`, the
   ## images are published through the store before lowering (R-IMG-07).
   ## The `mailDocument`
   ## node's own children become the wrapper-cell sections. Raises
   ## `StoryError` when the tree fails validation or holds an element
-  ## with no lowering (`E-LOWER-MISSING`): stories are fixed, so
-  ## either is a bug in the story.
+  ## with no lowering (`E-LOWER-MISSING`), or when its plain-text part
+  ## would be empty (`E-TEXT-EMPTY`): stories are fixed, so any of
+  ## them is a bug in the story.
   var found = expandPatterns(doc, defaultTheme(), target)
   found.add(validate(doc))
   if hasErrors(found):
@@ -181,6 +182,11 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget;
   let urls = checkBackgroundUrls(doc)
   if hasErrors(urls):
     raise newException(StoryError, "story background: " & urls[0].message)
+  # P12 reads the semantic tree, before lowering rewrites it in place.
+  let plain = renderText(doc)
+  if hasErrors(plain.diagnostics):
+    raise newException(StoryError, "story text: " &
+      plain.diagnostics[0].message)
   let lowered = lowerElements(doc, defaultTheme(), published.assets,
     target = target)
   if hasErrors(lowered):
@@ -196,7 +202,13 @@ proc renderPipeline*(doc: EmailNode; target: EmailTarget;
   let kids = doc.children # Copy: appendChild detaches as it moves.
   for c in kids:
     r.appendChild(sections, c)
-  serializeDocument(lowerDocument(doc, sections, headRes.blocks, target))
+  (serializeDocument(lowerDocument(doc, sections, headRes.blocks, target)),
+    plain.text)
+
+proc renderPipeline*(doc: EmailNode; target: EmailTarget;
+    assets: AssetStore = nil): string =
+  ## `renderStoryPipeline`'s HTML.
+  renderStoryPipeline(doc, target, assets).html
 
 proc canaryDoc*(): EmailNode =
   ## The canary: a fixed minimal document (no images, no tokens) for
@@ -215,13 +227,9 @@ proc canaryDoc*(): EmailNode =
   r.appendChild(doc, p)
   doc
 
-const canaryText* = "Canary\n\nThe canary sings at noon.\n"
-  ## The canary's fixed plain-text alternative (the plain-text
-  ## generator will produce these).
-
 proc renderCanary*(): StoryHtml =
   ## Renders the canary through the current pipeline.
-  (renderPipeline(canaryDoc(), defaultTarget()), canaryText)
+  renderStoryPipeline(canaryDoc(), defaultTarget())
 
 proc canaryStory*(): Story =
   ## The canary as a registry entry.

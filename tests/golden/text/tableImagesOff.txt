@@ -1,0 +1,12 @@
+Your cart
+=========
+
+Items in your cart
+Picture | Item | Price
+[A green shield] | Shield badge | $3.00
+[The Acme logo] | Acme sticker | $1.50
+
+Prices include tax.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

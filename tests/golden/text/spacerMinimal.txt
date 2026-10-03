@@ -1,0 +1,9 @@
+A spacer
+========
+
+Above the spacer.
+
+Below the spacer, 16 pixels lower.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

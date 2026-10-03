@@ -55,19 +55,15 @@ proc seedHero*(includeHero = true): EmailNode =
   r.appendChild(doc, foot)
   doc
 
-const heroText = "Welcome back\n\nA hero above the fold.\n"
-  ## Fixed plain-text alternative for the fixture (the plain-text
-  ## generator will produce these).
-
 registerStory(Story(name: "heroStory", group: "review",
   description: "Brief-diff fixture: h1, hero image, footer.",
   render: proc(): StoryHtml =
-    (renderPipeline(seedHero(), defaultTarget()), heroText)))
+    renderStoryPipeline(seedHero(), defaultTarget())))
 registerStoryTree("heroStory", proc(): EmailNode = seedHero())
 registerStory(Story(name: "heroStory-broken", group: "review",
   description: "Broken variant: the hero image removed.",
   render: proc(): StoryHtml =
-    (renderPipeline(seedHero(false), defaultTarget()), heroText)))
+    renderStoryPipeline(seedHero(false), defaultTarget())))
 registerStoryTree("heroStory-broken", proc(): EmailNode = seedHero(false))
 
 proc rateViaFindings(missing: int): int =

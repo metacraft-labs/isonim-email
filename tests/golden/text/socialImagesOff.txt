@@ -1,0 +1,12 @@
+Stay in touch
+=============
+
+With images blocked, each icon shows its network's name.
+
+Facebook: https://facebook.example/acme
+X: https://x.example/acme
+LinkedIn: https://linkedin.example/acme
+YouTube: https://youtube.example/acme
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

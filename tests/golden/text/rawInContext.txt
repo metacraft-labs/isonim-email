@@ -1,0 +1,11 @@
+Raw between
+===========
+
+A generated paragraph above.
+
+A bordered block, written by hand.
+
+A generated button below: https://app.example.com/
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

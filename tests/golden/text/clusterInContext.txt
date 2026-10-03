@@ -1,0 +1,14 @@
+Your receipt
+============
+
+Thank you for your order.
+
+Acme Inc., 1 Example Street, Springfield
+
+Unsubscribe (https://example.com/0)
+Preferences (https://example.com/1)
+Privacy (https://example.com/2)
+
+You are receiving this because you bought something from us.
+
+Acme Inc., 1 Example Street, Springfield

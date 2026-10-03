@@ -1,0 +1,12 @@
+[Acme logo]
+
+Your weekly summary
+===================
+
+Three builds finished this week and one review is waiting for you.
+
+No alerts were raised.
+
+This section has a border and its own padding.
+
+Acme Inc., 1 Example Street, Springfield

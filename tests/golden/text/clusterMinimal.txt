@@ -1,0 +1,8 @@
+Three links
+===========
+
+Dashboard (https://example.com/0)
+Settings (https://example.com/1)
+Help (https://example.com/2)
+
+Acme Inc., 1 Example Street, Springfield

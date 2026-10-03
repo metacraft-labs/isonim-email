@@ -1,0 +1,17 @@
+Receipt
+=======
+
+Thanks for your order. Your receipt:
+
+Receipt lines
+Item | Amount
+Team plan | $120.00
+Tax | $24.00
+Total | $144.00
+
+View billing: https://app.example.com/billing
+
+Questions about this receipt? Reply to this email.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

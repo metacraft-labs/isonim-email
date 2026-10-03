@@ -1,0 +1,9 @@
+A raw image
+===========
+
+[A green hill at dawn]
+
+The picture above is raw markup; with images off it shows its alt text.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

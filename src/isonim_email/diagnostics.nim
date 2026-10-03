@@ -151,10 +151,14 @@ const
     ## and returned to the caller on `EmailMessage.diagnostics` by
     ## `mime/message.toMessage`.
   codeTextOmitted* = "I-TEXT-OMITTED"
-    ## The rendered email carries no plain-text part yet, so the
-    ## message is sent as HTML only — never with an empty `text/plain`
-    ## part. Emitted by `mime/message.toMessage` on
-    ## `EmailMessage.diagnostics`.
+    ## The rendered email carries no plain-text part (the plain-text
+    ## pass reported `E-TEXT-EMPTY`, or the `RenderedEmail` was built
+    ## by hand without one), so the message is sent as HTML only —
+    ## never with an empty `text/plain` part. Emitted by
+    ## `mime/message.toMessage` on `EmailMessage.diagnostics`.
+  codeTextEmpty* = "E-TEXT-EMPTY"
+    ## The plain-text pass wrote nothing but white space: an empty
+    ## text part is never sent. Emitted by `text.renderText` (P12).
   codeUrlScheme* = "E-URL-SCHEME"
     ## A forbidden URL scheme, e.g. a `data:` URI (R-IMG-08). Raised
     ## from `assets.nim` as `AssetError` (framework-free, same seam as

@@ -1,0 +1,28 @@
+Invoice #2041
+=============
+
+Team plan, October: $120.00, due on 1 November.
+
+Pay now: https://app.example.com/
+Download PDF: https://app.example.com/
+
+Billing
+-------
+
+Change the card or the address.
+
+Billing settings: https://app.example.com/
+
+Questions
+---------
+
+Our team answers within a day.
+
+Contact us: https://app.example.com/
+
+Upgrade to the business plan for single sign-on.
+
+See plans: https://app.example.com/
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

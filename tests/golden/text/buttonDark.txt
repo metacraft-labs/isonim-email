@@ -1,0 +1,10 @@
+Buttons, dark
+=============
+
+Solid, outline and link, each with its dark pair:
+
+Open dashboard: https://app.example.com/
+Outline: https://app.example.com/
+Link: https://app.example.com/
+
+Delete project: https://app.example.com/

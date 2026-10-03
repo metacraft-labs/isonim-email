@@ -1,0 +1,13 @@
+[Acme]
+
+Home (https://example.com/home)
+Docs (https://example.com/docs)
+Blog (https://example.com/blog)
+
+Acme weekly
+===========
+
+With images off, the logo shows its alt text and the links stay readable.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

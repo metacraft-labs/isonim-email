@@ -1,0 +1,19 @@
+Patterns
+========
+
+A 20px dot pattern repeats behind this section from its top left corner.
+
+See the patterns: https://app.example.com/
+
+First card
+----------
+
+A white card on the pattern.
+
+Second card
+-----------
+
+Another, 16px below the first.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

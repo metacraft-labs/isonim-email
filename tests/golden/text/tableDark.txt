@@ -1,0 +1,11 @@
+Usage, dark
+===========
+
+Requests per service
+Service | Requests | Errors
+api | 1,204 | 3
+web | 866 | 0
+worker | 310 | 1
+cron | 24 | 0
+
+Acme Inc., 1 Example Street, Springfield

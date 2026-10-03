@@ -1,0 +1,14 @@
+Your weekly summary
+===================
+
+Twelve builds passed and four reviews are waiting for you.
+
+- Build 412 passed.
+- Review #88 needs your approval.
+
+See everything on your dashboard (https://example.com/dashboard).
+
+You get this summary every Monday.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

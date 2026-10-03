@@ -62,16 +62,10 @@ proc sanitiserProbeDoc*(): EmailNode =
   r.appendChild(doc, row)
   doc
 
-const sanitiserProbeText* = "Sanitiser probe\n\n" &
-  "Head CSS under a webmail sanitiser.\n"
-  ## Fixed plain-text alternative (the plain-text generator will
-  ## produce these).
-
 proc sanitiserProbeTarget(): EmailTarget =
   result = defaultTarget()
   result.darkMode = dmDesigned
 
 proc renderSanitiserProbe*(): StoryHtml =
   ## The probe through the current pipeline, dark mode designed.
-  (renderPipeline(sanitiserProbeDoc(), sanitiserProbeTarget()),
-    sanitiserProbeText)
+  renderStoryPipeline(sanitiserProbeDoc(), sanitiserProbeTarget())

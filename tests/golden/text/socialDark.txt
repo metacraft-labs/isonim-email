@@ -1,0 +1,16 @@
+Follow us, dark
+===============
+
+The default plates:
+
+X: https://x.example/acme
+GitHub: https://github.example/acme
+Mastodon: https://mastodon.example/acme
+
+The light plates, on a dark band:
+
+X: https://x.example/acme
+GitHub: https://github.example/acme
+Mastodon: https://mastodon.example/acme
+
+Acme Inc., 1 Example Street, Springfield

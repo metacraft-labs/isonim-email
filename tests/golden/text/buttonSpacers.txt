@@ -1,0 +1,19 @@
+Spacer buttons
+==============
+
+The default button with Word spacers:
+
+Open dashboard: https://app.example.com/
+
+Large, centred:
+
+Get started: https://app.example.com/
+
+Outline:
+
+Contact sales: https://app.example.com/
+
+The end.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

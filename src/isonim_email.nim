@@ -53,6 +53,7 @@ import isonim_email/style/shorthand
 import isonim_email/style/css
 import isonim_email/style/classes
 import isonim_email/stories
+import isonim_email/text
 import isonim_email/review/brief
 import isonim/dsl/ui
 import isonim/rxcore
@@ -110,6 +111,7 @@ export shorthand
 export css
 export classes
 export stories
+export text
 export brief
 export ui
 export rxcore

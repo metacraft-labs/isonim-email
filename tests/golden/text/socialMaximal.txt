@@ -1,0 +1,20 @@
+Everywhere we are
+=================
+
+Ten built-in networks and our own feed icon, 32px each, 16px apart, from the 
+start of the line; on a phone the row wraps.
+
+Facebook: https://facebook.example/acme
+X: https://x.example/acme
+LinkedIn: https://linkedin.example/acme
+Instagram: https://instagram.example/acme
+YouTube: https://youtube.example/acme
+GitHub: https://github.example/acme
+Mastodon: https://mastodon.example/acme
+Bluesky: https://bluesky.example/acme
+Email: https://email.example/acme
+Website: https://website.example/acme
+Acme feed: https://example.com/feed
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)
