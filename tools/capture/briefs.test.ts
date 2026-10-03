@@ -254,8 +254,11 @@ describe("the brief driver's --client mode", () => {
     assert.doesNotMatch(light, /stands in for no audience family/);
     assert.match(light, /never stretched to the column width/);
     // Dark behaviour only in the dark brief.
-    assert.doesNotMatch(light, /dark adaptation/);
-    assert.match(dark, /dark adaptation of messages/);
+    assert.doesNotMatch(light, /recolours a message/);
+    assert.match(dark, /recolours a message on its own/);
+    // The receipt is `accommodate`: it keeps its light design there
+    // (catalogue R-DRK-08).
+    assert.match(dark, /`darkMode = accommodate`\) keeps its light design/);
     assert.match(dark, /Dark palette \(dark\): no @dark overrides/);
   });
 

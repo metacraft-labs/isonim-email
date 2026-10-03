@@ -924,9 +924,21 @@ proc lintInversion*(root: EmailNode;
               weight += profile.weights[f]
           if fams == {}:
             continue
-          let (fg2, bg2) = invertPair(pair.fg, pair.bg, model)
+          var (fg2, bg2) = invertPair(pair.fg, pair.bg, model)
           let threshold = if pair.large: 3.0 else: 4.5
-          let ratio = contrastRatio(fg2, bg2)
+          var ratio = contrastRatio(fg2, bg2)
+          var onImage = false
+          if pair.overImage:
+            # Text over a background image: the recoloured fallback is
+            # what shows with images blocked; with images on, the text is
+            # recoloured and the image is not (no model recolours an
+            # image; measured on Blink's automatic dark mode), and the
+            # light fallback colour stands for the image. The worse holds.
+            let onImg = contrastRatio(fg2, pair.bg)
+            if onImg < ratio:
+              ratio = onImg
+              bg2 = pair.bg
+              onImage = true
           if ratio >= threshold:
             continue
           let key: Seen = (model, pair.fg.toHex(), pair.bg.toHex(),
@@ -945,7 +957,10 @@ proc lintInversion*(root: EmailNode;
               else: codeA11yContrastInvertedInfo,
             message: "<" & node.tag & "> text " & pair.fg.toHex() &
               " on " & pair.bg.toHex() & " becomes " & fg2.toHex() &
-              " on " & bg2.toHex() & " under " & modelName(model) &
+              " on " & bg2.toHex() &
+              (if onImage: " (its background image, which no model " &
+                "recolours; the fallback colour stands for it)" else: "") &
+              " under " & modelName(model) &
               " inversion (" & formatFamilies(fams) & "): contrast " &
               formatFloat(ratio, ffDecimal, 2) & ":1, below " &
               (if pair.large: "3" else: "4.5") & ":1 (R-DRK-04" &
@@ -977,9 +992,11 @@ const
     ## How far in from its transparent surroundings a logo's edge is
     ## read: R-DRK-06's 2px outline or plate.
   noSwapFamilies* = {cfGmailWeb, cfGmailApp, cfGanga, cfYahoo,
-    cfOutlookWord, cfProton, cfHey}
-    ## The families that never apply the dark block (R-DRK-01), so show
-    ## the light image of a pair in dark mode too.
+    cfOutlookWord, cfProton, cfHey, cfThunderbird}
+    ## The families that never apply the dark block's image swap
+    ## (R-DRK-01; Thunderbird applies no media query and gets only the
+    ## palette, R-DRK-08), so show the light image of a pair in dark mode
+    ## too.
 
 type LogoVerdict* = enum
   lvSafe       ## legible on white and on near-black

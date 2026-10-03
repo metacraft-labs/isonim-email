@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   DARWIN_FIREFOX_ENV,
   DARWIN_FIREFOX_PREFS,
+  FORCED_DARK_ARGS,
   LAUNCH_TIMEOUT_MS,
   launchOptions,
 } from "./launch.ts";
@@ -21,8 +22,11 @@ describe("browser launch options", () => {
     }
     assert.deepEqual(launchOptions("chromium", true, "linux"), {
       timeout: LAUNCH_TIMEOUT_MS,
-      args: ["--enable-features=WebContentsForceDark"],
+      args: ["--blink-settings=forceDarkModeEnabled=true"],
     });
+    assert.deepEqual(FORCED_DARK_ARGS, [
+      "--blink-settings=forceDarkModeEnabled=true",
+    ]);
   });
 
   it("darwin firefox stays off the keychain and the GPU", () => {
@@ -49,7 +53,7 @@ describe("browser launch options", () => {
 
   it("darwin chromium disables the GPU and keeps forced dark", () => {
     assert.deepEqual(launchOptions("chromium", true, "darwin").args, [
-      "--enable-features=WebContentsForceDark",
+      "--blink-settings=forceDarkModeEnabled=true",
       "--disable-gpu",
     ]);
     assert.deepEqual(launchOptions("chromium", false, "darwin").args, [

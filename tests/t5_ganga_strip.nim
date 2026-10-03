@@ -100,8 +100,8 @@ suite "ganga strip":
     target.outlookWord = false
     target.headStyleBudget = 1_000_000
     target.darkMode = dmDesigned # Only the designed strategy has dark CSS.
-    # A three-block head (reset + responsive + dark) so the strip
-    # removes plain and @media-carrying blocks alike.
+    # A four-block head (reset + responsive + dark + Thunderbird's) so
+    # the strip removes plain and @media-carrying blocks alike.
     let decls = styled.head & @[
       HeadDecl(variant: "sm", prop: "width", value: "100%",
         node: story, origin: SourceSpan()),
@@ -110,11 +110,11 @@ suite "ganga strip":
     ]
     let headed = assembleHead(decls, target)
     check headed.diagnostics.len == 0
-    check headed.blocks.len == 3
+    check headed.blocks.len == 4
     let html = lowerDocument(story, story, headed.blocks, target)
     discard applyA11y(html)
     let full = serializeDocument(html)
-    check full.count("<style") == 3
+    check full.count("<style") == 4
     let texts = textsOf(html)
     check texts.len >= 1
     let spans = styleSpans(full)

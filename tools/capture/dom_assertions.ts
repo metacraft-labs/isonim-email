@@ -94,8 +94,12 @@ export function domAssertionsScript(): string {
   const fs = parseFloat(bodyStyle.fontSize);
   push("bodyfont", fs >= 14, "body font-size " + bodyStyle.fontSize + (fs >= 14 ? " (>= 14px)" : " (< 14px)"));
 
-  // -- contrast: body + headings + links each reach 4.5:1 against
-  // the nearest non-transparent background walking up (else white).
+  // -- contrast: every visible element that holds text of its own
+  // reaches 4.5:1 (3:1 when its text is large: >= 24px, or >= 18.66px
+  // and bold, WCAG 2) against the nearest non-transparent background
+  // walking up (else white). An element without text of its own (the
+  // body of a message whose text all sits in coloured elements) is not
+  // a text colour anyone reads, so it is not checked.
   // WCAG relative luminance — the lint formula
   // (src/isonim_email/passes/lint.nim channelLuminance /
   // relativeLuminance / contrastRatio), duplicated here because this
@@ -120,13 +124,33 @@ export function domAssertionsScript(): string {
     }
     return [255, 255, 255];
   };
-  const texts = document.querySelectorAll("body,h1,h2,h3,h4,h5,h6,a");
+  const ownText = (el) => {
+    const kids = el.childNodes || [];
+    for (let i = 0; i < kids.length; i++)
+      if (kids[i].nodeType === 3 && (kids[i].textContent || "").trim().length > 0) return true;
+    return false;
+  };
+  const shown = (el) => {
+    if (el !== document.body && el.offsetParent === null) return false;
+    const st = getComputedStyle(el);
+    if (st.visibility === "hidden" || st.opacity === "0") return false;
+    // A box of a pixel or less is the visually hidden pattern (a data
+    // table's caption for screen readers): nothing is drawn to read.
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  const candidates = document.querySelectorAll("*");
   let worstEl = null;
   let worstRatio = Infinity;
-  for (let i = 0; i < texts.length; i++) {
-    const el = texts[i];
-    const fg = parse(getComputedStyle(el).color);
+  let worstNeed = 4.5;
+  let checked = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const el = candidates[i];
+    if (!ownText(el) || !shown(el)) continue;
+    const st = getComputedStyle(el);
+    const fg = parse(st.color);
     if (!fg) continue;
+    checked++;
     const bg = bgOf(el);
     let fr = fg[0];
     let fgg = fg[1];
@@ -136,14 +160,21 @@ export function domAssertionsScript(): string {
       fgg = fg[1] * fg[3] + bg[1] * (1 - fg[3]);
       fb = fg[2] * fg[3] + bg[2] * (1 - fg[3]);
     }
+    const px = parseFloat(st.fontSize) || 16;
+    const bold = (parseInt(st.fontWeight, 10) || 400) >= 700;
+    const need = px >= 24 || (bold && px >= 18.66) ? 3 : 4.5;
     const q = ratio(lum(fr, fgg, fb), lum(bg[0], bg[1], bg[2]));
-    if (q < worstRatio) { worstRatio = q; worstEl = el; }
+    if (worstEl === null || q / need < worstRatio / worstNeed) {
+      worstRatio = q;
+      worstNeed = need;
+      worstEl = el;
+    }
   }
   if (worstEl === null) {
-    push("contrast", true, "no text elements with parseable colors (vacuous pass)");
+    push("contrast", true, "no visible text elements with parseable colors (vacuous pass)");
   } else {
-    const shown = Math.round(worstRatio * 100) / 100;
-    push("contrast", worstRatio >= 4.5, "lowest " + shown + ":1 on <" + label(worstEl) + "> (" + texts.length + " element(s) checked, need >= 4.5:1)");
+    const shownRatio = Math.round(worstRatio * 100) / 100;
+    push("contrast", worstRatio >= worstNeed, "lowest " + shownRatio + ":1 on <" + label(worstEl) + "> (" + checked + " element(s) with text checked, need >= " + worstNeed + ":1)");
   }
 
   // -- unsubscribe: some visible link carries 'unsub' in href or

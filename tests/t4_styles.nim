@@ -170,10 +170,13 @@ suite "dark variants resolve tokens to their dark literal":
     let blocks = assembleHead(head, designed).blocks
     var darkText = ""
     for b in blocks:
-      if "prefers-color-scheme" in b.text:
+      if "@media (prefers-color-scheme: dark)" in b.text:
         darkText = b.text
-    check ("color:" & theme.darkFor(key) & " !important") in darkText
-    check theme.lightFor(key) notin darkText
+    # The query itself; Thunderbird's copies after it carry both values
+    # (R-DRK-08).
+    let query = darkText[darkText.find("@media") ..< darkText.find("}}") + 2]
+    check ("color:" & theme.darkFor(key) & " !important") in query
+    check theme.lightFor(key) notin query
 
 suite "margins convert to cell padding":
   test "test_margins_convert_to_cell_padding":

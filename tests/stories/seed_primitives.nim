@@ -391,7 +391,9 @@ proc clusterInContextDoc*(): EmailNode =
   result = r.storyDoc("Your receipt", "A footer of links between the " &
     "address and the legal text.")
   r.heading(result, "Your receipt", "Thank you for your order.")
-  let f = r.band(result, "#e5e7eb")
+  # The band is light enough for the default link colour (#0969da) to
+  # keep 4.5:1 on it (4.7:1; on #e5e7eb it was 4.2:1).
+  let f = r.band(result, "#f3f4f6")
   let stack = r.el(f, "mailStack", [("gap", "8px")], [("align", "center")])
   discard r.el(stack, "p", [("margin", "0"), ("font-size", "14px")],
     text = "Acme Inc., 1 Example Street, Springfield")

@@ -14,6 +14,7 @@
 # rule: R-DRK-04
 # rule: R-DRK-05
 # rule: R-DRK-06
+# rule: R-DRK-08
 # rule: R-IMG-06
 # rule: R-A11Y-05
 # rule: R-OL-14
@@ -75,6 +76,23 @@ proc darkBlock(html: string): string =
   let a = html.rfind("<style>", last = i)
   html[a ..< html.find("</style>", i)]
 
+const thunderbirdBlock = "<style>html:has(.moz-text-html){filter:" &
+  "url(\"#prefers-color-scheme: dark\")}</style>"
+  ## R-DRK-08's block 6, as written.
+
+proc tbCopies(html: string): seq[string] =
+  ## The Thunderbird copies in block 3 (R-DRK-08), in order.
+  var i = 0
+  while true:
+    let a = html.find(".moz-text-html .", i)
+    let b = html.find("body:has(.moz-text-html){", i)
+    let at = if a < 0: b elif b < 0: a else: min(a, b)
+    if at < 0:
+      break
+    let e = html.find("}", at)
+    result.add(html[at .. e])
+    i = e + 1
+
 proc tokenDoc(r: EmailRenderer): tuple[doc, section, p: EmailNode] =
   ## A document whose colours are all tokens, with no `@dark:` at all.
   let doc = r.newDoc()
@@ -118,10 +136,14 @@ suite "dark pairs come from the tokens (R-DRK-02, R-DRK-03)":
       let (doc, s, _) = r.tokenDoc()
       let res = renderTree(doc, target = target(mode))
       checkpoint($mode)
-      check "prefers-color-scheme" notin res.html
+      check "@media (prefers-color-scheme" notin res.html
+      check "light-dark(" notin res.html
       check "data-ogs" notin res.html
       check "class" notin s.attrs
       check "class" notin doc.attrs
+      # R-DRK-08: Thunderbird's block rides with the metas, so
+      # `accommodate` has it and `none` does not; it recolours nothing.
+      check (thunderbirdBlock in res.html) == (mode == dmAccommodate)
 
   test "test_an_elements_own_dark_declaration_wins":
     let r = EmailRenderer()
@@ -134,8 +156,11 @@ suite "dark pairs come from the tokens (R-DRK-02, R-DRK-03)":
     let blk = darkBlock(res.html)
     check ("." & s.attrs["class"] & "{background-color:#000000 !important}") in
       blk
-    # The section's own rule and its Outlook copy, nothing else.
-    check blk.count("." & s.attrs["class"] & "{") == 2
+    # The section's own rule, its Outlook copy and its Thunderbird copy
+    # (R-DRK-08), nothing else.
+    check blk.count("." & s.attrs["class"] & "{") == 3
+    check (".moz-text-html ." & s.attrs["class"] &
+      "{background-color:light-dark(#ffffff,#000000) !important}") in blk
 
   test "test_a_token_with_one_value_needs_no_rule":
     var theme = defaultTheme()
@@ -231,10 +256,12 @@ suite "dark pairs come from the tokens (R-DRK-02, R-DRK-03)":
     check "gmail-blend" notin html
 
   test "test_families_that_never_apply_the_dark_block":
-    # R-DRK-01: everything but apple, outlookApp, outlookWeb, samsung,
-    # thunderbird and fastmail shows the light image of a pair.
+    # R-DRK-01: everything but apple, outlookApp, outlookWeb, samsung
+    # and fastmail shows the light image of a pair; Thunderbird applies
+    # no media query, so its copies carry the palette but no swap
+    # (R-DRK-08).
     check noSwapFamilies == allFamilies - {cfApple, cfOutlookApp,
-      cfOutlookWeb, cfSamsung, cfThunderbird, cfFastmail}
+      cfOutlookWeb, cfSamsung, cfFastmail}
 
 suite "the inversion simulation (R-DRK-04)":
   test "test_inversion_simulation_flags_mud":
@@ -728,6 +755,178 @@ suite "a logo with no swap must be dark-safe (R-DRK-06)":
       codeDarkLogoUnsafe).len == 1
     check withCode(render(barePng, dmNone).diagnostics,
       codeDarkLogoUnsafe).len == 0
+
+proc tv(key: string; dark = false): string =
+  ## A default-theme token's value, normalised as P5 writes it.
+  let t = defaultTheme()
+  normaliseColor(if dark: t.darkFor(key) else: t.lightFor(key))
+
+suite "Thunderbird (R-DRK-08)":
+  test "test_thunderbird_block_follows_the_metas":
+    # Block 6 rides with the colour-scheme metas: every strategy but
+    # `none`; one rule, a `<style>` of its own, after the other blocks.
+    for mode in [dmNone, dmAccommodate, dmDesigned]:
+      let r = EmailRenderer()
+      let (doc, _, _) = r.tokenDoc()
+      let html = renderTree(doc, target = target(mode)).html
+      checkpoint($mode)
+      check (thunderbirdBlock in html) == (mode != dmNone)
+      check ("<meta name=\"color-scheme\"" in html) == (mode != dmNone)
+      check html.count("html:has(") == (if mode == dmNone: 0 else: 1)
+      if mode != dmNone:
+        let at = html.find(thunderbirdBlock)
+        # Every plain block comes before it; only Word's conditional
+        # blocks follow.
+        var rest = html[at + thunderbirdBlock.len ..< html.find("</head>")]
+        while "<!--[if" in rest:
+          let a = rest.find("<!--[if")
+          rest.delete(a .. rest.find("<![endif]-->", a) + 11)
+        check "<style>" notin rest
+        check html.find("(prefers-color-scheme: dark)") < at
+
+  test "test_thunderbird_copies_carry_both_values":
+    # Under designed, every dark rule has a Thunderbird copy after the
+    # query, `light-dark({light},{dark})` per declaration, and the page
+    # below the message has its own.
+    let r = EmailRenderer()
+    let (doc, s, p) = r.tokenDoc()
+    let html = renderTree(doc, target = target(dmDesigned)).html
+    let h1 = s.children[0]
+    let blk = darkBlock(html)
+    let copies = tbCopies(blk)
+    let canvas = "light-dark(" & tv("color.surface.canvas") & "," &
+      tv("color.surface.canvas", dark = true) & ")"
+    check copies.len == 5
+    for want in [
+        ".moz-text-html ." & doc.attrs["class"] & "{background-color:" &
+          canvas & " !important}",
+        ".moz-text-html ." & s.attrs["class"] & "{background-color:" &
+          "light-dark(#ffffff," & tv("color.surface.card", dark = true) &
+          ") !important}",
+        ".moz-text-html ." & p.attrs["class"] & "{color:light-dark(" &
+          tv("color.text.secondary") & "," &
+          tv("color.text.secondary", dark = true) & ") !important}",
+        ".moz-text-html ." & h1.attrs["class"] & "{color:light-dark(" &
+          tv("color.text.primary") & "," &
+          tv("color.text.primary", dark = true) & ") !important}",
+        "body:has(.moz-text-html){background-color:" & canvas &
+          " !important}"]:
+      checkpoint(want)
+      check want in copies
+    # After the query, outside it (Thunderbird removes the query).
+    check blk.find("@media (prefers-color-scheme: dark)") <
+      blk.find(".moz-text-html .")
+
+  test "test_a_dark_class_names_both_values":
+    # Two elements with one dark value and two light ones get two
+    # classes, so each Thunderbird copy carries its own light value.
+    let r = EmailRenderer()
+    let doc = r.newDoc()
+    let s = r.child(doc, "mailSection", [("background-color", "#1f2937")])
+    let a = r.child(s, "p", [("color", "#111827"),
+      ("@dark:color", "#ffffff")], text = "One")
+    let b = r.child(s, "p", [("color", "#374151"),
+      ("@dark:color", "#ffffff")], text = "Two")
+    let html = renderTree(doc, target = target(dmDesigned)).html
+    let ca = a.attrs["class"]
+    let cb = b.attrs["class"]
+    check ca != cb
+    let blk = darkBlock(html)
+    for (c, light) in [(ca, "#111827"), (cb, "#374151")]:
+      check ("." & c & "{color:#ffffff !important}") in blk
+      check (".moz-text-html ." & c & "{color:light-dark(" & light &
+        ",#ffffff) !important}") in blk
+
+  test "test_thunderbird_border_copies":
+    # The shadowed box's derived border (R-TBL-09), and a border written
+    # as a shorthand, carry their light colour into the copy.
+    let r = EmailRenderer()
+    let doc = r.newDoc()
+    let bx = r.child(doc, "mailBox", attrs = [("shadow", "sm")])
+    r.setStyle(bx, "background-color", tok"color.surface.card")
+    discard r.child(bx, "h1", text = "Hello")
+    let s = r.child(doc, "mailSection", [("border", "1px solid #e5e7eb"),
+      ("@dark:border-color", "#30363d")])
+    discard r.child(s, "p", text = "Bordered")
+    # A cell keeps its border as a shorthand (P5 expands it elsewhere).
+    let t = r.child(doc, "table")
+    let tr = r.child(t, "tr")
+    let td = r.child(tr, "td", [("border", "2px solid #d0d7de"),
+      ("@dark:border-color", "#444c56")], text = "Cell")
+    let blk = darkBlock(renderTree(doc, target = target(dmDesigned)).html)
+    check (".moz-text-html ." & bx.attrs["class"] &
+      "{background-color:light-dark(#ffffff," &
+      tv("color.surface.card", dark = true) & ") !important;" &
+      "border-color:light-dark(" & darkerStep("#ffffff") & "," &
+      darkerStep(tv("color.surface.card", dark = true)) &
+      ") !important}") in blk
+    check (".moz-text-html ." & s.attrs["class"] &
+      "{border-color:light-dark(#e5e7eb,#30363d) !important}") in blk
+    check (".moz-text-html ." & td.attrs["class"] &
+      "{border-color:light-dark(#d0d7de,#444c56) !important;" &
+      "color:light-dark(" & tv("color.text.primary") & "," &
+      tv("color.text.primary", dark = true) & ") !important}") in blk
+
+  test "test_thunderbird_has_no_swap_copy":
+    # `display` has no scheme-dependent value: the swap stays in the
+    # query, and Thunderbird shows the light image (R-DRK-06 checks it).
+    let html = renderDarkStory("darkLogoSwap").html
+    let blk = darkBlock(html)
+    check ".e-dk-hide{display:none !important}" in blk
+    for c in tbCopies(blk):
+      check "e-dk-" notin c
+      check "display" notin c
+
+suite "image backdrops keep one colour (R-DRK-02, R-VML-01)":
+  test "test_image_backdrops_keep_one_colour":
+    # A band with a background image, and what lies over it, keeps one
+    # colour in both schemes; a card of its own inside it is paired.
+    let r = EmailRenderer()
+    let doc = r.newDoc()
+    let band = r.child(doc, "mailSection", [("background-image",
+      "https://example.com/band.png")])
+    r.setStyle(band, "background-color", tok"color.surface.card")
+    let h1 = r.child(band, "h1", text = "Over the image")
+    r.setStyle(h1, "color", tok"color.text.primary")
+    discard r.child(band, "p", [("color", "#3f3a33")], text = "Raw colour")
+    let card = r.child(band, "mailBox")
+    r.setStyle(card, "background-color", tok"color.surface.card")
+    let inner = r.child(card, "p", text = "On the card")
+    let res = renderTree(doc, target = target(dmDesigned))
+    check "class" notin band.attrs
+    check "class" notin h1.attrs
+    # The raw colour over the image is the rule, not a defect.
+    check withCode(res.diagnostics, codeDarkRawColor).len == 0
+    check card.attrs.getOrDefault("class", "").startsWith("e-")
+    check inner.attrs.getOrDefault("class", "").startsWith("e-")
+    # The same raw colour on a plain band warns, as before.
+    let r2 = EmailRenderer()
+    let doc2 = r2.newDoc()
+    let plain = r2.child(doc2, "mailSection")
+    r2.setStyle(plain, "background-color", tok"color.surface.card")
+    discard r2.child(plain, "p", [("color", "#3f3a33")], text = "Raw")
+    check withCode(renderTree(doc2, target = target(dmDesigned)).diagnostics,
+      codeDarkRawColor).len == 1
+
+  test "test_inversion_sees_the_image_unrecoloured":
+    # rule: R-DRK-04
+    # Dark text over a light image: the models lighten the text and no
+    # model recolours the image, so the light fallback stands for it.
+    proc band(withImage: bool): seq[EmailDiagnostic] =
+      let r = EmailRenderer()
+      let doc = r.newDoc()
+      var styles = @[("background-color", "#fde9d0")]
+      if withImage:
+        styles.add(("background-image", "https://example.com/band.png"))
+      let s = r.child(doc, "mailSection", styles)
+      discard r.child(s, "p", [("color", "#3f3a33")], text = "Stripes")
+      inverted(renderTree(doc, target = target(dmAccommodate)).diagnostics)
+    check band(false).len == 0
+    let found = band(true)
+    check found.len == 2
+    for d in found:
+      check "its background image, which no model recolours" in d.message
+      check d.severity == sevInfo
 
 suite "the dark stories":
   test "test_dark_stories_render":

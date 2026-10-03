@@ -78,6 +78,15 @@
 ## Thunderbird applies the media query itself. One hunk per golden,
 ## that rule only; every other byte is unchanged.
 ##
+## Golden update, 2026-10-03: both goldens gained block 6, Thunderbird's
+## one-rule `<style>` (`html:has(.moz-text-html){filter:url("#prefers-
+## color-scheme: dark")}`), after the decorative block (catalogue §1 and
+## R-DRK-08, amended first): the colour-scheme metas tell every other
+## client that the message handles both schemes, and Thunderbird, which
+## ignores them, reads this instead and leaves the message's colours
+## alone. One hunk per golden, that element only; every other byte is
+## unchanged.
+##
 ## Backend-independent (tree building + pure passes; the goldens load
 ## via `staticRead`), so `just test` also runs it on JS.
 import std/[algorithm, os, strutils, unittest]
@@ -117,7 +126,12 @@ proc fullHead(target: EmailTarget): seq[EmailNode] =
     decls: @[Declaration(prop: "padding", value: "0")])]
   let res = assembleHead(decls, big, webfonts, msoRules)
   doAssert res.diagnostics.len == 0
-  doAssert res.blocks.len == (if target.darkMode == dmDesigned: 6 else: 5)
+  # Block 6, Thunderbird's (R-DRK-08), rides with the metas: every
+  # strategy but `none`.
+  doAssert res.blocks.len == (case target.darkMode
+    of dmDesigned: 7
+    of dmAccommodate: 6
+    of dmNone: 5)
   res.blocks
 
 proc emptyDoc(): EmailNode =
@@ -184,7 +198,7 @@ template auditHeadMembership(blocks: seq[EmailNode]) =
   ## or `@font-face` — nothing else. A template, like `checkIncreasing`:
   ## a `check` inside a proc prints its failure and fails the process,
   ## but marks no test failed; expanded into the test, it does.
-  var media, faces, hover, ogsc, reset = 0
+  var media, faces, hover, ogsc, tb, reset = 0
   for b in blocks:
     for rule in topLevelRules(b.text):
       let sel = rule[0 ..< rule.find('{')].strip()
@@ -203,6 +217,10 @@ template auditHeadMembership(blocks: seq[EmailNode]) =
       elif sel.startsWith("[data-ogsc] .") or
           sel.startsWith("[data-ogsb] ."):
         inc ogsc
+      elif sel in ["html:has(.moz-text-html)", "body:has(.moz-text-html)"] or
+          sel.startsWith(".moz-text-html ."):
+        # R-DRK-08's Thunderbird rules (client-targeting selectors).
+        inc tb
       else:
         inc reset
         check sel in resetSelectors
@@ -211,6 +229,7 @@ template auditHeadMembership(blocks: seq[EmailNode]) =
   check faces == 1
   check hover == 1
   check ogsc == 2
+  check tb == 1 # Block 6 (the fixture's dark group has no light twin).
   check reset == 13 + 1 # The catalogue §2 lines plus the mso feed's `#outlook a`.
 
 template checkIncreasing(html: string; markers: openArray[string]) =
@@ -251,7 +270,7 @@ suite "document golden skeleton":
       let accommodate = render(word)
       check "<meta name=\"color-scheme\" content=\"light dark\">" in
         accommodate
-      check "prefers-color-scheme" notin accommodate
+      check "@media (prefers-color-scheme" notin accommodate
       check "data-ogs" notin accommodate
       check "e-2bi" notin accommodate
       let at = golden.find(fontsOpen)
@@ -354,10 +373,10 @@ suite "document golden skeleton":
     let noword = render(false, dmDesigned)
     # Separate <style> elements in priority order (R-CSS-07's
     # emission half; t4_head_budget covers the dropping half).
-    check word.count("<style>") == 7
-    check noword.count("<style>") == 5
-    check render(true).count("<style>") == 6
-    check render(false).count("<style>") == 4
+    check word.count("<style>") == 8
+    check noword.count("<style>") == 6
+    check render(true).count("<style>") == 7
+    check render(false).count("<style>") == 5
     checkIncreasing(word, [
       "<style>html,body{margin:0 auto !important;",
       "@media only screen and (max-width: 479px)",
@@ -365,6 +384,7 @@ suite "document golden skeleton":
       "<!--[if !mso]><!--><style>@font-face{font-family:Custom;" &
         "src:url(a.woff2)}</style><!--<![endif]-->",
       ":hover",
+      "<style>html:has(.moz-text-html){filter:",
       "<!--[if mso]><style>#outlook a{padding:0}</style><![endif]-->",
       "<!--[if lte mso 11]><style>",
     ])
@@ -374,6 +394,7 @@ suite "document golden skeleton":
       "(prefers-color-scheme: dark)",
       "<!--[if !mso]><!--><style>@font-face",
       ":hover",
+      "<style>html:has(.moz-text-html){filter:",
     ])
     check "<!--[if mso]><style>" notin noword
     # R-DOC-12: every <style> sits in <head>, before any element

@@ -294,7 +294,7 @@ suite "P10 dark-scheme contrast under darkMode=designed":
     designed.headStyleBudget = 1
     let res = renderTree(designedDoc(r, p), target = designed)
     check withCode(res.diagnostics, codeCssBlockDropped).len > 0
-    check "prefers-color-scheme" notin res.html
+    check "@media (prefers-color-scheme" notin res.html
     check withCode(res.diagnostics, codeA11yContrastDark).len == 0
     # A light background with no dark value on a container: the advice
     # names that background rather than the document's.

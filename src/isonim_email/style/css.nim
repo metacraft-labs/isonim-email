@@ -105,6 +105,7 @@ const knownCssProperties* = [
   "-ms-text-size-adjust", "-webkit-text-size-adjust",
   "-ms-interpolation-mode", # R-RST-07 (MJML img reset, catalogue §2 line 7)
   "outline",                # R-RST-07 (MJML img reset, catalogue §2 line 7)
+  "filter",                 # R-DRK-08 (Thunderbird's block: the root's signal)
 ]
   ## Every property the serialiser emits (R-CSS-05). Shorthands P5
   ## expands (`background`, `font`) are absent by design, as are
@@ -124,6 +125,8 @@ const clientTargetingSelectors* = [
   ".aBn", # R-RST-09 (Gmail auto-detected-link class; the uppercase B
           # needs the literal — R-CSS-08 keeps validClassName lowercase)
   ".a6S", # R-RST-11 (Gmail download-button class; same uppercase reason)
+  "html:has(.moz-text-html)", # R-DRK-08 (Thunderbird's message root)
+  "body:has(.moz-text-html)", # R-DRK-08 (Thunderbird's message body)
 ]
   ## The fixed literal client-targeting set (R-CSS-09): R-RST-03, -09,
   ## -11 verbatim, plus R-RST-08's `#outlook a` and the R-RST-09/11
@@ -131,7 +134,8 @@ const clientTargetingSelectors* = [
   ## parenthetical, but R-RST-08 normatively emits it in block 1, so
   ## the serialiser must accept it.) Together with the `*`, element,
   ## `.class`, `#id` and group arms of `validSelectorPart`, this is
-  ## exactly the catalogue §2 reset selector set — nothing admits `u+.body`,
+  ## exactly the catalogue §2 reset selector set plus R-DRK-08's two
+  ## Thunderbird selectors — nothing admits `u+.body`,
   ## which no catalogue rule covers. R-DRK-03 and R-LAY-12 are
   ## patterns over generated class names, matched in
   ## `validSelectorPart`, not listed here.

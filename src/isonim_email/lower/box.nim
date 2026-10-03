@@ -46,7 +46,7 @@ const
   boxShadows* = [("sm", "0 1px 3px rgba(0,0,0,0.12)"),
     ("md", "0 4px 12px rgba(0,0,0,0.16)")]
     ## `shadow = sm | md` as `box-shadow` values.
-  boxShadowSurface* = "#ffffff"
+  boxShadowSurface* = shadowSurface
     ## The surface a shadowed box without a background of its own is
     ## taken to sit on, for its border (the default theme's surface).
   boxConsumed = ["background-color", "background_color", "padding",
@@ -66,8 +66,7 @@ proc shadowValue*(name: string): string =
 proc shadowBorder*(background: string): string =
   ## R-TBL-09: the border a shadowed box gets when it has none of its
   ## own, 1px and one step darker than its background.
-  let bg = if background.len > 0: background else: boxShadowSurface
-  "1px solid " & darkerStep(bg)
+  "1px solid " & shadowBorderColour(background)
 
 proc lowerBox*(node: EmailNode; ctx: LowerCtx):
     tuple[nodes: seq[EmailNode]; inner: EmailNode;

@@ -330,9 +330,11 @@ suite "mailCluster":
       1
     check "<div style=\"font-size:0.01px;text-align:left;direction:ltr;\">" in
       html
-    # The separator follows every item but the last, hidden from AT.
-    check html.count("<span aria-hidden=\"true\" style=\"padding-left:" &
-      "12px;\">·</span>") == 2
+    # The separator follows every item but the last, hidden from AT, in
+    # the colour the cluster's text would inherit (R-TXT-02: a client's
+    # dark default must not paint it).
+    check html.count("<span aria-hidden=\"true\" style=\"color:#111827;" &
+      "padding-left:12px;\">·</span>") == 2
     # Word ignores the span's padding: a space only Word sees.
     check html.count("</a><!--[if mso]>&nbsp;&nbsp;&nbsp;<![endif]--><span") ==
       2

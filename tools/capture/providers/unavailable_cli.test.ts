@@ -62,7 +62,7 @@ describe("email-shots with an unavailable provider", () => {
     assert.equal(r.status, 1, r.stderr);
     assert.match(
       r.stderr,
-      /email-shots: provider browser-emulation \(backend a, v1\) UNAVAILABLE: PLAYWRIGHT_BROWSERS_PATH is not set/,
+      /email-shots: provider browser-emulation \(backend a, v2\) UNAVAILABLE: PLAYWRIGHT_BROWSERS_PATH is not set/,
     );
     assert.match(r.stderr, /2 capture\(s\) failed/);
     // Each failed capture is named in the run summary with its provider,
@@ -106,7 +106,7 @@ describe("email-shots with an unavailable provider", () => {
     assert.doesNotMatch(r.stderr, /UNAVAILABLE|DEGRADED/);
     assert.match(
       r.stderr,
-      /email-shots: provider browser-emulation \(backend a, v1\): 2 request\(s\), 2 done/,
+      /email-shots: provider browser-emulation \(backend a, v2\): 2 request\(s\), 2 done/,
     );
     const runJson = readJson<{
       providers: Record<

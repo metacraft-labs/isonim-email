@@ -153,12 +153,17 @@ suite "tokens resolve to literals with dark pairs":
     designed.darkMode = dmDesigned
     var darkText = ""
     for b in assembleHead(head, designed).blocks:
-      if "prefers-color-scheme" in b.text:
+      if "@media (prefers-color-scheme: dark)" in b.text:
         darkText = b.text
-    check "background-color:#1a1d23 !important" in darkText
-    check "color:#4c8dff !important" in darkText
-    check "#ffffff" notin darkText
-    check "#1f6feb" notin darkText
+    let query = darkText[darkText.find("@media") ..< darkText.find("}}") + 2]
+    check "background-color:#1a1d23 !important" in query
+    check "color:#4c8dff !important" in query
+    check "#ffffff" notin query
+    check "#1f6feb" notin query
+    # Thunderbird's copy carries both values (R-DRK-08).
+    check "background-color:light-dark(#ffffff,#1a1d23) !important" in
+      darkText
+    check "color:light-dark(#1f6feb,#4c8dff) !important" in darkText
 
   test "tok references resolve against the theme":
     let (ts, modes) = modeSet()

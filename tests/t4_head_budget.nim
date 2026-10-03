@@ -75,8 +75,11 @@ suite "head budget drops lowest priority first":
     let f = freshDecls()
     let full = assembleHead(f.decls, target, webfonts(), msoRules())
     check full.diagnostics.len == 0
-    check full.blocks.len == 6
-    check priorities(full.blocks) == @[1, 2, 3, 4, 5, 0]
+    check full.blocks.len == 7
+    # Block 6 is Thunderbird's one rule (R-DRK-08), never dropped.
+    check priorities(full.blocks) == @[1, 2, 3, 4, 5, 6, 0]
+    check full.blocks[5].text ==
+      "html:has(.moz-text-html){filter:url(\"#prefers-color-scheme: dark\")}"
     # Reset carries the catalogue §2 exact 13 lines in order (the
     # document assembly replaced the scaffolding; `u+.body` is gone —
     # no rule admits it). Pin the first line whole plus the group
@@ -115,7 +118,7 @@ suite "head budget drops lowest priority first":
     check "@font-face" in full.blocks[3].text
     check "@media" notin full.blocks[3].text
     check ":hover" in full.blocks[4].text
-    check "border-collapse:collapse" in full.blocks[5].text
+    check "border-collapse:collapse" in full.blocks[6].text
     # Surviving blocks pair every rule with a class on the element.
     check "e-" in f.sm.attrs["class"]
     check "e-" in f.dark.attrs["class"]
@@ -147,7 +150,9 @@ suite "head budget drops lowest priority first":
     var sizes: seq[int] = @[]
     for b in full.blocks[0 .. 4]:
       sizes.add(b.text.len)
-    let total = sizes[0] + sizes[1] + sizes[2] + sizes[3] + sizes[4]
+    # Thunderbird's block is never dropped but counts (R-CSS-07).
+    let total = sizes[0] + sizes[1] + sizes[2] + sizes[3] + sizes[4] +
+      full.blocks[5].text.len
 
     target.headStyleBudget = total - 1
     let f1 = freshDecls()
@@ -157,7 +162,7 @@ suite "head budget drops lowest priority first":
     check s1.diagnostics[0].severity == sevWarning
     check s1.diagnostics[0].rules == @["R-CSS-07"]
     check "decorative" in s1.diagnostics[0].message
-    check priorities(s1.blocks) == @[1, 2, 3, 4, 0]
+    check priorities(s1.blocks) == @[1, 2, 3, 4, 6, 0]
     check "class" notin f1.hover.attrs
     check "e-" in f1.sm.attrs["class"]
 
@@ -169,18 +174,18 @@ suite "head budget drops lowest priority first":
       @[codeCssBlockDropped, codeCssBlockDropped]
     check "decorative" in s2.diagnostics[0].message
     check "fonts" in s2.diagnostics[1].message
-    check priorities(s2.blocks) == @[1, 2, 3, 0]
+    check priorities(s2.blocks) == @[1, 2, 3, 6, 0]
 
     target.headStyleBudget = total - sizes[4] - sizes[3] - 1
     let f3 = freshDecls()
     let s3 = assembleHead(f3.decls, target, webfonts(), msoRules())
     check s3.diagnostics.len == 3
     check "dark" in s3.diagnostics[2].message
-    check priorities(s3.blocks) == @[1, 2, 0]
+    check priorities(s3.blocks) == @[1, 2, 6, 0]
     check "class" notin f3.dark.attrs
 
-    # Down to reset + responsive nothing more is reported: those two
-    # fit exactly, so no over-budget warning.
+    # Down to reset, responsive and Thunderbird's block nothing more is
+    # reported: they fit, so no over-budget warning.
     for d in s3.diagnostics:
       check d.code != codeCssOverBudget
 
@@ -193,7 +198,7 @@ suite "head budget drops lowest priority first":
     check s4.diagnostics.len == 4
     check codes(s4.diagnostics) == @[codeCssBlockDropped,
       codeCssBlockDropped, codeCssBlockDropped, codeCssOverBudget]
-    check priorities(s4.blocks) == @[1, 2, 0]
+    check priorities(s4.blocks) == @[1, 2, 6, 0]
     check "html,body{margin:0 auto !important;" in s4.blocks[0].text
     check "e-" in f4.sm.attrs["class"]
 
@@ -210,7 +215,7 @@ suite "over-budget warning when protected blocks exceed the budget":
     target.darkMode = dmDesigned # So the dark block exists to drop.
     let probe = assembleHead(freshDecls().decls, target)
     let protectedBytes = blockWith(probe.blocks, 1).len +
-      blockWith(probe.blocks, 2).len
+      blockWith(probe.blocks, 2).len + blockWith(probe.blocks, 6).len
     check protectedBytes > 0
     # Exactly at the budget: dark and decorative drop, nothing more.
     target.headStyleBudget = protectedBytes
@@ -229,7 +234,7 @@ suite "over-budget warning when protected blocks exceed the budget":
     check w.rules == @["R-CSS-07"]
     check $protectedBytes in w.message
     check cfGmailWeb in w.families
-    check priorities(over.blocks) == @[1, 2]
+    check priorities(over.blocks) == @[1, 2, 6]
     # Through the render: a warning normally, an error under strict.
     var tiny = defaultTarget()
     tiny.headStyleBudget = 100
@@ -358,7 +363,7 @@ suite "variant rules":
     designed.headStyleBudget = 1_000_000
     let g = freshDecls()
     let res2 = assembleHead(g.decls, designed, webfonts(), msoRules())
-    check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 0]
+    check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 6, 0]
     check "e-" in g.dark.attrs["class"]
 
   test "test_dark_accommodate_emits_no_dark_rules":
@@ -372,17 +377,20 @@ suite "variant rules":
     let f = freshDecls()
     let res = assembleHead(f.decls, target, webfonts(), msoRules())
     check res.diagnostics.len == 0
-    check priorities(res.blocks) == @[1, 2, 4, 5, 0]
+    # Thunderbird's block rides with the metas (R-DRK-08); it is no
+    # dark CSS: it recolours nothing.
+    check priorities(res.blocks) == @[1, 2, 4, 5, 6, 0]
     for b in res.blocks:
-      check "prefers-color-scheme" notin b.text
+      check "@media (prefers-color-scheme" notin b.text
+      check "light-dark(" notin b.text
       check "data-ogs" notin b.text
     check "class" notin f.dark.attrs
     var designed = target
     designed.darkMode = dmDesigned
     let g = freshDecls()
     let res2 = assembleHead(g.decls, designed, webfonts(), msoRules())
-    check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 0]
-    for p in [1, 2, 4, 5, 0]:
+    check priorities(res2.blocks) == @[1, 2, 3, 4, 5, 6, 0]
+    for p in [1, 2, 4, 5, 6, 0]:
       check blockWith(res.blocks, p) == blockWith(res2.blocks, p)
     check f.sm.attrs["class"] == g.sm.attrs["class"]
     check f.hover.attrs["class"] == g.hover.attrs["class"]

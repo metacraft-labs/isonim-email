@@ -106,11 +106,26 @@ const
     ## Outside the 1-5 truncation order: the mso block is
     ## conditional-only, never in the plain-`<style>` sequence Gmail
     ## truncates.
+  thunderbirdPriority* = 6
+    ## Thunderbird's block (R-DRK-08), after the decorative block: one
+    ## rule, never dropped.
+  thunderbirdRoot* = "html:has(.moz-text-html)"
+    ## Thunderbird's message root: the only root holding its message
+    ## wrapper (R-DRK-08).
+  thunderbirdBody* = "body:has(.moz-text-html)"
+    ## Thunderbird's message body, for the page below the message.
+  thunderbirdSignal* = "url(\"#prefers-color-scheme: dark\")"
+    ## R-DRK-08: the root `filter` that tells Thunderbird the message
+    ## handles its own colours (it skips its dark adaptation when the
+    ## root's computed filter names `prefers-color-scheme: dark`); it
+    ## references no element, so no filter applies.
 
 type HeadGroup = object
   ## One element's declarations for one variant, in first-seen order.
   node: EmailNode
   decls: seq[Declaration]
+  lights: seq[string]
+    ## Each declaration's light twin (`HeadDecl.light`; dark only).
 
 proc isHeadPatternSelector(selector: string): bool =
   ## `.<safe>:hover` (decorative, priority 5) and `[owa] .<safe>`
@@ -268,9 +283,10 @@ proc groupDecls(decls: seq[HeadDecl]; variant: string): seq[HeadGroup] =
         found = i
         break
     if found < 0:
-      result.add(HeadGroup(node: d.node, decls: @[decl]))
+      result.add(HeadGroup(node: d.node, decls: @[decl], lights: @[d.light]))
     else:
       result[found].decls.add(decl)
+      result[found].lights.add(d.light)
 
 proc attachClass(node: EmailNode; cls: string) =
   ## Appends a generated class to the element's `class` attribute
@@ -293,7 +309,8 @@ proc blockDropped(blockName: string; blockBytes, totalBytes,
 proc overBudget(protectedBytes, budget: int): EmailDiagnostic =
   EmailDiagnostic(
     severity: sevWarning, code: codeCssOverBudget,
-    message: "head blocks that are never dropped (reset, responsive) " &
+    message: "head blocks that are never dropped (reset, responsive, " &
+      "Thunderbird's) " &
       "total " & $protectedBytes & " bytes, over headStyleBudget " &
       $budget & ": Gmail will truncate them (R-CSS-07)",
     origin: SourceSpan(), families: {cfGmailWeb, cfGmailApp}, weight: 0.0,
@@ -332,16 +349,43 @@ proc swapRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
     ("." & darkShowClass, @[Declaration(prop: "display", value: "block",
       important: true)])]
 
-proc documentDarkBackground(groups: seq[HeadGroup]): seq[Declaration] =
+proc documentDarkBackground(groups: seq[HeadGroup]):
+    tuple[decls: seq[Declaration]; lights: seq[string]] =
   ## The document's dark background, for the page below the message
   ## (`<body>`, which carries no class: R-DOC-14): the `body` element is
-  ## selected instead.
+  ## selected instead. With its light twin, for Thunderbird's copy.
   for g in groups:
     if g.node != nil and g.node.kind == enElement and
         g.node.tag == "mailDocument":
-      for d in g.decls:
+      for i, d in g.decls:
         if d.prop.toLowerAscii() == "background-color":
-          result = @[d]
+          result = (@[d], @[g.lights[i]])
+
+proc lightDark(light, dark: string): string =
+  ## `light-dark({light},{dark})`: the colour a Thunderbird copy carries.
+  "light-dark(" & light & "," & dark & ")"
+
+proc thunderbirdCopy(decls: seq[Declaration];
+    lights: seq[string]): seq[Declaration] =
+  ## R-DRK-08: a dark rule's declarations as Thunderbird's copy, each
+  ## `light-dark({light},{dark})`, so the message root's colour scheme
+  ## picks one (Thunderbird applies no media query). A declaration with
+  ## no light twin has no copy.
+  for i, d in decls:
+    if i < lights.len and lights[i].len > 0:
+      result.add(Declaration(prop: d.prop,
+        value: lightDark(lights[i], d.value), important: true))
+
+proc pairedDecls(decls: seq[Declaration];
+    lights: seq[string]): seq[Declaration] =
+  ## The declarations a dark class is named after (R-CSS-08): each with
+  ## its light twin, so two elements sharing a dark value but not a light
+  ## one get two classes, and Thunderbird's copy of each is exact.
+  for i, d in decls:
+    var x = d
+    if i < lights.len and lights[i].len > 0:
+      x.value = lightDark(lights[i], d.value)
+    result.add(x)
 
 proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     webfonts: seq[seq[Declaration]] = @[];
@@ -416,7 +460,8 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     respText.add(emitMediaRule("only screen and (max-width: " &
       $(target.breakpoint - 1) & "px)", mobile))
 
-  var darkGroups: seq[tuple[cls: string; decls: seq[Declaration]]] = @[]
+  var darkGroups: seq[tuple[cls: string; decls: seq[Declaration];
+    lights: seq[string]]] = @[]
   var darkAttach: seq[tuple[node: EmailNode; cls: string]] = @[]
   var seenDark: seq[string] = @[]
   let darkGroupsIn =
@@ -424,34 +469,56 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
     if target.darkMode != dmDesigned: @[]
     else: groupDecls(decls, "dark")
   for g in darkGroupsIn:
-    let cls = gen.classFor(g.decls, "dark")
+    let cls = gen.classFor(pairedDecls(g.decls, g.lights), "dark")
     darkAttach.add((g.node, cls))
     if cls in seenDark:
       continue
     seenDark.add(cls)
-    darkGroups.add((cls, g.decls))
+    darkGroups.add((cls, g.decls, g.lights))
   var darkText = ""
   let designed = target.darkMode == dmDesigned
   if darkGroups.len > 0 or (designed and swaps.len > 0):
-    var copies: seq[string] = @[]
+    var copies, tbCopies: seq[string] = @[]
     var inner: seq[tuple[selector: string; decls: seq[Declaration]]] = @[]
-    for (cls, ds) in darkGroups:
+    for (cls, ds, lights) in darkGroups:
       inner.add(("." & cls, ds))
       copies.add(ogsCopies(cls, ds))
+      # R-DRK-08: Thunderbird applies no media query; its copy carries
+      # both schemes' values, outside the query (R-LAY-12's prefix).
+      let tb = thunderbirdCopy(ds, lights)
+      if tb.len > 0:
+        tbCopies.add(emitStyleRule(".moz-text-html ." & cls, tb))
     let page = documentDarkBackground(darkGroupsIn)
-    if page.len > 0:
+    if page.decls.len > 0:
       # The page below the message keeps the body's colour, and the body
       # carries no class (R-DOC-14): the element is selected. Outlook's
       # recolouring has no body to paint, so no copy.
-      inner.add(("body", page))
+      inner.add(("body", page.decls))
+      let tb = thunderbirdCopy(page.decls, page.lights)
+      if tb.len > 0:
+        tbCopies.add(emitStyleRule(thunderbirdBody, tb))
     if designed and swaps.len > 0:
-      # R-IMG-06: the image swap, with its Outlook copy (R-DRK-03).
+      # R-IMG-06: the image swap, with its Outlook copy (R-DRK-03). No
+      # Thunderbird copy: `display` has no scheme-conditional value, so
+      # Thunderbird shows the light image (R-DRK-08, R-DRK-06).
       for (sel, ds) in swapRules():
         inner.add((sel, ds))
         copies.add(emitStyleRule("[data-ogsc] " & sel, ds))
     copies.sort()
+    tbCopies.sort()
     darkText = copies.join("") &
-      emitMediaRule("(prefers-color-scheme: dark)", inner)
+      emitMediaRule("(prefers-color-scheme: dark)", inner) &
+      tbCopies.join("")
+
+  # R-DRK-08: Thunderbird's block. Whenever the colour-scheme metas say
+  # the message handles both schemes (any strategy but `none`), the
+  # message tells Thunderbird so in the one way it reads: its root's
+  # `filter`. Its own `<style>`, so a client that drops a block over the
+  # `:has()` selector loses nothing else.
+  let thunderbirdText =
+    if target.darkMode == dmNone: ""
+    else: emitStyleRule(thunderbirdRoot, @[Declaration(prop: "filter",
+      value: thunderbirdSignal)])
 
   var fontsText = ""
   if webfonts.len > 0:
@@ -503,6 +570,8 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
       priority: decorativePriority))
 
   proc totalBytes(): int =
+    # Thunderbird's block is never dropped but counts (R-CSS-07).
+    result = thunderbirdText.len
     for b in budgeted:
       result += b.text.len
 
@@ -542,6 +611,8 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   if "decorative" in kept:
     for (node, cls) in hoverAttach:
       node.attachClass(cls)
+  if thunderbirdText != "":
+    blocks.add(newHeadStyle(thunderbirdText, thunderbirdPriority))
   if msoText != "":
     blocks.add(newHeadStyle(msoText, msoPriority))
   (blocks, diags)

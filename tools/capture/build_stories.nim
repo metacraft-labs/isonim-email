@@ -24,6 +24,7 @@ import stories/seed_navigation
 import stories/seed_raw
 import stories/seed_backgrounds
 import stories/seed_dark
+import stories/seed_contrast
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -70,6 +71,9 @@ proc main(): int =
     registerOverflowStories()
     registerSanitiserProbeStory()
     registerBrokenStories()
+    # The contrast fixtures, one failing in each scheme
+    # (tests/stories/seed_contrast.nim).
+    registerContrastFixtures()
   if getEnv("ISONIM_CAPTURE_LAYOUT") == "1":
     # The layout reference stories (tests/stories/seed_layout.nim):
     # iterated on in the capture loop, outside the regression matrix.

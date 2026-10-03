@@ -120,6 +120,12 @@ images), which captures the sanitised message-body DOM it inspects
 
 <!-- markdownlint-enable MD013 -->
 
+Thunderbird's one-rule block (catalogue R-DRK-08) is kept by Roundcube
+as a fifth `<style>`, scoped like the rest and emptied of its `filter`
+(`#message-htmlpart1 div.rcmBody html:has(.v1moz-text-html){}`), and
+removed by SnappyMail with every other block: inert in both (measured
+2026-10-03 on the `sanitiserProbe` fixture).
+
 **The body class disables all head CSS in Roundcube.** The document
 skeleton (catalogue §1) puts `class="body"` on `<body>`. Roundcube
 turns `<body>` into its wrapper `div` with the class `rcmBody` and
@@ -196,6 +202,58 @@ rule, not a transform:
   engine's default text colour turns light while the message's inline
   backgrounds stay white, so uncoloured text vanished. Rule change:
   catalogue R-TXT-02's default text colour.
+
+- **Thunderbird's dark mode (catalogue R-DRK-08).** Read from
+  Thunderbird 150.0.1's own source (`DarkReader.mjs` and
+  `messageBody.css` in its `omni.ja`, and the prefs) and measured with
+  probe messages captured light and dark, with the message DOM and its
+  style sheets read over Marionette (2026-10-03):
+  - every `@media` and `@supports` rule of a message's `<style>` is
+    removed before display (a probe of eight conditional rules, from
+    `@media screen` to `@supports (color:red)`, kept none, light or
+    dark; plain rules stay). The pref behind it,
+    `mail.html_sanitize.drop_conditional_css`, is on by default:
+    turned off in a scratch profile, the same rules stayed. So no
+    `prefers-color-scheme` rule ever applies, which is why the designed
+    stories showed none of their dark palette;
+  - in the dark theme, Thunderbird adapts the loaded message: it
+    clears light backgrounds and dark text colours, inline and in
+    top-level rules, and keeps borders and images (the stories showed
+    cleared button, pill, tile and card fills, near-black borders lost
+    on its dark page, light-derived borders turned bright, and whitened
+    text over light background images);
+  - it skips the adaptation when the root's computed `filter`
+    contains `invert(1)` or `prefers-color-scheme: dark`. A root
+    `filter:invert(1) invert(1)` is skipped and draws the same pixels
+    when short, but Thunderbird rasterised a 4,800 px message through
+    it blurred; `filter:url("#prefers-color-scheme: dark")` (an
+    element that does not exist, so no filter at all) is skipped and
+    pixel-identical at 691 px and 4,800 px, light and dark;
+  - `light-dark()` resolves by the message root's `color-scheme`, which
+    Thunderbird sets to `dark` in its dark mode: a
+    `.moz-text-html .x{background-color:light-dark(#fff,#1a1d23)
+!important}` rule painted `#1a1d23` in dark and `#fff` in light.
+
+  The driver records the root's computed `filter` and `color-scheme`
+  in each capture's provenance (`scheme.evidence`). Backend A's
+  `thunderbird` family is plain Firefox, which applies the media
+  queries and adapts nothing, so its dark captures show the designed
+  palette and never Thunderbird's adaptation.
+
+## Forced dark (backend A)
+
+`forced-dark` is Blink's automatic dark mode over the light scheme
+(`launch.ts`, `browser_emulation.ts`). Measured on Chromium 147
+(2026-10-03): the `--enable-features=WebContentsForceDark` switch used
+before does nothing in headless Chromium (a white page stayed white),
+and with the page told it prefers dark, Blink also skips a message
+declaring `color-scheme: light dark`, so every forced-dark capture
+equalled its dark twin. `--blink-settings=forceDarkModeEnabled=true`
+with the light preference darkens the light design whatever the
+message declares: the white canvas turns `#121212`, dark text turns
+light, and a CSS background image is left as it is. Computed styles do
+not show that darkening, so a forced-dark capture's `contrast`
+assertion is measured on its screenshot (`pixel_contrast.ts`).
 
 ## Real-client evidence (once backend B lands)
 

@@ -796,7 +796,15 @@ describe("selfhosted webmail", { skip: process.platform !== "linux" }, () => {
     // names prefixed; media queries, the dark block, the [data-og*]
     // copies and :hover survive; conditional comments are dropped.
     const rc = String(get("sanitiserProbe", "roundcube").meta.sanitised_html);
-    assert.equal(n(rc, /<style\b/g), 4);
+    // Reset, responsive, dark and decorative, and Thunderbird's block
+    // (catalogue R-DRK-08), whose rule Roundcube scopes like the others
+    // and empties: its `filter` is gone, so it does nothing there.
+    assert.equal(n(rc, /<style\b/g), 5);
+    assert.match(
+      rc,
+      /#message-htmlpart1 div\.rcmBody html:has\(\.v1moz-text-html\)\{\}/,
+    );
+    assert.doesNotMatch(rc, /filter/);
     for (const css of rc.matchAll(/<style[^>]*>([^<]*)<\/style>/g))
       for (const sel of css[1]!.matchAll(/(?:^|})\s*([^@{}][^{}]*)\{/g))
         for (const one of sel[1]!.split(","))

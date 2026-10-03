@@ -71,6 +71,10 @@ type
     value*: string
     node*: EmailNode
     origin*: SourceSpan
+    light*: string
+      ## A `dark` declaration's light twin: the element's resolved inline
+      ## value of the same property ("" when it has none). Thunderbird's
+      ## copy of a dark rule carries both (`light-dark()`, R-DRK-08).
 
 const
   headVariants = ["sm", "dark", "hover"]
@@ -697,10 +701,82 @@ proc shadowBorderDark(node: EmailNode; head: seq[HeadDecl]): string =
     n = n.parent
   ""
 
+proc hasBackgroundImage(n: EmailNode): bool =
+  ## True when `n` carries a background image (a style or an attribute,
+  ## either spelling, or a `background` shorthand holding a `url(`).
+  for k in ["background-image", "background_image"]:
+    if n.styles.getOrDefault(k, "").strip().len > 0 or
+        n.attrs.getOrDefault(k, "").strip().len > 0:
+      return true
+  "url(" in n.styles.getOrDefault("background", "").toLowerAscii()
+
+proc paintsBackground(n: EmailNode): bool =
+  ## True when `n` paints a background colour of its own.
+  for k in ["background-color", "background_color", "background", "bgcolor"]:
+    for v in [n.styles.getOrDefault(k, ""), n.attrs.getOrDefault(k, "")]:
+      let x = v.strip().toLowerAscii()
+      if x.len > 0 and x notin ["transparent", "none"]:
+        return true
+  false
+
+proc overBackgroundImage*(node: EmailNode): bool =
+  ## R-DRK-02, R-VML-01: true when `node` is a band with a background
+  ## image, or the backdrop of its colours is one. Walking up from the
+  ## element itself, the first element that paints a background decides:
+  ## an image means yes, a colour means no (a card with a background of
+  ## its own is its own backdrop, even inside an image band).
+  var n = node
+  while n != nil:
+    if n.kind == enElement:
+      if hasBackgroundImage(n):
+        return true
+      if paintsBackground(n):
+        return false
+    n = n.parent
+  false
+
+proc borderShorthandColour(value: string): string =
+  ## The colour of a `border` shorthand value, "" when none parses.
+  try:
+    let b = parseBorder(value)
+    result = if b.color.a < 1.0: b.color.toRgba() else: b.color.toHex()
+  except StyleError:
+    result = ""
+
+proc lightTwin(res: OrderedTable[string, string]; prop: string): string =
+  ## The element's resolved inline value of `prop`: the light twin of a
+  ## dark declaration of it (R-DRK-08), "" when it has none. A border
+  ## colour is read from its own longhand, else its side's or the
+  ## element's `border-color` (one value), else the `border` shorthand.
+  let p = prop.toLowerAscii()
+  if p in res:
+    return res[p]
+  if p.startsWith("border") and p.endsWith("-color"):
+    let side = p[0 ..< p.len - "-color".len]
+    if side != "border" and side in res:
+      let c = borderShorthandColour(res[side])
+      if c.len > 0:
+        return c
+    let all = res.getOrDefault("border-color", "").strip()
+    if all.len > 0 and " " notin all:
+      return all
+    if "border" in res:
+      return borderShorthandColour(res["border"])
+  ""
+
 proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
                   profile: AudienceProfile; head: var seq[HeadDecl];
                   diags: var seq[EmailDiagnostic]) =
   let tag = node.tag.toLowerAscii()
+  var target = target
+  if target.darkMode == dmDesigned and overBackgroundImage(node):
+    # R-DRK-02, R-VML-01: a band with a background image, and what lies
+    # over the image, keep one colour in both schemes: the image does
+    # not change with the scheme, so neither its fallback colour nor the
+    # text on it pairs a token's dark value (an element's own `@dark:`
+    # still applies), and a raw colour there is not a defect.
+    target.darkMode = dmAccommodate
+  let headStart = head.len
   var entries: seq[(string, string)] = @[]
   # The text leaves' defaults (`lower/text.nim`, R-TXT-02, R-TXT-09)
   # come first, so every declaration of the element's own follows and
@@ -847,8 +923,11 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
   if tag == "a":
     linkDefaults(node, theme, target, head, res)
   elif "color" notin res and (tag in textColorCarriers or
-      (tag in ["td", "th", "div", "mailtext"] and holdsText(node))):
-    # R-TXT-02: a text element never relies on an inherited colour. A
+      (tag in ["td", "th", "div", "mailtext"] and holdsText(node)) or
+      (tag == "mailcluster" and
+        node.attrs.getOrDefault("separator", "").len > 0)):
+    # R-TXT-02: a text element never relies on an inherited colour (a
+    # cluster's separators are text its lowering writes). A
     # client whose dark scheme or theme supplies a light default text
     # colour (SnappyMail's dark themes, WebKit under `color-scheme:
     # light dark`) would otherwise paint it light on the message's own
@@ -870,7 +949,8 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     let dark = shadowBorderDark(node, head)
     if dark.len > 0:
       head.add(HeadDecl(variant: "dark", prop: "border-color", value: dark,
-        node: node, origin: node.origin))
+        node: node, origin: node.origin,
+        light: shadowBorderColour(res.getOrDefault("background-color", ""))))
   if target.outlookWord:
     # The closed MSO list: each addition checks for an
     # author-set value first and never overwrites one. With outlookWord
@@ -983,6 +1063,12 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
           node.fallbacks["color"] = a.fallbacks["color"]
         break
       a = a.parent
+  for i in headStart ..< head.len:
+    # Each dark declaration's light twin, for Thunderbird's copy of its
+    # rule (R-DRK-08).
+    if head[i].node == node and head[i].variant == "dark" and
+        head[i].light.len == 0:
+      head[i].light = lightTwin(res, head[i].prop)
 
 proc applyStylesImpl(node: EmailNode; theme: EmailTheme;
                      target: EmailTarget; profile: AudienceProfile;

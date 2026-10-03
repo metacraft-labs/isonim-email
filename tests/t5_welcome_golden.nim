@@ -18,6 +18,20 @@
 ## accommodate golden plus block 3 and the dark classes, which its
 ## structural test checks by removing both. Changed only on purpose.
 ##
+## Golden update, 2026-10-03 (catalogue §1 and R-DRK-08, amended first):
+## both goldens gained block 6, Thunderbird's one-rule `<style>`
+## (`html:has(.moz-text-html){filter:url("#prefers-color-scheme:
+## dark")}`), which tells Thunderbird that the message handles its own
+## colours (the colour-scheme metas say so to every other client). The
+## designed golden's block 3 also gained Thunderbird's `light-dark()`
+## copies of its rules after the query, and its seven dark classes were
+## renamed: a dark class is now named after both values of each
+## declaration (R-DRK-02), so its copy can carry the light one. The
+## accommodate golden's diff is that one element; every other byte of
+## both is unchanged, and the designed golden less block 3 and its
+## classes is still the accommodate golden byte for byte (the test
+## below).
+##
 ## Both renders carry one diagnostic, pinned below: information on the
 ## button's label under the inversion simulation's full model, not yet
 ## calibrated (catalogue R-DRK-04).
@@ -80,9 +94,13 @@ suite "the worked example's golden":
     check "e-col" notin html
     # The canvas in its three places.
     check html.count("background-color:#f4f5f7;") == 3
-    # No responsive block and no dark block.
+    # No responsive block and no dark block; Thunderbird's block rides
+    # with the metas and recolours nothing (R-DRK-08).
     check "@media" notin html
-    check "prefers-color-scheme" notin html
+    check "light-dark(" notin html
+    check html.count("<style>") == 3
+    check "<style>html:has(.moz-text-html){filter:url(\"#prefers-color-" &
+      "scheme: dark\")}</style>" in html
     # The button: 20px line + 2 x 12px = 44px.
     check "line-height:20px;" in html and "padding:12px 24px;" in html
     check "mso-padding-alt:12px 24px;" in html
@@ -135,5 +153,9 @@ suite "the worked example's designed golden":
     check "body{background-color:#0f1115 !important}" in designedGolden
     check "[data-ogsb] ." in designedGolden
     check "[data-ogsc] ." in designedGolden
+    # Thunderbird's copies: one per class rule, and the page below.
+    check designedGolden.count(".moz-text-html .e-") == 4
+    check "body:has(.moz-text-html){background-color:light-dark(#f4f5f7," &
+      "#0f1115) !important}" in designedGolden
     check designedGolden.count(" class=\"e-") == 7
     check "<body xml:lang=\"en\" style=" in designedGolden

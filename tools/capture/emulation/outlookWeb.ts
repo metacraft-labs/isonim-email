@@ -334,7 +334,7 @@ function stripUnsupportedFunctions(html: string): string {
 
 // OutlookWeb: the full pipeline. Pure: the output
 // depends only on the input HTML and the scheme. forced-dark adds no
-// attributes: that inversion is left to Chromium's WebContentsForceDark.
+// attributes: that inversion is left to Chromium's automatic dark mode.
 export function outlookWeb(html: string, scheme: string): string {
   const wrapped = wrapRps(
     prefixStyles(prefixMarkupNames(stripUnsupportedFunctions(html))),

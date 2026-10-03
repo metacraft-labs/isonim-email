@@ -4,6 +4,18 @@
 // engine with Playwright's defaults, plus the forced-dark switch for
 // Chromium: nothing here may change a Linux pixel.
 //
+// Forced dark is Blink's own automatic dark mode, switched on through
+// its settings (`FORCED_DARK_ARGS`). The `WebContentsForceDark` feature
+// switch used before does nothing in headless Chromium (measured,
+// Chromium 147, 2026-10-03: a white page stayed white with it, and
+// turned #121212 with the Blink setting): that feature is the
+// browser's way of setting the same Blink setting, and the headless
+// browser never sets it. The capture asks for the light scheme with
+// it (browser_emulation.ts), so the darkening is a client's forced
+// inversion of the light design: Blink skips a page whose used colour
+// scheme is dark, which a message declaring `color-scheme: light dark`
+// has only when the reader prefers dark.
+//
 // macOS CI runners are launchd daemons: no GUI login session, no GPU
 // access, and no unlocked user keychain. There, headless Firefox
 // launched with Playwright's defaults never finished its startup
@@ -33,6 +45,9 @@ export interface LaunchOptions {
   firefoxUserPrefs?: Record<string, string | number | boolean>;
   timeout?: number;
 }
+
+/** Chromium's forced-dark switch: Blink's automatic dark mode. */
+export const FORCED_DARK_ARGS = ["--blink-settings=forceDarkModeEnabled=true"];
 
 /** Launch timeout: a wedged browser fails the run with a named engine
  *  well before a CI step timeout would. */
@@ -64,8 +79,7 @@ export function launchOptions(
 ): LaunchOptions {
   const opts: LaunchOptions = { timeout: LAUNCH_TIMEOUT_MS };
   const args: string[] = [];
-  if (engine === "chromium" && forcedDark)
-    args.push("--enable-features=WebContentsForceDark");
+  if (engine === "chromium" && forcedDark) args.push(...FORCED_DARK_ARGS);
   if (platform === "darwin") {
     if (engine === "chromium") args.push("--disable-gpu");
     if (engine === "firefox") {

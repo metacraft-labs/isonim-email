@@ -298,7 +298,12 @@ suite "real-client briefs":
       "family, not an emulation." in tb
     check "stands in for no audience family" notin tb
     check "never stretched to the column width" in tb
-    check "dark adaptation of messages" in tb
+    # Thunderbird's dark mode (catalogue R-DRK-08): what it does, and
+    # what it does to this message (`accommodate`: nothing).
+    check "recolours a message on its own" in tb
+    check "applies no `@media` rule in a message" in tb
+    check "This message (`darkMode = accommodate`) keeps its light " &
+      "design on Thunderbird's dark page" in tb
     check "### Expected: alert — thunderbird (thunderbird) — desktop " &
       "800 — dark — linux-desktop (real client)" in tb
 

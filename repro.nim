@@ -188,6 +188,10 @@ const emailTestSpecs = @[
   # test` was not re-run for it).
   "e2e_local_images_off",
   "e2e_local_text_edges",
+  # Added with the dark-mode legibility check: spawns node and the
+  # pinned Chromium like the e2e actions above (same expected engine
+  # defect; `repro test` was not re-run for it).
+  "e2e_local_dark_modes_legible",
 ]
 
 package isonim_email:

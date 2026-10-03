@@ -786,9 +786,10 @@ proc darkSwaps(doc: EmailNode): seq[string] =
   for c in doc.children:
     result.add(darkSwaps(c))
 
-proc swapLine(alts: seq[string]; swapped: bool): string =
+proc swapLine(alts: seq[string]; swapped: bool;
+    why = "this client does not apply the dark rules"): string =
   ## The dark-image pairs in a dark capture: whether this client shows
-  ## the dark image or the light one.
+  ## the dark image or the light one (and why not).
   if alts.len == 0:
     return ""
   var names: seq[string] = @[]
@@ -800,7 +801,7 @@ proc swapLine(alts: seq[string]; swapped: bool): string =
       " dark image (`dark_src`) in this scheme; never both images."
   else:
     "Dark images: " & names.join(", ") & " " & verb & " " & its &
-      " light image here (this client does not apply the dark rules), " &
+      " light image here (" & why & "), " &
       "which must still read on the background around it; never both " &
       "images."
 
@@ -983,16 +984,15 @@ proc spacerButtonAtTheRight(node: EmailNode; rtl: bool): bool =
   false
 
 proc clientButtonLines(id, scheme: string; doc: EmailNode;
-    lines: var seq[string]) =
+    lines: var seq[string]; mode = dmAccommodate) =
   ## What two real clients do to the Word-spacers option's buttons,
   ## measured on the buttons' story set: Thunderbird's dark adaptation
-  ## clears the backgrounds of links, and litehtml (Claws Mail) places a
+  ## clears the backgrounds of links (only a `darkMode = none` message is
+  ## adapted, R-DRK-08), and litehtml (Claws Mail) places a
   ## right-aligned inline block one padding width past the line's end.
-  ## (Thunderbird's dark handling of the default table button is a
-  ## defect to fix, not a degradation to expect, so it has no line.)
   var forms: seq[string] = @[]
   buttonForms(doc, forms)
-  if id == "thunderbird" and scheme != "light":
+  if id == "thunderbird" and scheme != "light" and mode == dmNone:
     if "spacers" in forms:
       lines.add("dark: a button with Word spacers has its fill on its " &
         "link, and Thunderbird's dark adaptation clears a link's " &
@@ -1154,6 +1154,9 @@ type
                            ## does (rows of columns lay out as without CSS)
     darkRules*: bool       ## in its dark scheme the message's own
                            ## `prefers-color-scheme: dark` rules can apply
+                           ## (or, in Thunderbird, their copies)
+    noDarkSwap*: bool      ## the dark palette applies but the dark-image
+                           ## swap does not (Thunderbird, R-DRK-08)
     shows*: seq[string]    ## sanitiser and engine behaviour, one line each
     dark*: seq[string]     ## dark-scheme behaviour ("" scheme lines)
     degradations*: seq[string] ## expected differences from the design
@@ -1221,6 +1224,7 @@ const realClients*: array[7, RealClient] = [
   RealClient(id: "thunderbird", display: "Thunderbird",
     backend: "linux-desktop", family: "thunderbird", engine: "Gecko",
     audience: "thunderbird", headCss: true, darkRules: true,
+    noDarkSwap: true,
     shows: @[
       "Thunderbird renders the message in Gecko with its `<style>` " &
         "blocks; remote images load from the assets host only.",
@@ -1230,10 +1234,12 @@ const realClients*: array[7, RealClient] = [
       "The crop is the message pane only: no Thunderbird headers or " &
         "toolbars."],
     dark: @[
-      "Dark: Thunderbird's dark theme, and its own dark adaptation of " &
-        "messages (on by default) may recolour the whole message to a " &
-        "dark background with light text. That is expected, not a " &
-        "defect; text must stay legible and the hierarchy unchanged."],
+      "Dark: Thunderbird's dark theme. Thunderbird applies no `@media` " &
+        "rule in a message (it removes them), and recolours a message " &
+        "on its own (light backgrounds cleared, dark text turned light, " &
+        "borders and images kept) unless the message's root says the " &
+        "message handles its own colours, which every message with the " &
+        "colour-scheme metas does (R-DRK-08)."],
     degradations: @[],
     notExpected: @[]),
   RealClient(id: "evolution", display: "Evolution 3.58",
@@ -1361,6 +1367,27 @@ proc clientBriefName*(backend, family, id, viewport,
   "brief-" & backend & "-" & family & "-" & id & "-" & viewport & "-" &
     scheme & ".md"
 
+proc thunderbirdDarkLine(mode: DarkModeStrategy): string =
+  ## What Thunderbird's dark scheme does to a message of strategy `mode`
+  ## (R-DRK-08).
+  case mode
+  of dmNone:
+    "This message (`darkMode = none`) has no colour-scheme metas, so " &
+      "Thunderbird recolours it: light backgrounds cleared to its dark " &
+      "page and dark text turned light are expected; text must stay " &
+      "legible and the hierarchy unchanged."
+  of dmAccommodate:
+    "This message (`darkMode = accommodate`) keeps its light design on " &
+      "Thunderbird's dark page, as in the clients that honour its " &
+      "colour-scheme metas: its own colours throughout, nothing " &
+      "recoloured by Thunderbird."
+  of dmDesigned:
+    "This message (`darkMode = designed`) shows its dark palette (the " &
+      "Present list's) through its Thunderbird copies, as the clients " &
+      "that apply its dark rules do; colours it gives no dark value " &
+      "(raw colours, and text over a background image) keep their light " &
+      "values."
+
 proc clientExpectedBlock*(story: Story; id, viewport,
     scheme: string): string =
   ## The expected-screenshot block for one real-client capture: the
@@ -1392,7 +1419,11 @@ proc clientExpectedBlock*(story: Story; id, viewport,
       items.add("Dark palette (" & scheme & "): the message's own dark " &
         "rules do not apply in this client; it keeps its light colours.")
     if swaps.len > 0:
-      items.add(swapLine(swaps, c.darkRules and c.headCss))
+      if c.noDarkSwap:
+        items.add(swapLine(swaps, false, "this client applies the dark " &
+          "palette but not the image swap, which needs a media query"))
+      else:
+        items.add(swapLine(swaps, c.darkRules and c.headCss))
   result = "### Expected: " & story.name & " — " & c.id & " (" &
     c.family & ") — " & viewportLabel(viewport) & " — " & scheme &
     " — " & c.backend & " (real client)\n"
@@ -1415,13 +1446,17 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   if scheme != "light":
     for line in c.dark:
       result.add("- " & line & "\n")
+    if c.id == "thunderbird":
+      result.add("- " & thunderbirdDarkLine(
+        storyDarkModes.getOrDefault(story.name, dmAccommodate)) & "\n")
   result.add("\nExpected degradations in this client:\n")
   var degr = c.degradations
   if c.rtlDegradation.len > 0 and directionLine(doc).len > 0:
     degr.add(c.rtlDegradation)
   if c.engine == "WebKitGTK" and hasList(doc):
     degr.add(webkitListMarkers)
-  clientButtonLines(c.id, scheme, doc, degr)
+  clientButtonLines(c.id, scheme, doc, degr,
+    storyDarkModes.getOrDefault(story.name, dmAccommodate))
   if c.audience.len > 0:
     for d in degradationLines(c.audience, doc, images, view):
       if d != "(none)" and d notin degr:

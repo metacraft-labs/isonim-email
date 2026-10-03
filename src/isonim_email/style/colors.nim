@@ -426,6 +426,16 @@ proc darkerStep*(value: string; step = colourStep): string =
   let (r, g, b) = oklchToRgb(max(0.0, l - step), ch, h)
   Rgba(r: r, g: g, b: b, a: 1.0).toHex()
 
+const shadowSurface* = "#ffffff"
+  ## The surface a shadowed box without a background of its own is taken
+  ## to sit on, for its border (the default theme's surface, R-TBL-09).
+
+proc shadowBorderColour*(background: string): string =
+  ## R-TBL-09: the colour of the border a shadowed box without one of
+  ## its own gets, one step darker than its background (`shadowSurface`
+  ## when it has none).
+  darkerStep(if background.len > 0: background else: shadowSurface)
+
 proc invertLightness*(c: Rgba): Rgba =
   ## `c` with its OKLCH lightness inverted (L → 1 − L), chroma and hue
   ## kept, opaque: R-DRK-04's model of how a client that recolours a

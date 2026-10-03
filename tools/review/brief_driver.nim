@@ -32,6 +32,8 @@ import stories/seed_buttons
 import stories/seed_table
 import stories/seed_backgrounds
 import stories/seed_dark
+import stories/seed_contrast
+import stories/story_kit
 import stories/seed_navigation
 import stories/seed_raw
 
@@ -63,6 +65,9 @@ proc registerAll() =
     registerBrokenStories()
     registerStoryTree("receiptB",
       proc(): EmailNode = seedReceipt())
+    # The contrast fixtures (tests/stories/seed_contrast.nim).
+    registerContrastFixtures()
+    registerKitTrees(contrastFixtures)
   if getEnv("ISONIM_CAPTURE_LAYOUT") == "1":
     # The layout reference stories (see build_stories.nim).
     registerLayoutStories()

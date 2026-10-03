@@ -325,15 +325,20 @@ function headingOf(html: string): string {
 
 let receipt: StoryMessage;
 let alert: StoryMessage;
+let boxDark: StoryMessage;
 before(() => {
   assert.ok(
     existsSync(driver),
     `${driver} missing: run \`just email-shots-build\` first`,
   );
   const out = join(scratch, "stories");
-  const r = spawnSync(driver, [out, "receipt", "alert"], {
+  const r = spawnSync(driver, [out, "receipt", "alert", "boxDark"], {
     encoding: "utf8",
-    env: { ...process.env, ISONIM_CAPTURE_FIXTURES: "1" },
+    env: {
+      ...process.env,
+      ISONIM_CAPTURE_FIXTURES: "1",
+      ISONIM_CAPTURE_LAYOUT: "1",
+    },
   });
   assert.equal(r.status, 0, r.stderr);
   const manifest = JSON.parse(
@@ -349,7 +354,56 @@ before(() => {
   };
   receipt = load("receipt");
   alert = load("alert");
+  boxDark = load("boxDark");
 });
+
+// A one-part base64 HTML message holding the whole document `html`.
+function fromHtml(story: string, html: string): StoryMessage {
+  const b64 = Buffer.from(html, "utf8")
+    .toString("base64")
+    .replace(/(.{76})/g, "$1\r\n");
+  const mime = Buffer.from(
+    [
+      "From: IsoNim Shots <shots@example.test>",
+      "To: qa@example.test",
+      `Subject: [shots] ${story}`,
+      "Date: Thu, 01 Jan 2026 12:00:00 +0000",
+      `Message-ID: <${story}@example.test>`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      b64,
+      "",
+    ].join("\r\n"),
+  );
+  return { story, mime, html };
+}
+
+// `html` without its Thunderbird rules (catalogue R-DRK-08): block 6
+// and block 3's copies after the query.
+function withoutThunderbirdRules(html: string): string {
+  const out = html
+    .replace(
+      '<style>html:has(.moz-text-html){filter:url("#prefers-color-scheme: dark")}</style>',
+      "",
+    )
+    .replace(/\.moz-text-html \.e-[a-z0-9-]+\{[^}]*light-dark\([^}]*\}/g, "")
+    .replace(/body:has\(\.moz-text-html\)\{[^}]*\}/g, "");
+  assert.ok(!out.includes("light-dark("), "a Thunderbird copy is left");
+  assert.ok(!out.includes(":has("), "a Thunderbird rule is left");
+  return out;
+}
+
+// The share of an image's pixels that are exactly `hex`.
+function colourShare(img: RgbaImage, hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  let n = 0;
+  for (let i = 0; i < img.data.length; i += 4)
+    if (img.data[i] === r && img.data[i + 1] === g && img.data[i + 2] === b)
+      n++;
+  return n / (img.width * img.height);
+}
 
 // A one-part 7bit HTML message with short lines.
 function crafted(story: string, body: string): StoryMessage {
@@ -691,14 +745,20 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         );
         (luminance[client] ??= {})[entry.scheme] = meanLuminance(img);
       }
-      // Light is light in the pixels; Thunderbird adapts the message to
-      // dark itself (its dark reader), the others leave a message
-      // without dark styles as it is (the scheme probe below shows the
-      // scheme reaching the message).
+      // Light is light in the pixels, and so is dark: the receipt has no
+      // dark palette (`accommodate`), and every client keeps a message
+      // without dark styles as it is, Thunderbird included: the message
+      // root tells it the message handles its own colours, so its dark
+      // reader leaves it alone (catalogue R-DRK-08; the scheme probe
+      // below shows the scheme reaching the message).
       const l = luminance[client]!;
       assert.ok(l.light! > 150, `${client} light: mean luminance ${l.light}`);
-      if (client === "thunderbird")
-        assert.ok(l.dark! < 110, `${client} dark: mean luminance ${l.dark}`);
+      if (client === "thunderbird") {
+        assert.ok(l.dark! > 150, `${client} dark: mean luminance ${l.dark}`);
+        const dark = captured.find((r) => r.entry.scheme === "dark")!;
+        const ev = rec(rec(dark.meta.scheme_applied).evidence);
+        assert.equal(ev.root_filter, 'url("#prefers-color-scheme: dark")');
+      }
     }
     assert.equal(accounts.size, done, "one account per capture");
     process.stderr.write(
@@ -737,6 +797,66 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         `linux-desktop: scheme probe ${client}: dark share light ${share.light!.toFixed(3)}, dark ${share.dark!.toFixed(3)}\n`,
       );
     }
+  });
+
+  it("Thunderbird shows a designed message's dark palette through its copies, and adapts it without them (R-DRK-08)", async () => {
+    // The designed box story as the library writes it, and the same
+    // message with its Thunderbird rules taken out. Light: the rules
+    // change no pixel. Dark: with them, the designed palette, exactly;
+    // without them, Thunderbird's own adaptation (its page colour, the
+    // card cleared) and none of the palette.
+    // Both are delivered the same way (one base64 HTML part), so only
+    // the rules differ.
+    const full = fromHtml("boxDark", boxDark.html);
+    const bare = fromHtml("boxDarkBare", withoutThunderbirdRules(boxDark.html));
+    const { rows } = await runDesktop([full, bare], {
+      schemes: ["light", "dark"],
+    });
+    const png = (story: string, scheme: string): RgbaImage => {
+      const r = rows.find(
+        (x) => x.entry.story === story && x.entry.scheme === scheme,
+      );
+      assert.ok(
+        r !== undefined && r.entry.status === "done",
+        `${story} ${scheme}: ${r?.reason}`,
+      );
+      return readPng(r.png!);
+    };
+    const evidence = (story: string): Record<string, unknown> =>
+      rec(
+        rec(
+          rows.find(
+            (x) => x.entry.story === story && x.entry.scheme === "dark",
+          )!.meta.scheme_applied,
+        ).evidence,
+      );
+    const a = png("boxDark", "light");
+    const b = png("boxDarkBare", "light");
+    assert.equal(a.width, b.width);
+    assert.equal(a.height, b.height);
+    assert.ok(
+      Buffer.from(a.data).equals(Buffer.from(b.data)),
+      "light pixels differ",
+    );
+    const dark = png("boxDark", "dark");
+    assert.equal(
+      evidence("boxDark").root_filter,
+      'url("#prefers-color-scheme: dark")',
+    );
+    assert.equal(evidence("boxDark").root_color_scheme, "dark");
+    // The page below and around the message, the card, the band and the
+    // card's dark border: the designed palette's own colours.
+    assert.ok(colourShare(dark, "#0f1115") > 0.3, "page");
+    assert.ok(colourShare(dark, "#1a1d23") > 0.05, "card");
+    assert.ok(colourShare(dark, "#22262e") > 0.05, "band");
+    assert.ok(colourShare(dark, "#05070c") > 0, "border");
+    const adapted = png("boxDarkBare", "dark");
+    assert.equal(evidence("boxDarkBare").root_filter, "none");
+    for (const c of ["#0f1115", "#1a1d23", "#22262e", "#05070c"])
+      assert.equal(colourShare(adapted, c), 0, c);
+    process.stderr.write(
+      `linux-desktop: boxDark dark: page ${colourShare(dark, "#0f1115").toFixed(3)}, card ${colourShare(dark, "#1a1d23").toFixed(3)}\n`,
+    );
   });
 
   it("e2e linux desktop warm capture latency is recorded", async () => {

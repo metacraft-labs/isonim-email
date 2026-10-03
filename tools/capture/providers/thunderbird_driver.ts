@@ -29,7 +29,12 @@
 // switched at run time; the message pane then reports
 // prefers-color-scheme: dark to the message, and Thunderbird's own
 // dark-mode adaptation of messages (`mail.dark-reader.enabled`, on by
-// default) is left at its default and recorded.
+// default) is left at its default and recorded, with the message root's
+// computed `filter` (the signal that makes Thunderbird skip that
+// adaptation) and `color-scheme` (what `light-dark()` resolves by).
+// Thunderbird also removes every `@media` and `@supports` rule from a
+// message (`mail.html_sanitize.drop_conditional_css`, on by default);
+// the profile leaves that at its default too (catalogue R-DRK-08).
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -319,6 +324,12 @@ const frames = (w) => new Promise((r) => w.requestAnimationFrame(() => w.request
       ui_systemUsesDarkTheme: Services.prefs.getIntPref("ui.systemUsesDarkTheme"),
       theme: Services.prefs.getStringPref("extensions.activeThemeID", ""),
       dark_reader: Services.prefs.getBoolPref("mail.dark-reader.enabled", false),
+      // Thunderbird skips its dark adaptation of a message whose root's
+      // computed filter names "invert(1)" or
+      // "prefers-color-scheme: dark" (DarkReader.mjs); the message's
+      // own signal (catalogue R-DRK-08) shows here.
+      root_filter: cw.getComputedStyle(cd.documentElement).filter,
+      root_color_scheme: cw.getComputedStyle(cd.documentElement).colorScheme,
     },
     settleMs: Date.now() - t0,
   };
@@ -367,6 +378,8 @@ interface Measured {
     ui_systemUsesDarkTheme: number;
     theme: string;
     dark_reader: boolean;
+    root_filter: string;
+    root_color_scheme: string;
   };
   settleMs: number;
   [k: string]: unknown;

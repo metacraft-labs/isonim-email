@@ -22,6 +22,13 @@ import { pathToFileURL } from "node:url";
 import type { Browser, BrowserType } from "playwright-core";
 import { applyChain, transformChain, transformVersion } from "../transforms.ts";
 import { domAssertionsScript } from "../dom_assertions.ts";
+import { readPng } from "../contact_sheet.ts";
+import {
+  measureTextRuns,
+  pixelContrastAssertion,
+  textRunsScript,
+  type TextRun,
+} from "../pixel_contrast.ts";
 import { launchOptions } from "../launch.ts";
 import { installCapturePolicy } from "../fixture_host.ts";
 import type { AssertionResult } from "./harness.ts";
@@ -50,8 +57,9 @@ const storyAssetsDir = [
 
 export const BROWSER_EMULATION_ID = "browser-emulation";
 // Bump whenever output can change for reasons no other key field
-// captures.
-export const BROWSER_EMULATION_VERSION = "1";
+// captures. 2: forced dark is Blink's automatic dark mode over the light
+// scheme (it was a switch headless Chromium ignores, under the dark one).
+export const BROWSER_EMULATION_VERSION = "2";
 // Bump by hand when crop/mask/wait changes. 2: story images are served
 // from the local fixture host instead of failing to load.
 export const BROWSER_EMULATION_ADAPTER_VERSION = 2;
@@ -84,8 +92,8 @@ const ENGINE_KIND: Record<EngineName, Engine> = {
   firefox: "gecko",
 };
 
-// Forced dark exists only for Chromium (WebContentsForceDark); no other
-// engine emulates it.
+// Forced dark exists only for Chromium (Blink's automatic dark mode,
+// launch.ts); no other engine emulates it.
 const ENGINE_SCHEMES: Record<EngineName, Scheme[]> = {
   chromium: ["light", "dark", "forced-dark"],
   webkit: ["light", "dark"],
@@ -234,7 +242,12 @@ async function captureOne(
   const context = await browser.newContext({
     viewport: { width: req.viewport.width, height: 800 },
     deviceScaleFactor: req.viewport.dpr,
-    colorScheme: req.scheme === "light" ? "light" : "dark",
+    // Forced dark darkens the light design, as a client that inverts a
+    // message whatever it declares: the page is told it prefers light,
+    // so neither its dark rules nor its colour-scheme metas take part
+    // (Blink's automatic dark mode skips only a page whose used scheme is
+    // dark), and Blink darkens what the light scheme paints (launch.ts).
+    colorScheme: req.scheme === "dark" ? "dark" : "light",
   });
   try {
     // Nothing leaves the machine: story images come from the local
@@ -292,10 +305,19 @@ async function captureOne(
       detail:
         "axe-core not pinned — follow-up: pin axe-core (a flake.nix package or isonim/node_modules via yarn) and inject + axe.run it in-page here in captureOne, storing the violations count + first 5 rule IDs in the provenance",
     });
-    const failedChecks = gateAssertions
-      ? assertions.filter((a) => a.pass === false)
+    // Forced dark recolours what Blink paints, not the computed styles,
+    // so its contrast is measured on the screenshot (pixel_contrast.ts):
+    // the text runs are read here, measured after the capture, and the
+    // measurement replaces the computed check before the gate.
+    const forced = req.scheme === "forced-dark";
+    const runs = forced
+      ? ((await page.evaluate(textRunsScript())) as TextRun[])
       : [];
-    if (failedChecks.length > 0)
+    const gate = (): CaptureResult | null => {
+      const failedChecks = gateAssertions
+        ? assertions.filter((a) => a.pass === false)
+        : [];
+      if (failedChecks.length === 0) return null;
       return failed(
         {
           timing_ms: {
@@ -310,6 +332,11 @@ async function captureOne(
         `Tier-3 DOM assertion(s) failed (--assert): ` +
           failedChecks.map((a) => `${a.check}: ${a.detail}`).join("; "),
       );
+    };
+    if (!forced) {
+      const refused = gate();
+      if (refused !== null) return refused;
+    }
     const tCap = Date.now();
     const png = await page.screenshot({
       fullPage: true,
@@ -317,6 +344,17 @@ async function captureOne(
       caret: "hide",
     });
     timing.capture_ms = Date.now() - tCap;
+    if (forced) {
+      const measured = pixelContrastAssertion(
+        measureTextRuns(readPng(png), runs, req.viewport.dpr),
+        "forced-dark",
+      );
+      const at = assertions.findIndex((a) => a.check === "contrast");
+      if (at >= 0) assertions[at] = measured;
+      else assertions.push(measured);
+      const refused = gate();
+      if (refused !== null) return refused;
+    }
     return {
       request: req,
       status: "done",
