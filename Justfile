@@ -244,6 +244,22 @@ test-desktop-all: email-shots-build
 email-calibrate *args:
     node tools/capture/email-calibrate.ts {{args}}
 
+# What the credentials directory holds for each provider that reads it
+# ($ISONIM_EMAIL_CREDENTIALS_DIR, defaulting to
+# ${XDG_CONFIG_HOME:-$HOME/.config}/metacraft/dev-credentials/isonim-email):
+# per provider, whether its files are present, private (directory 0700,
+# no group- or world-readable file) and complete, and the files no
+# provider declares. Never prints a secret. `--strict` exits 1 when any
+# provider's credentials are unavailable; an unsafe directory always does.
+email-credentials-check *args:
+    node tools/capture/email-credentials.ts check {{args}}
+
+# Write placeholder credential files (0600, in 0700 directories) for the
+# named providers, or all of them, to fill in with your own accounts.
+# Never replaces an existing file.
+email-credentials-template *providers:
+    node tools/capture/email-credentials.ts template {{providers}}
+
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
 # when a Nim source or a story fixture image (compiled in) is newer
@@ -402,6 +418,7 @@ lint-ts:
     tsc -p tsconfig.json
     node tools/capture/email-shots.ts --help >/dev/null
     node tools/capture/email-calibrate.ts --help >/dev/null
+    node tools/capture/email-credentials.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"

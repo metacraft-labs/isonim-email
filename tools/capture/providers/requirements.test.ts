@@ -165,7 +165,10 @@ describe("credentials requirements", () => {
     mkdirSync(join(dir, "inspect"), { recursive: true });
     writeFileSync(
       join(dir, "inspect", "api.json"),
-      JSON.stringify({ api_key: SECRET }),
+      JSON.stringify({
+        schema: "isonim-email.credentials.v1",
+        api_key: SECRET,
+      }),
     );
     chmodSync(join(dir, "inspect", "api.json"), fileMode);
     chmodSync(dir, dirMode);

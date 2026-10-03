@@ -65,7 +65,15 @@ export type Requirement = RequirementBase &
     | { kind: "binary"; name: string }
     | { kind: "nix" }
     | { kind: "env-dir"; variable: string }
-    | { kind: "credentials"; files: string[] }
+    // Files in the credentials directory (requirements.ts): each entry
+    // an exact relative path ("mailgun/sending.json") or "<dir>/*.json",
+    // at least one account file directly in <dir>; `fields` lists, per
+    // entry, the JSON keys every matching file must carry.
+    | {
+        kind: "credentials";
+        files: string[];
+        fields?: Record<string, string[]>;
+      }
     | { kind: "host-os"; os: string[] }
     // A shared local service the harness starts once per run for every
     // provider that declares it (services.ts).
