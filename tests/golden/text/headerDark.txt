@@ -1,0 +1,12 @@
+Acme
+
+Docs (https://example.com/docs)
+Pricing (https://example.com/pricing)
+
+In a dark scheme the logo swaps to its light version and the links take the 
+link colour's dark pair.
+
+Acme, dark
+==========
+
+Acme Inc., 1 Example Street, Springfield

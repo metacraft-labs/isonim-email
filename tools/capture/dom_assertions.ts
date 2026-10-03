@@ -9,10 +9,9 @@
 // (meta.assertions), aggregates per-story assertions.json files, and
 // --assert gates captures on it.
 //
-// The seventh Tier-3 item, axe-core, is NOT in the snippet: it needs
-// the axe source injected into the page, and axe-core is not pinned
-// in the dev shell or in isonim's node_modules (see the captureOne
-// comment in email-shots.ts, which records the honest axe entry).
+// The seventh Tier-3 item, axe-core, is not in the snippet: it needs
+// the pinned axe source injected into the page, which axe.ts does after
+// the screenshot (providers/browser_emulation.ts captureOne).
 
 export interface DomAssertion {
   check: string;
@@ -20,8 +19,8 @@ export interface DomAssertion {
   detail: string;
 }
 
-// The six in-page checks, in snippet order (axe-core rides alongside
-// node-side — see email-shots.ts).
+// The six in-page checks, in snippet order (axe-core rides alongside:
+// axe.ts).
 export const DOM_ASSERTION_CHECKS = [
   "overflow",
   "touch",

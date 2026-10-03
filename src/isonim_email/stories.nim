@@ -38,6 +38,7 @@ import ./style/tokens
 import ./patterns
 import ./primitives
 import ./navigation
+import ./content
 import ./text
 
 ## The client families an edit to this module can change: read by

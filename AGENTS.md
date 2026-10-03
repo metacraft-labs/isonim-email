@@ -66,8 +66,15 @@ MJML 5's for the fixtures in `tests/conformance/`; MJML is pinned in
 `nix/mjml/` and nothing is fetched. The layout reference stories
 (`tests/stories/seed_layout.nim`) and the layout primitives' story set
 (`tests/stories/seed_primitives.nim`: `boxMinimal` … `sidebarInContext`)
-are captured with `ISONIM_CAPTURE_LAYOUT=1 just email-shots
-layoutOneColumn …`; they are outside the regression matrix.
+and the content patterns' story sets (`tests/stories/seed_structure.nim`,
+`seed_media.nim`: `headerMinimal` … `countdownInContext`) are
+captured with `ISONIM_CAPTURE_LAYOUT=1 just email-shots
+layoutOneColumn …`; they are outside the regression matrix. Images a
+story's render derives (the crops of `mailImage(crop)`) are written to
+`build/email-shots/.derived-assets/`, which the fixture host serves.
+Every backend-a capture also runs the pinned axe-core
+(`$ISONIM_EMAIL_AXE`, `tools/capture/axe.ts`) after its screenshot: the
+seventh Tier-3 check, gated by `--assert` like the others.
 
 `just test-vm` (not part of `just test`; needs KVM) runs the hermetic
 capture check, `checks.x86_64-linux.capture-linux-desktop`

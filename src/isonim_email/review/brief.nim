@@ -31,6 +31,7 @@ import ../style/tokens
 import ../patterns
 import ../primitives
 import ../navigation
+import ../content
 import ../lower/button_style
 import ../lower/table_style
 import ../lower/conditional
@@ -694,18 +695,28 @@ proc linksUnder(node: EmailNode; acc: var seq[tuple[text, href: string]]) =
   if tagLower(node) in ["a", "mailnavlink"]:
     let text = collectText(node).strip()
     acc.add((text, attrValue(node, "href")))
+  if tagLower(node) == "mailfooter":
+    # A footer pattern's links are its props.
+    for (key, label, fallback) in [("unsubscribe", "unsubscribe_label",
+        "Unsubscribe"), ("preferences", "preferences_label", "Preferences")]:
+      let href = attrValue(node, key)
+      if href.len > 0:
+        let text = attrValue(node, label)
+        acc.add(((if text.len > 0: text else: fallback), href))
   for c in node.children:
     linksUnder(c, acc)
 
 proc footerLine(doc: EmailNode): string =
-  ## The last top-level child bearing links is the footer; the line
-  ## names its links and the unsubscribe presence.
+  ## The message's last top-level child is its footer when it bears
+  ## links (an earlier band's links, a header's, are not a footer); the
+  ## line names its links and the unsubscribe presence.
   var links: seq[tuple[text, href: string]] = @[]
+  var last: EmailNode = nil
   for c in doc.children:
-    var found: seq[tuple[text, href: string]] = @[]
-    linksUnder(c, found)
-    if found.len > 0:
-      links = found
+    if c.kind == enElement:
+      last = c
+  if last != nil:
+    linksUnder(last, links)
   if links.len == 0:
     return "Footer: none (no links, no unsubscribe)."
   var names: seq[string] = @[]

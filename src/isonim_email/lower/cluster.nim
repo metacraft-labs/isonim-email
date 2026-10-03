@@ -34,6 +34,10 @@
 ## there: a declared degradation (keep such clusters short, or let them
 ## wrap to a `mailGrid`).
 ##
+## `role = navigation` (a `mailNavLinks`) puts the cluster in a one-cell
+## table carrying `role="navigation"` and the `label` as `aria-label`
+## (R-A11Y-10: landmark roles go on tables, never on a `<nav>`).
+##
 ## Ghost rows come from `mso/ghost.nim` only. Pure tree building:
 ## identical on the C and JS targets.
 
@@ -197,4 +201,34 @@ proc lowerCluster*(node: EmailNode; ctx: LowerCtx):
     result.holders.add(itemDiv)
   if ctx.target.outlookWord and items.len > 0:
     r.appendChild(container, ghostTableClose())
-  result.nodes = @[container]
+  let role = node.attrs.getOrDefault("role", "").strip().toLowerAscii()
+  if role.len == 0:
+    result.nodes = @[container]
+  elif role != "navigation":
+    result.diagnostics.add(EmailDiagnostic(severity: sevError,
+      code: codeVocabBadValue, message: "mailCluster role '" & role &
+        "' is not navigation (the one landmark a cluster carries, " &
+        "R-A11Y-10)", origin: node.origin, rules: @["R-A11Y-10"]))
+    result.nodes = @[container]
+  else:
+    # R-A11Y-10: a landmark's role goes on a table, the element Yahoo
+    # keeps a role on; never a `<nav>`. One cell, full width, the
+    # cluster inside it as it would be anywhere else.
+    let table = r.createElement("table")
+    table.origin = node.origin
+    r.setAttribute(table, "role", "navigation")
+    let label = node.attrs.getOrDefault("label", "").strip()
+    if label.len > 0:
+      r.setAttribute(table, "aria-label", label)
+    r.setAttribute(table, "width", "100%")
+    r.setAttribute(table, "border", "0")
+    r.setAttribute(table, "cellpadding", "0")
+    r.setAttribute(table, "cellspacing", "0")
+    r.setStyle(table, "width", "100%")
+    let tr = r.createElement("tr")
+    let td = r.createElement("td")
+    r.setStyle(td, "padding", "0")
+    r.appendChild(td, container)
+    r.appendChild(tr, td)
+    r.appendChild(table, tr)
+    result.nodes = @[table]

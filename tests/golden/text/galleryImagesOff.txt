@@ -1,0 +1,12 @@
+New prints
+==========
+
+With images blocked, every tile shows its alt text.
+
+Lake (https://example.com/photos/3)
+City (https://example.com/photos/4)
+Field (https://example.com/photos/5)
+Coast (https://example.com/photos/0)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -40,7 +40,9 @@ import ./passes/lint
 import ./patterns
 import ./primitives
 import ./navigation
+import ./content
 import ./text
+import ./crop
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -194,20 +196,46 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
   ## image that never published is worse than not sending. A publish
   ## that returns no absolute https URL is collected as `E-URL-SCHEME`
   ## (R-IMG-07) and its `src` is left unrewritten and unlisted.
+  ##
+  ## A `mailImage` with `crop` (`W:H` or `circle`, R-IMG-13) is cropped
+  ## here, between resolving its source and publishing it
+  ## (`crop.cropAsset`): the cropped asset is what is published, listed
+  ## and referenced. A crop that cannot be made or checked, an image
+  ## whose bytes P8 does not hold (an absolute URL, no store at all)
+  ## included, is `E-ASSET-CROP` and the `src` stays as written.
   result = (@[], @[])
-  if doc == nil or store == nil:
+  if doc == nil:
+    return
+  if store == nil:
+    # Nothing is resolved, so no crop can be made: each one asked for
+    # is reported, never dropped silently.
+    var stack: seq[EmailNode] = @[doc]
+    while stack.len > 0:
+      let node = stack.pop()
+      if node.kind == enElement and node.tag == "mailImage" and
+          node.attrs.getOrDefault("crop", "").strip().len > 0:
+        result.diagnostics.add(EmailDiagnostic(severity: sevError,
+          code: codeAssetCrop, message: "mailImage crop = '" &
+            node.attrs["crop"] & "' needs the image's bytes, and the " &
+            "render was given no asset store: render with one, or crop " &
+            "the image before sending and drop crop (R-IMG-13)",
+          origin: node.origin, rules: @["R-IMG-13"]))
+      for c in node.children:
+        stack.add(c)
     return
   var resolved: seq[tuple[src: string; url: string]] = @[]
   var failed: seq[string] = @[]
   var listedAssets: seq[AssetRef] = @[]
   var diags: seq[EmailDiagnostic] = @[]
 
-  proc resolveOne(src: string; node: EmailNode): string =
-    ## The URL `src` publishes to, "" when it stays as written.
+  proc resolveOne(src: string; node: EmailNode; cropValue = ""): string =
+    ## The URL `src` publishes to (cropped by `cropValue`), "" when it
+    ## stays as written.
+    let key = if cropValue.len > 0: src & "\x00" & cropValue else: src
     for entry in resolved:
-      if entry.src == src:
+      if entry.src == key:
         return entry.url
-    if src.len == 0 or src in failed:
+    if src.len == 0 or src in failed or key in failed:
       return ""
     var asset: AssetRef
     var found = false
@@ -229,13 +257,35 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
         failed.add(src)
         diags.add(toDiagnostic(e.msg, origin = node.origin))
     if not found:
+      if cropValue.len > 0 and src notin failed:
+        # An image P8 cannot read cannot be cropped (R-IMG-13).
+        failed.add(key)
+        diags.add(EmailDiagnostic(severity: sevError, code: codeAssetCrop,
+          message: "mailImage crop = '" & cropValue & "' cannot crop '" &
+            src & "': its bytes are not the render's (an absolute URL); " &
+            "give it as an asset name or asset\"…\", or crop it before " &
+            "sending and drop crop (R-IMG-13)", origin: node.origin,
+          rules: @["R-IMG-13"]))
       return ""
+    if cropValue.len > 0:
+      let spec = parseCrop(cropValue)
+      let cut = if spec.ok: cropAsset(asset, spec)
+        else: CropResult(error: "crop is W:H (two positive whole " &
+          "numbers) or circle")
+      if not cut.ok:
+        failed.add(key)
+        diags.add(EmailDiagnostic(severity: sevError, code: codeAssetCrop,
+          message: "mailImage crop = '" & cropValue & "' of '" &
+            asset.name & "': " & cut.error & " (R-IMG-13)",
+          origin: node.origin, rules: @["R-IMG-13"]))
+        return ""
+      asset = cut.asset
     let url = store.publish(asset)
     if not isPublishedUrl(url):
       # R-IMG-07: the HTML may only reference what the upload
       # returned, and the upload must return where the image now
       # lives. An empty or non-https answer means it did not.
-      failed.add(src)
+      failed.add(key)
       diags.add(EmailDiagnostic(
         severity: sevError, code: codeUrlScheme,
         message: "publishing asset '" & asset.name & "' returned '" &
@@ -244,7 +294,7 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
         origin: node.origin, rules: @["R-IMG-07"]))
       return ""
     asset.url = url
-    resolved.add((src, asset.url))
+    resolved.add((key, asset.url))
     var listed = false
     for a in listedAssets:
       if a.url == asset.url:
@@ -261,10 +311,13 @@ proc resolveAssets*(doc: EmailNode; store: AssetStore): tuple[
     if node.kind == enElement and
         node.tag.toLowerAscii() in ["img", "mailimage"]:
       # An image's dark copy (R-IMG-06) publishes like its source.
+      let cropValue = if node.tag == "mailImage":
+          node.attrs.getOrDefault("crop", "").strip() else: ""
       for key in ["src", "dark_src"]:
         if key == "dark_src" and key notin node.attrs:
           continue
-        let url = resolveOne(node.attrs.getOrDefault(key, ""), node)
+        let url = resolveOne(node.attrs.getOrDefault(key, ""), node,
+          cropValue)
         if url.len > 0:
           node.attrs[key] = url
     elif node.kind == enElement and node.tag in bandTagsWithImages:
@@ -436,6 +489,18 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
         if d.variant == "dark" and d.prop in ["color", "background-color"]:
           dark.add((d.node, d.prop, d.value))
       diags.add(lintDarkContrast(doc, dark))
+  if target.darkMode != dmNone:
+    # Adjacent bands that read as one once a client darkens them, or in
+    # the designed dark palette (layout-patterns.md §4.1).
+    var bandDark: seq[DarkDecl] = @[]
+    if target.darkMode == dmDesigned:
+      for blk in headRes.blocks:
+        if blk.kind == enHeadStyle and blk.priority == darkPriority:
+          for d in styled.head:
+            if d.variant == "dark" and d.prop == "background-color":
+              bandDark.add((d.node, d.prop, d.value))
+          break
+    diags.add(lintBandsMerge(doc, bandDark))
   let found = resolveAssets(doc, assets)
   diags.add(found.diagnostics)
   if target.darkMode != dmNone:

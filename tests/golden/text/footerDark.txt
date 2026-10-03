@@ -1,0 +1,15 @@
+The weekly digest, dark
+=======================
+
+The footer below takes its dark pairs: the grey text, the links, the social 
+plates.
+
+X: https://x.example/acme
+GitHub: https://github.example/acme
+
+Acme Inc., 1 Example Street, Springfield
+
+Unsubscribe (https://example.com/unsubscribe?t=7f3a9c2e5b1d4a60)
+Preferences (https://example.com/preferences)
+
+Acme is a trademark of Acme Inc.

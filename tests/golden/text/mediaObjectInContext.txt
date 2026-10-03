@@ -1,0 +1,24 @@
+Your order
+==========
+
+Three items are on their way.
+
+[The coast]
+
+Coast print, A3
+$24.00
+
+[Dunes]
+
+Desert print, A4
+$18.00
+
+[A field]
+
+Field print, A3
+$24.00
+
+Track your order: https://example.com/orders/1042
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -1,0 +1,15 @@
+Acme
+
+Track (https://example.com/track)
+Orders (https://example.com/orders)
+Help (https://example.com/help)
+
+Your order has shipped
+======================
+
+It arrives on Thursday.
+
+The header sits on white above the tinted band, with nothing between them.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

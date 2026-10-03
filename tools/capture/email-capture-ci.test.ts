@@ -368,7 +368,7 @@ const allPass = [
   {
     check: "axe",
     pass: null,
-    detail: "axe-core not pinned — follow-up: pin it",
+    detail: "recorded as not run",
   },
 ];
 

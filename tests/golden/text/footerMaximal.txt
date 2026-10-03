@@ -1,0 +1,24 @@
+The weekly digest
+=================
+
+Every part of the footer below, its address on three lines and its legal 
+text long.
+
+X: https://x.example/acme
+LinkedIn: https://linkedin.example/acme
+GitHub: https://github.example/acme
+YouTube: https://youtube.example/acme
+
+You are receiving this because you subscribed to the weekly digest at 
+example.com.
+
+Acme Incorporated
+1 Example Street, Suite 400
+Springfield, IL 62701, United States
+
+Unsubscribe from the weekly digest
+(https://example.com/unsubscribe?t=7f3a9c2e5b1d4a60)
+Email preferences (https://example.com/preferences)
+
+Acme and the Acme logo are trademarks of Acme Incorporated. Prices exclude 
+tax. Reference Supercalifragilisticexpialidociousnessless.

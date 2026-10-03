@@ -1,0 +1,9 @@
+Last chance
+===========
+
+With images blocked, the countdown shows its deadline as text.
+
+Offer ends 30 September 2026, 23:59 UTC
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

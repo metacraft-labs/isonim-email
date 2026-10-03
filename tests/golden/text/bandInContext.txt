@@ -1,0 +1,13 @@
+Three bands
+===========
+
+Adjacent bands differ enough to read as three in light and in dark mode.
+
+An amber band.
+
+A deep blue band.
+
+A white band.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

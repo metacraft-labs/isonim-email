@@ -1,0 +1,13 @@
+View in browser: https://example.com/view/2026-41
+
+Acme
+
+Archive (https://example.com/archive)
+
+The weekly digest
+=================
+
+With images blocked, the link above still reads, above the logo's alt text.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

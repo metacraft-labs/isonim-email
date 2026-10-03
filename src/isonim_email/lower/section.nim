@@ -64,6 +64,7 @@ import ../passes/styles
 import ../mso/ghost
 import ../mso/vml
 import ./background
+from ../passes/head import darkClassAttr
 
 export background
 
@@ -379,6 +380,10 @@ proc lowerSection*(node: EmailNode; ctx: LowerCtx):
     bleed.origin = node.origin
     if background.len > 0:
       r.setStyle(bleed, "background-color", background)
+      # The band's dark colour, edge to edge as in light (R-DRK-02).
+      let dark = node.attrs.getOrDefault(darkClassAttr, "")
+      if dark.len > 0:
+        r.setAttribute(bleed, "class", dark)
     for n in band.nodes:
       r.appendChild(bleed, n)
     if ctx.target.outlookWord:

@@ -29,6 +29,8 @@ import stories/seed_raw
 import stories/seed_backgrounds
 import stories/seed_dark
 import stories/seed_contrast
+import stories/seed_structure
+import stories/seed_media
 
 const goldenDir = currentSourcePath().parentDir / "golden" / "text"
 
@@ -46,6 +48,8 @@ registerNavigationStories()
 registerRawStories()
 registerBackgroundStories()
 registerDarkStories()
+registerStructureStories()
+registerMediaStories()
 
 const cssProperties = ["color", "background", "background-color",
   "background-image", "border", "border-radius", "border-collapse",

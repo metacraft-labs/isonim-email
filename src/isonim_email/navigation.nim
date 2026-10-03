@@ -13,11 +13,13 @@
 ##   monogram plates, PNG at 64×64 (`tools/social-icons/generate.py`),
 ##   embedded at compile time and published like any compile-time asset:
 ##   `light` (a dark plate for light backgrounds) and `dark` (a light
-##   plate for dark ones). `mode = auto` is `light` until the dark-image
-##   swap exists (R-IMG-06): a plate carries its own contrast, so it
-##   stays legible on a dark band. An `icon` of the application's own
-##   replaces the built-in one; a network without a built-in icon needs
-##   one.
+##   plate for dark ones). `mode = auto` is the pair under `darkMode =
+##   designed`: the `light` plate with the `dark` one as its `dark_src`,
+##   swapped by the dark block (R-IMG-06); under `none` and `accommodate`,
+##   which write no dark CSS, the `light` plate alone (a plate carries its
+##   own contrast, so it stays legible on a dark band). An `icon` of the
+##   application's own replaces the built-in one, and its `dark_icon` is
+##   its dark variant; a network without a built-in icon needs an icon.
 ## - `mailNavbar(align = center, separator, gap = space.5)` holds
 ##   `mailNavLink(href)`s, each expanding into a link: `color.link`
 ##   (dark-paired under `darkMode = designed`), bold, not
@@ -134,12 +136,15 @@ type
     network*: string
     href*: string
     icon*: string
+    dark_icon*: string
 
   NavbarProps* = object
     ## `mailNavbar`.
     align*: string = "center"
     separator*: string
     gap*: string
+    role*: string  ## a landmark role for the cluster (`mailNavLinks`)
+    label*: string ## its accessible name
 
   NavLinkProps* = object
     ## `mailNavLink`.
@@ -209,11 +214,20 @@ proc socialItemExpand(n: EmailNode; p: SocialItemProps;
   if network.len == 0:
     raise newException(PatternError, "mailSocialItem needs a network")
   var src = p.icon.strip()
+  var darkSrc = ""
+  let auto = sp.mode.strip().toLowerAscii() in ["auto", ""]
   if src.len == 0:
     src = socialIcon(network, variantOf(sp))
     if src.len == 0:
       raise newException(PatternError, "mailSocialItem network '" &
         network & "' has no built-in icon: give it an icon (R-IMG-12)")
+    if auto:
+      darkSrc = socialIcon(network, "dark")
+  elif auto:
+    darkSrc = p.dark_icon.strip()
+  if ctx.target.darkMode != dmDesigned:
+    # Only `designed` writes the dark CSS that swaps a pair (R-IMG-06).
+    darkSrc = ""
   let name = socialName(network)
   result = el(ctx, n, "mailImage")
   ctx.r.setAttribute(result, "src", src)
@@ -221,6 +235,10 @@ proc socialItemExpand(n: EmailNode; p: SocialItemProps;
   ctx.r.setStyle(result, "width", $size & "px")
   ctx.r.setStyle(result, "height", $size & "px")
   ctx.r.setAttribute(result, "href", p.href)
+  if darkSrc.len > 0:
+    # `mode = auto` under `designed`: the light plate, swapped for the
+    # dark one by the dark block (R-IMG-12, R-IMG-06).
+    ctx.r.setAttribute(result, "dark_src", darkSrc)
   if variantOf(sp) == "dark":
     # The light plates sit on a dark band: with images off, their alt
     # text is drawn light (R-IMG-03's contrast, on the band).
@@ -301,6 +319,10 @@ proc navbarExpand(n: EmailNode; p: NavbarProps; ctx: ExpandCtx): EmailNode =
   # The links' own 10px padding spaces wrapped lines; 8px more keeps
   # their hit areas apart (R-TBL-12).
   ctx.r.setStyle(result, "row-gap", "8px")
+  if p.role.len > 0:
+    ctx.r.setAttribute(result, "role", p.role)
+    if p.label.len > 0:
+      ctx.r.setAttribute(result, "label", p.label)
   if p.separator.len > 0:
     ctx.r.setAttribute(result, "separator", p.separator)
     # The separators' colour (R-TXT-02: never a client's default).

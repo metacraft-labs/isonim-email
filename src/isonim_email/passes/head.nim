@@ -334,6 +334,9 @@ proc ogsCopies(cls: string; decls: seq[Declaration]): seq[string] =
     result.add(emitStyleRule("[data-ogsb] ." & cls, bg))
 
 const
+  darkClassAttr* = "dark_class"
+    ## Where P6 leaves a section's dark class for its lowering (a
+    ## full-width band's outer div repaints in the dark scheme too).
   darkHideClass* = "e-dk-hide"
     ## The light image of a `dark_src` pair (R-IMG-06): hidden by the
     ## dark block.
@@ -603,6 +606,10 @@ proc assembleHead*(decls: seq[HeadDecl]; target: EmailTarget;
   if "dark" in kept:
     for (node, cls) in darkAttach:
       node.attachClass(cls)
+      if node.kind == enElement and node.tag == "mailSection":
+        # A full-width band paints its colour on an outer div too
+        # (R-LAY-09): the lowering gives that div the dark class.
+        node.attrs[darkClassAttr] = cls
     if designed:
       # The image lowering writes the dark copy only for a light image
       # carrying this class: a dropped dark block leaves one image.

@@ -103,16 +103,19 @@ suite "e2e Tier-3 DOM assertions catch overflow":
     check "table" in fixedMeta["fail_reason"].getStr()
     let fixedCaps = assertionsOf(outFixed, "overflowFixed")
     check fixedCaps.len == 1
-    var overflowSeen = false
+    var overflowSeen, axeSeen = false
     for a in fixedCaps[0]["assertions"]:
       if a["check"].getStr() == "overflow":
         overflowSeen = true
         check a["pass"].getBool() == false
       elif a["check"].getStr() == "axe":
-        check a["pass"].kind == JNull
+        axeSeen = true
       else:
         check a["pass"].getBool() == true
     check overflowSeen
+    # axe-core runs after the screenshot, which a capture refused by its
+    # DOM checks never takes.
+    check not axeSeen
 
     # Direction 2 (negative control): the fluid twin passes clean.
     let (fluidOut, fluidCode) = runTwin("overflowFluid", outFluid)
@@ -125,15 +128,16 @@ suite "e2e Tier-3 DOM assertions catch overflow":
     check fluidIndex.len == 1
     check fluidIndex[0]["status"].getStr() == "done"
     check fileExists(outFluid / fluidIndex[0]["png"].getStr())
+    # All seven checks run and pass, axe-core's included.
+    var checks: seq[string] = @[]
     for a in assertionsOf(outFluid, "overflowFluid")[0]["assertions"]:
-      if a["check"].getStr() == "axe":
-        check a["pass"].kind == JNull
-      else:
-        check a["pass"].getBool() == true
+      checks.add(a["check"].getStr())
+      check a["pass"].kind == JBool and a["pass"].getBool() == true
+    check checks.len == 7 and "axe" in checks
 
     let reason = fixedMeta["fail_reason"].getStr()
     echo "overflowFixed fails naming overflow + table (" &
       reason[0 .. min(60, reason.high)] &
-      "…); overflowFluid passes all six DOM checks"
+      "…); overflowFluid passes all seven checks"
     removeDir(outFixed)
     removeDir(outFluid)

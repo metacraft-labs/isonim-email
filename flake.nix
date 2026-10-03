@@ -255,7 +255,29 @@
               (pkgs.tesseract.override { enableLanguages = [ "eng" ]; })
             ];
 
+          # axe-core, pinned, for the seventh in-page check of a capture
+          # (tools/capture/axe.ts). nixpkgs does not package it, so the
+          # npm registry tarball is a fixed-output fetch pinned by the
+          # registry's own sha512 integrity, and its prebuilt axe.min.js
+          # (with its licence, MPL-2.0) is all a capture injects. To move
+          # the pin, change the version in both places and the hash to
+          # the new tarball's integrity (`npm view axe-core@<v> dist`).
+          axeCoreTarball = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/axe-core/-/axe-core-4.13.0.tgz";
+            hash = "sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==";
+          };
+          axeCore = pkgs.runCommand "isonim-email-axe-core-4.13.0" { } ''
+            mkdir -p $out
+            tar -xzf ${axeCoreTarball} -C $out --strip-components=1 \
+              package/axe.min.js package/LICENSE package/package.json
+          '';
+
           captureEnv = {
+            # The pinned axe-core (see axeCore above): the directory
+            # holding axe.min.js, which backend a injects into every
+            # capture.
+            ISONIM_EMAIL_AXE = "${axeCore}";
+
             # The webmail trees the selfhosted-webmail provider serves
             # (read-only store paths; configs and data are generated per
             # run under build/).

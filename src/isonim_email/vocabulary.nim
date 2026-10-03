@@ -143,6 +143,7 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("dark_src", akAttr, "Url"),
         attr("fluid_on_mobile", akAttr, "bool"),
         attr("border_radius", akStyle, "Len"),
+        attr("crop", akAttr, "string"),
       ]),
       TagDef(name: "mailSpacer", attrs: @[
         attr("height", akStyle, "Len"),
@@ -197,6 +198,7 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("network", akAttr, "string"),
         attr("href", akAttr, "Url"),
         attr("icon", akAttr, "Url"),
+        attr("dark_icon", akAttr, "Url"),
       ]),
       TagDef(name: "mailNavbar", attrs: @[
         attr("align", akAttr, "Align"),
@@ -249,6 +251,8 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("row_gap", akStyle, "Len"),
         attr("align", akAttr, "Align"),
         attr("separator", akAttr, "string"),
+        attr("role", akAttr, "navigation"),
+        attr("label", akAttr, "string"),
       ]),
       TagDef(name: "mailSidebar", attrs: @[
         attr("side", akAttr, "left|right"),

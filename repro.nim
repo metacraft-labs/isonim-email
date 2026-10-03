@@ -150,6 +150,7 @@ const emailTestSpecs = @[
   "t6_qp",
   "t6_unsubscribe",
   "t6_assets",
+  "t6_crop",
   "t6_size",
   "t6_message_api",
   "t6_headers",
@@ -160,6 +161,7 @@ const emailTestSpecs = @[
   "t7_stories",
   "t7_brief",
   "t7_patterns",
+  "t7_content_patterns",
   "t7_text_part_goldens",
   # WAIVER (2026-09-28): `repro test` is 76/80 — the 4 e2e EXECUTE actions
   # below fail ONLY under engine-monitored execution (`node: pthread_create:

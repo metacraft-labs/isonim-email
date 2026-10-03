@@ -1,0 +1,8 @@
+New prints, dark
+================
+
+The city (https://example.com/photos/4)
+A lake (https://example.com/photos/3)
+The coast (https://example.com/photos/0)
+
+Acme Inc., 1 Example Street, Springfield

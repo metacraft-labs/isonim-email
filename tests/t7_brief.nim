@@ -73,13 +73,10 @@ proc seedTwoColumn*(includeButton = true): EmailNode =
   r.appendChild(doc, foot)
   doc
 
-const twoColumnText = "Two columns, one brief\n\nPay $42.00\n"
-  ## Fixed plain-text alternative for the fixture (the plain-text
-  ## generator will produce these).
-
 proc renderTwoColumn(): StoryHtml =
-  ## The fixture through the current pipeline.
-  (renderPipeline(seedTwoColumn(), defaultTarget()), twoColumnText)
+  ## The fixture through the current pipeline, its plain-text part
+  ## generated like every story's.
+  renderStoryPipeline(seedTwoColumn(), defaultTarget())
 
 registerStory(Story(name: "twoColumn", group: "brief",
   description: "Two-column brief fixture.",

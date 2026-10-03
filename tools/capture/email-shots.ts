@@ -68,6 +68,7 @@ import {
   BROWSER_FAMILIES,
   BrowserEmulationProvider,
 } from "./providers/browser_emulation.ts";
+import { DERIVED_ASSETS_DIR } from "./fixture_host.ts";
 import { registeredProviders } from "./providers/registry.ts";
 import { installSignalTeardown } from "./providers/services.ts";
 import type { Scheme, StoryMessage, ViewportSpec } from "./providers/types.ts";
@@ -505,9 +506,13 @@ async function main(): Promise<void> {
 
   // Step 1: build the stories with the working-tree library.
   const tBuild = Date.now();
+  // The images a story derives (its crops) land where the fixture host
+  // serves them from.
+  mkdirSync(DERIVED_ASSETS_DIR, { recursive: true });
   const built = spawnSync(opt.driver, [runDir, ...opt.stories], {
     cwd: repoRoot,
     stdio: ["ignore", "inherit", "inherit"],
+    env: { ...process.env, ISONIM_EMAIL_DERIVED_ASSETS: DERIVED_ASSETS_DIR },
   });
   if (built.status !== 0)
     fail(`story driver exited with status ${built.status}`);

@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import type { Browser, BrowserType } from "playwright-core";
 import { applyChain, transformChain, transformVersion } from "../transforms.ts";
 import { domAssertionsScript } from "../dom_assertions.ts";
+import { AXE_ENV, axeAssertion, loadAxeSource, runAxe } from "../axe.ts";
 import { readPng } from "../contact_sheet.ts";
 import {
   measureTextRuns,
@@ -30,7 +31,7 @@ import {
   type TextRun,
 } from "../pixel_contrast.ts";
 import { launchOptions } from "../launch.ts";
-import { installCapturePolicy } from "../fixture_host.ts";
+import { DERIVED_ASSETS_DIR, installCapturePolicy } from "../fixture_host.ts";
 import type { AssertionResult } from "./harness.ts";
 import type {
   CaptureProvider,
@@ -53,13 +54,15 @@ const repoRoot = resolve(scriptDir, "..", "..", "..");
 const storyAssetsDir = [
   join(repoRoot, "tests", "stories", "assets"),
   join(repoRoot, "src", "isonim_email", "assets", "social"),
+  DERIVED_ASSETS_DIR,
 ];
 
 export const BROWSER_EMULATION_ID = "browser-emulation";
 // Bump whenever output can change for reasons no other key field
 // captures. 2: forced dark is Blink's automatic dark mode over the light
 // scheme (it was a switch headless Chromium ignores, under the dark one).
-export const BROWSER_EMULATION_VERSION = "2";
+// 3: the provenance records axe-core's result (it recorded none).
+export const BROWSER_EMULATION_VERSION = "3";
 // Bump by hand when crop/mask/wait changes. 2: story images are served
 // from the local fixture host instead of failing to load.
 export const BROWSER_EMULATION_ADAPTER_VERSION = 2;
@@ -231,6 +234,7 @@ async function captureOne(
   req: CaptureRequest,
   html: string,
   gateAssertions: boolean,
+  axeSource: string,
 ): Promise<CaptureResult> {
   const chain = transformChain(req.family, req.images);
   const t0 = Date.now();
@@ -295,16 +299,8 @@ async function captureOne(
     const assertions = (await page.evaluate(
       domAssertionsScript(),
     )) as AssertionResult[];
-    // axe-core, the seventh Tier-3 item, is NOT run: no axe-core is
-    // pinned in the dev shell or in isonim's node_modules, and an
-    // unpinned download would silently unpin the audit. Recorded as
-    // not-run (pass: null never gates) instead of faked.
-    assertions.push({
-      check: "axe",
-      pass: null,
-      detail:
-        "axe-core not pinned — follow-up: pin axe-core (a flake.nix package or isonim/node_modules via yarn) and inject + axe.run it in-page here in captureOne, storing the violations count + first 5 rule IDs in the provenance",
-    });
+    // axe-core, the seventh Tier-3 item, runs after the screenshot (its
+    // script tag and any scrolling must not reach the pixels): see below.
     // Forced dark recolours what Blink paints, not the computed styles,
     // so its contrast is measured on the screenshot (pixel_contrast.ts):
     // the text runs are read here, measured after the capture, and the
@@ -352,6 +348,15 @@ async function captureOne(
       const at = assertions.findIndex((a) => a.check === "contrast");
       if (at >= 0) assertions[at] = measured;
       else assertions.push(measured);
+    }
+    // The seventh Tier-3 item: the pinned axe-core, injected now that
+    // the screenshot is taken (tools/capture/axe.ts names the rules that
+    // apply to email), gated under --assert like the others.
+    const tAxe = Date.now();
+    const axe = await runAxe(page, axeSource);
+    timing.axe_ms = Date.now() - tAxe;
+    assertions.push(axeAssertion(axe));
+    {
       const refused = gate();
       if (refused !== null) return refused;
     }
@@ -365,8 +370,14 @@ async function captureOne(
           capture: timing.capture_ms,
           setcontent: timing.setcontent_ms,
           settle: timing.settle_ms,
+          axe: timing.axe_ms,
         },
         assertions,
+        axe: {
+          version: axe.version,
+          violations: axe.violations.length,
+          rules: axe.violations.slice(0, 5).map((v) => v.id),
+        },
         network: network(),
       },
     };
@@ -394,6 +405,8 @@ export class BrowserEmulationProvider implements CaptureProvider {
   private pw: Playwright | null = null;
   // One browser per (engine, forced-dark) key.
   private readonly browsers = new Map<string, Browser>();
+  // The pinned axe-core's source, read once at prepare.
+  private axeSource: string | null = null;
 
   constructor(env: Record<string, string | undefined> = process.env) {
     this.env = env;
@@ -433,6 +446,11 @@ export class BrowserEmulationProvider implements CaptureProvider {
         variable: "PLAYWRIGHT_BROWSERS_PATH",
         why: "the dev shell's pinned browser builds; browsers are never downloaded (run under `nix develop`)",
       },
+      {
+        kind: "env-dir",
+        variable: AXE_ENV,
+        why: "the dev shell's pinned axe-core, the seventh Tier-3 check of every capture (run under `nix develop`)",
+      },
     ];
   }
 
@@ -448,6 +466,11 @@ export class BrowserEmulationProvider implements CaptureProvider {
   // from the capture workers, where a check-then-set races and leaks
   // duplicate browsers whose open pipes keep node alive.
   async prepare(ctx: SessionCtx): Promise<void> {
+    if (this.axeSource === null) {
+      const axe = loadAxeSource(this.env);
+      if ("reason" in axe) throw new Error(`axe-core: ${axe.reason}`);
+      this.axeSource = axe.source;
+    }
     if (this.pw === null) {
       const driver = resolveDriver(this.env);
       if ("reason" in driver) throw new Error(driver.reason);
@@ -527,7 +550,13 @@ export class BrowserEmulationProvider implements CaptureProvider {
           };
         else
           try {
-            result = await captureOne(browser, req, message.html, ctx.assert);
+            result = await captureOne(
+              browser,
+              req,
+              message.html,
+              ctx.assert,
+              this.axeSource ?? "",
+            );
           } catch (err) {
             result = {
               request: req,

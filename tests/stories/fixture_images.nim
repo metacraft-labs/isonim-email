@@ -11,7 +11,10 @@
 ##
 ## The images are hand-made placeholders: `logo.png` (240×80, shown at
 ## 120 px), `shield.png` (96×96, shown at 48 px) and `scene.png`
-## (560×320, a flat landscape, shown at 280 px), all @2x.
+## (560×320, a flat landscape, shown at 280 px), all @2x; for the media
+## patterns, `photo-*.png` (flat illustrated scenes of different ratios,
+## cropped by the asset pass) and `countdown.gif` (a two-frame
+## seven-segment clock).
 ##
 ## Backend-independent (compile-time read + pure hashing).
 import isonim_email

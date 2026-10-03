@@ -35,7 +35,11 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { dirname, join, resolve } from "node:path";
-import { FIXTURE_HOST, resolveFixture } from "../fixture_host.ts";
+import {
+  DERIVED_ASSETS_DIR,
+  FIXTURE_HOST,
+  resolveFixture,
+} from "../fixture_host.ts";
 import type { LocalService, ServiceRunInfo } from "./services.ts";
 import type { AssetRequest, AssetsHandle, ServiceHandle } from "./types.ts";
 
@@ -95,7 +99,11 @@ export class AssetsService implements LocalService {
   constructor(
     opts: { assetsDir?: string | readonly string[]; bodyDelayMs?: number } = {},
   ) {
-    this.assetsDir = opts.assetsDir ?? [STORY_ASSETS_DIR, LIBRARY_ASSETS_DIR];
+    this.assetsDir = opts.assetsDir ?? [
+      STORY_ASSETS_DIR,
+      LIBRARY_ASSETS_DIR,
+      DERIVED_ASSETS_DIR,
+    ];
     this.bodyDelayMs = opts.bodyDelayMs ?? 0;
   }
 

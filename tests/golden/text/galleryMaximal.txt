@@ -1,0 +1,15 @@
+The whole collection
+====================
+
+Every print cropped to 3:2, four to a row, two to a row on a phone, 8px 
+apart.
+
+The coast (https://example.com/photos/0)
+A forest (https://example.com/photos/1)
+Dunes (https://example.com/photos/2)
+A lake (https://example.com/photos/3)
+The city (https://example.com/photos/4)
+A field (https://example.com/photos/5)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

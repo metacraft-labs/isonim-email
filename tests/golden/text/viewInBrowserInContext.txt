@@ -1,0 +1,13 @@
+View in browser: https://example.com/view/spring
+
+Spring launch
+=============
+
+Everything new this season, in one place.
+
+Inside a band, the same link is a plain row of its own:
+
+Read it online: https://example.com/view/spring
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

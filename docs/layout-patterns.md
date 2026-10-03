@@ -11,10 +11,11 @@
 > Built so far: the scaffolding (§2), every layout primitive (§3:
 > `mailStack`, `mailBox`, `mailColumns` with its four strategies,
 > `mailGrid`, `mailCluster`, `mailSidebar`) and `defineMailPattern`
-> (§4, §5). The content patterns are specified here and not yet
+> (§4, §5), and the structure and media patterns (§4.1, §4.2). The
+> other content patterns (§4.3–§4.5) are specified here and not yet
 > implemented; an element without a lowering is reported
 > (`E-LOWER-MISSING`), never emitted raw.
-> **Last Updated:** 2026-10-02
+> **Last Updated:** 2026-10-03
 
 Email has settled ways of building things. How tables nest, where widths
 and padding go, and how gaps, cards, grids, fixed+fluid rows and
@@ -300,7 +301,7 @@ rating scales, calendar links and footer links.
 
 |                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Props          | `gap: Len = tok"space.3"`; `row_gap: Len = gap`; `align: Align = left`; `separator: string = ""` (e.g. `"·"`, rendered `aria-hidden`)                                                                                                                                                                                                                                                                                                                                                                              |
+| Props          | `gap: Len = tok"space.3"`; `row_gap: Len = gap`; `align: Align = left`; `separator: string = ""` (e.g. `"·"`, rendered `aria-hidden`); `role: navigation` and `label` (a landmark: the cluster sits in a one-cell table with `role="navigation"` and `aria-label="{label}"`, R-A11Y-10)                                                                                                                                                                                                                            |
 | Lowering       | parent `div` with a zero font size and `text-align:{align}`. Each item is wrapped in a `display:inline-block;vertical-align:middle` div with `padding:0 {gap} {row_gap} 0` (the trailing side in the line's direction) and `font-size` reset; the item itself keeps its own padding and background inside it, so the wrapper never needs MJML's `inline-table`. ⟪mso⟫: a single-row ghost table with one `td` per item and the gap as the cell's padding; the cells carry no width (MJML `mj-social`, `mj-navbar`) |
 | Edge alignment | the last item has no trailing gap, whatever the alignment, so a one-line cluster is flush with its edges (and exactly centred). The row-wrap position is unknown at render time, so a wrapped line keeps its last item's gap, and every line its row gap below it: declared degradations                                                                                                                                                                                                                           |
 | NoCSS          | ✓ wraps                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -312,7 +313,7 @@ rating scales, calendar links and footer links.
 
 |                               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Props                         | `side: left\|right = left` (which of its two children is the fixed side: the first or the second; source order is the visual order, mirrored right to left); `fixed: Len` (px, required); `valign: VAlign = middle`; `gap: Len = tok"space.4"`; `switch_below: Len = 0` (0 = never switch); `reverse_on_mobile: bool = false` (switching pairs only, as R-LAY-11)                                                                                                                                                                                        |
+| Props                         | `side: left\|right = left` (which of its two children is the fixed side: the first or the second; source order is the visual order, mirrored right to left); `fixed: Len` (px, required); `valign: VAlign = middle`; `gap: Len = tok"space.4"`; `switch_below: Len = 0` (0 = never switch); `reverse_on_mobile: bool = false` (switching pairs only, as R-LAY-11); the fluid side's own `min_width` replaces its 320px minimum (R-TBL-11), as a column's does (a cluster of short links that wraps)                                                      |
 | Lowering (`switch_below = 0`) | a **two-cell table**: `<td width="{fixed}" style="width:{fixed}px" valign>` and `<td valign style="padding-left:{gap}">` with no width (the gap on the side facing the fixed cell). The fluid cell absorbs the rest everywhere, including Word. It never stacks, needs no CSS, and gives equal heights and vertical centring (_design rule_); its fluid side is checked at 320px (R-TBL-11)                                                                                                                                                              |
 | Lowering (`switch_below > 0`) | the hybrid pair (Cerberus thumbnail layout). The fixed side is `inline-block;width:{fixed}px`; the fluid side is `inline-block;min-width:{switch_below};max-width:{B−fixed−gap};width:100%`, plus the MSO ghost row. The gap is trailing padding inside the first side, invisible once the sides wrap. It wraps without CSS below `fixed + gap + switch_below` (with no gap between the sides: a declared degradation); below the breakpoint a class gives each side the full width and the second the gap on top. Heights stop being equal once wrapped |
 | Decoration sides              | in the table (`switch_below = 0`), a side that holds no text and paints a background (an accent bar, a colour tile) paints its whole cell, so it runs the height of the row                                                                                                                                                                                                                                                                                                                                                                              |
@@ -325,7 +326,9 @@ rating scales, calendar links and footer links.
   (caniemail `css-overflow`). Use `mailGrid` with a "View all" link.
 - **Frame** (aspect-ratio box): `aspect-ratio`/`object-fit` are Apple-only
   (caniemail `css-aspect-ratio`, `css-object-fit`). Images are cropped to
-  their ratio before sending. `mailHero` covers text over an image.
+  their ratio before sending: `mailImage(crop = "4:3")`, or `crop =
+circle` for an avatar, made by the asset pass (R-IMG-13). `mailHero`
+  covers text over an image.
 
 ---
 
@@ -336,60 +339,105 @@ expands **only** into primitives, scaffolding and leaves, never into raw
 HTML, except where "Special" says otherwise. Every pattern ships the
 **story set** in §5.
 
+Props are scalars (a string, a bool, a number or an enum: §5), so what a
+pattern holds several of (links, images, items) is its **content**: the
+elements written inside it, its slot. A required prop that is missing, or
+content of the wrong kind, is `E-VOCAB-BAD-VALUE` at the element.
+
 The notation is compact:
 
 - _Built from:_ the expansion.
 - _Special:_ anything that is not a pure composition, with its rule
   references.
-- _Text:_ the plain-text rendering.
+- _Text:_ the plain-text rendering. Where it differs from what the
+  expansion would write, the expansion carries it in `textOnly`, beside
+  the HTML in `htmlOnly`.
 - _A11y / Dark:_ obligations beyond the global rules.
 
 ### 4.1 Structure patterns
 
 **`mailHeader`** (logo + optional links)
 
-- _Props:_ `logo: Url`, `logo_width`, `logo_alt` (required), `href`,
-  `links: seq[(label, Url)]` (≤ 3 inline), `align`.
+- _Props:_ `logo: Url` (required), `logo_width` (px, required),
+  `logo_alt` (required), `logo_dark: Url` (the dark logo, R-IMG-06),
+  `href`, `align` (`left`, `center`, `right`: where the logo sits when it
+  is alone or above its links; default the start of the direction).
+- _Content:_ the links, `a` elements: up to 3 sit beside the logo.
 - _Built from:_ `mailSidebar(side = left, fixed = logo_width,
-valign = middle)`, logo image | `mailCluster(align = right)` of links.
-  With more than 3 links: a Stack of the logo above a centred Cluster.
+valign = middle, gap = space.4)`, logo image | `mailCluster(align = end,
+gap = space.4)` of links, whose side is held to 120px at 320px (short
+  links wrap; R-TBL-11). With more than 3 links: a `mailStack` of the logo
+  above a centred Cluster. Without links: the logo alone.
 - _Dark:_ logo per R-IMG-06 / R-DRK-06.
-- _Text:_ brand name line, links as `label (url)`.
+- _Text:_ the brand name (`logo_alt`) on a line, then the links as
+  `label (url)`, one per line.
 
 **`mailViewInBrowser`**
 
-- _Props:_ `href`, `label = "View in browser"`.
-- _Built from:_ a right-aligned small link row.
-- _Special:_ placed **after** the preheader (R-PRE-01; Cerberus).
-- _Text:_ `View in browser: url`.
+- _Props:_ `href` (required), `label = "View in browser"`, `align`
+  (default the end of the direction).
+- _Built from:_ a paragraph holding the link, `type.small`, the secondary
+  text colour (dark-paired under `darkMode = designed`), no margin. As a
+  child of the document it is a `mailSection` of its own with
+  `padding = 12px 0 0` (a full section's padding would push the message
+  down); anywhere else, the paragraph.
+- _Special:_ placed **after** the preheader (R-PRE-01; Cerberus): the
+  preheader is a document attribute written first in `<body>`, so a
+  `mailViewInBrowser` that is the document's first child follows it.
+- _Text:_ `View in browser: url` (the label, a colon, the URL).
 
 **`mailBand`** (full-bleed coloured band)
 
+- _Props:_ `background_color` (required), `padding` (the section's),
+  `text_align`.
 - _Built from:_ `mailSection(full_width = true)` (Cerberus full-bleed
-  section; MJML `full-width`).
+  section; MJML `full-width`), carrying the band's props and styles,
+  dark values included.
 - _Dark:_ adjacent bands must differ by ≥ 0.1 in OKLCH L in both light and
-  dark palettes. P10 warns when they would merge after partial inversion.
+  dark palettes. P10 warns (`W-DARK-BANDS-MERGE`) when two adjacent bands
+  of the document that differ by ≥ 0.1 in the light palette differ by
+  less after R-DRK-04's partial inversion, or, under `darkMode =
+designed`, in their designed dark colours (a band without a background
+  shows the document's).
 
 **`mailFooter`**
 
-- _Props:_ `address` (required), `unsubscribe: Url` (required for
-  non-transactional mail), `preferences: Url`, `legal: string`,
-  `social: seq[SocialItem]`, `reason: string` ("You're receiving this
-  because…").
-- _Built from:_ a centred Stack of `mailCluster` (social), small text,
-  `mailCluster(separator = "·")` of the links, and legal text.
-- _Special:_ text ≥ 12px (R-TXT-03 allows 12 only here); contrast ≥ 4.5:1
-  in all four palettes (_design rule_).
-- _Text:_ the address, then links one per line.
+- _Props:_ `address` (required), `unsubscribe: Url` (required unless
+  `transactional = true`), `unsubscribe_label = "Unsubscribe"`,
+  `preferences: Url`, `preferences_label = "Preferences"`,
+  `legal: string`, `reason: string` ("You're receiving this because…"),
+  `transactional: bool = false`, `align = center`, `color` (the text
+  colour, default `color.text.primary`: on a dark band, a light one).
+- _Content:_ what sits above the address, typically a `mailSocial` row.
+- _Built from:_ a `mailStack(gap = space.3)` aligned per `align`: the
+  content, the reason and the address (`type.small`), a
+  `mailCluster(separator = "·")` of the links (`type.small`), and the
+  legal text (12px).
+- _Special:_ text ≥ 12px (R-TXT-03 allows 12 only here: the legal text
+  is not `W-A11Y-FONT-SMALL`); contrast ≥ 4.5:1 in all four palettes
+  (light, designed dark, partial and full inversion; _design rule_): the
+  text is `color.text.primary`, dark-paired under `designed`, unless
+  `color` says otherwise (the contrast checks hold it to the same
+  thresholds). Not the secondary grey: the default theme's reads at
+  4.4:1 under either inversion model.
+- _Text:_ the content (social links as `Network: url`), the reason, the
+  address, then the links one per line as `label (url)`, then the legal
+  text.
 
 **`mailNavLinks`**
 
-- A `mailCluster` of up to 5 links.
+- _Props:_ `align = center`, `separator`, `gap`, `label` (the
+  navigation's accessible name, default `Navigation`).
+- _Content:_ the links, `a` elements.
+- _Built from:_ a `mailNavbar` (a `mailCluster`) of up to 5 links, each a
+  `mailNavLink`.
 - More than 5 is `W-PATTERN-NAV-LONG`, which suggests reducing the links.
   A collapsible menu is not offered (MJML's `mj-navbar` hamburger and
   Foundation's menu need media queries most clients drop).
-- _A11y:_ the Cluster gets `role="navigation"` on a presentation table, never
-  a `<nav>` element (R-A11Y-10).
+- _A11y:_ the Cluster sits in a one-cell table with `role="navigation"`
+  and `aria-label`, never a `<nav>` element (R-A11Y-10: landmark roles go
+  on tables).
+- _Text:_ one link per line, `label (url)`.
 
 ### 4.2 Hero and media patterns
 
@@ -402,7 +450,9 @@ valign = middle)`, logo image | `mailCluster(align = right)` of links.
 - A band whose content sits in one table cell, so it has a height and a
   vertical alignment everywhere, Word included (catalogue R-VML-06).
   Content in a hero is its implicit single column, as in a section; a
-  row of columns goes in a `mailColumns` inside it.
+  row of columns goes in a `mailColumns` inside it. It has a lowering of
+  its own (`lower/hero.nim`) and carries the review declarations like
+  the layout primitives.
 - _Background:_ CSS for every client but Word and a VML rectangle for
   Word (catalogue §6, R-VML-01). With an image and Outlook output on,
   it needs `height` or `min_height` (R-VML-02). A `min_height` hero's
@@ -421,35 +471,63 @@ valign = middle)`, logo image | `mailCluster(align = right)` of links.
 
 **`mailMediaObject`** (thumbnail + text)
 
-- _Props:_ `image`, `image_width` (px), `side`, `stack: never|below`,
-  `valign`.
+- _Props:_ `image: Url` (required), `image_width` (px, required),
+  `image_alt` (required unless `decorative`), `decorative: bool`,
+  `image_href`, `image_ratio` (`W:H`: the image cropped to it before
+  sending, R-IMG-13), `side: left|right = left` (where the image sits on
+  the desktop, mirrored right to left), `stack: never|below = never`,
+  `valign = top`, `gap = space.4`.
+- _Content:_ the text side.
 - _Built from:_
   - `mailSidebar(switch_below = 0)` when `stack = never`;
   - `mailSidebar(switch_below = 280px)` when `stack = below`, following the
-    Cerberus thumbnail ranges.
+    Cerberus thumbnail ranges (less beside a wide image: what a full-width
+    section leaves the text, at least 160px, so the pair is side by side on
+    the desktop). The image comes first in the source, so a
+    phone shows it above the text; `side = right` reverses the desktop
+    order only (`reverse_on_mobile`, R-LAY-11), which a right-to-left row
+    refuses (`E-LAYOUT-REVERSE-TEXT`).
 - _Text:_ the text content (the image alt only if not decorative).
 
 **`mailZigZag`**
 
+- _Props:_ `gap = space.6` (between rows).
+- _Content:_ `mailMediaObject`s, one per row.
 - A repeated `mailMediaObject(stack = below)`. The image side alternates on
   **desktop only**, and source order is image-then-text in every row, so on
   mobile the image always comes first (Cerberus `dir="rtl"`; Litmus).
+  The rows are a `mailStack`; the zig-zag sets each row's `stack` and
+  `side` (left on odd rows, right on even ones).
 - _Special:_ R-LAY-11 reversal on even rows; forbidden in right-to-left
-  documents.
+  documents (the even rows are `E-LAYOUT-REVERSE-TEXT`), so it has no
+  `rtl` story (§5).
 - _Text:_ each item in order.
 
 **`mailGallery`**
 
-- A `mailGrid` of linked images.
-- _Special:_ every image is cropped to one ratio before sending.
-  `object-fit` is not used (caniemail `css-object-fit`).
+- _Props:_ `ratio` (`W:H`, default `1:1`), `columns = 3`,
+  `mobile_columns` (2 when `columns` is 2 or 4, else 1), `gutter`.
+- _Content:_ the images, `mailImage`s (each with its `alt` and usually an
+  `href`).
+- A `mailGrid` of linked images, each full width in its item (a fluid
+  image, R-IMG-11, and `fluid_on_mobile`, R-IMG-09, so a phone's wider
+  item is filled), `min_item = 120px`.
+- _Special:_ every image is cropped to one ratio before sending
+  (`crop = ratio` on each image, R-IMG-13). `object-fit` is not used
+  (caniemail `css-object-fit`).
+- _Text:_ each image as `alt (url)`, one per line.
 
 **`mailCountdown`**
 
-- A server-rendered GIF (`Url`) plus a mandatory `deadline_text` in
-  absolute terms.
-- _Special:_ frame 1 must carry the message (R-OL-13). The alt is the
-  deadline text.
+- _Props:_ `src: Url` (the server-rendered GIF, required), `width` (px,
+  required), `height`, `deadline_text` (required, absolute terms: "Offer
+  ends 30 September 2026, 23:59 UTC"), `href`, `align`, `color` (the alt
+  text's colour with images off: on a dark band, a light one).
+- _Built from:_ a `mailImage` whose alt is the deadline text.
+- _Special:_ frame 1 must carry the message (R-OL-13). A missing or empty
+  `deadline_text` is `E-PATTERN-MISSING-TEXT`.
+- _Text:_ the deadline text on a line, followed by its URL in brackets
+  when linked.
 
 ### 4.3 Containers
 
@@ -710,7 +788,7 @@ validation, so its expansion goes through every pass.
 | Max columns at 320px | 2 text, or 3–4 icon/image/short-stat cells                         | R-TBL-11 check     |
 | Tap targets          | ≥ 44px tall; ≥ 8px apart                                           | R-BTN-06, R-TBL-12 |
 | Fonts                | body 16; secondary 14; legal ≥ 12; line-height 1.4–1.6             | R-TXT-03           |
-| Images               | exported at 2×; cropped to ratio before sending; no text in images | assets, R-IMG-04   |
+| Images               | exported at 2×; cropped to ratio before sending; no text in images | R-IMG-13, R-IMG-04 |
 
 Sources: Mailchimp's template width and mobile-friendliness guides,
 Cerberus's column minimums, goodemailcode.com's templates and Foundation

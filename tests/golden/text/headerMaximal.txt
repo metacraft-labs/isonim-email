@@ -1,0 +1,17 @@
+Acme
+
+Documentation (https://example.com/documentation)
+Pricing (https://example.com/pricing)
+Changelog (https://example.com/changelog)
+Community (https://example.com/community)
+Supercalifragilisticexpialidociousnessless
+(https://example.com/supercalifragilisticexpialidociousnessless)
+
+Everything in the header
+========================
+
+Five links do not fit beside the logo, so they sit centred under it and wrap 
+on a phone; the last one is a single long word.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

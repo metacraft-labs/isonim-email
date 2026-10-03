@@ -167,6 +167,11 @@ const
   codeAssetUnknown* = "E-ASSET-UNKNOWN"
     ## An asset the store cannot resolve. Raised from `assets.nim` as
     ## `AssetError`, like `codeUrlScheme`.
+  codeAssetCrop* = "E-ASSET-CROP"
+    ## A `mailImage` `crop` P8 cannot make or verify (R-IMG-13): a JPEG
+    ## or GIF whose size does not have the ratio, a `circle` that is not
+    ## a PNG, a source P8 cannot read (no store, an absolute URL), a
+    ## malformed value. Collected from `render.resolveAssets`.
   codeAssetUnpublished* = "E-ASSET-UNPUBLISHED"
     ## A hosted message references an asset that was never published
     ## (its `url` is empty), so the upload did not complete before the
@@ -217,6 +222,16 @@ const
     ## section's own column, a `mailGrid` item (R-TBL-10). Information:
     ## the ragged bottoms are a declared degradation, and the code makes
     ## the choice a visible one. Collected from `passes/lint.nim`.
+  codePatternNavLong* = "W-PATTERN-NAV-LONG"
+    ## `mailNavLinks` with more than 5 links: reduce them (no collapsing
+    ## menu is offered). Collected from `passes/validate.nim`.
+  codePatternMissingText* = "E-PATTERN-MISSING-TEXT"
+    ## A pattern's mandatory text alternative is missing (a countdown's
+    ## deadline text). Collected from `passes/validate.nim`.
+  codeDarkBandsMerge* = "W-DARK-BANDS-MERGE"
+    ## Two adjacent bands that differ in the light palette become
+    ## indistinguishable after partial inversion, or in their designed
+    ## dark colours. Collected from `passes/lint.lintBandsMerge`.
   codePatternGridOrphan* = "E-PATTERN-GRID-ORPHAN"
     ## `mailGrid(columns = 3, mobile_columns = 2)`: two per row on a
     ## phone leaves an orphan item in every second row. Collected from

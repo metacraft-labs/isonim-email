@@ -8,7 +8,11 @@
 ## `heroRtl` (Arabic, right to left), `heroImagesOff` (every kind of
 ## background, captured with images blocked: the fallback colours) and
 ## `heroDark` (`darkMode = designed`: a hero and a band in their dark
-## colours).
+## colours); and the rest of the hero's story set, `heroMinimal` (a
+## colour and its content), `heroMaximal` (every prop: an image, a
+## minimum height, its content at the bottom, centred, long text) and
+## `heroInContext` (the image-led hero, a fluid image first, between a
+## header and a band).
 ##
 ## The images are `tests/stories/assets/hero.png` (1200×640, a dusk
 ## landscape, dark), `band.png` (1200×400, light warm stripes) and
@@ -162,9 +166,60 @@ proc heroDarkDoc*(): EmailNode =
     "colours.")
   r.dkFooter(result)
 
+proc heroMinimalDoc*(): EmailNode =
+  let r = EmailRenderer()
+  result = r.storyDoc("Spring sale", "A hero with its defaults: a colour " &
+    "and its content.")
+  let h = r.el(result, "mailHero", [("background-color", "#0b3a6e")])
+  discard r.el(h, "h1", [("color", "#ffffff")], text = "Spring sale")
+  discard r.el(h, "p", [("color", "#ffffff")], text = "Twenty percent off " &
+    "everything until Sunday.")
+  discard r.el(h, "mailButton", attrs = [("href", "https://app.example.com/")],
+    text = "Shop now")
+  r.footer(result)
+
+proc heroMaximalDoc*(): EmailNode =
+  let r = EmailRenderer()
+  result = r.storyDoc("The spring collection", "A hero with every prop.")
+  let h = r.hero(result, [("min-height", "360px"), ("padding", "48px 0"),
+    ("background-size", "cover"), ("text-align", "center")],
+    [("background_position", "center top"),
+    ("background_repeat", "no-repeat"), ("vertical_align", "bottom")])
+  discard r.el(h, "h1", [("color", "#ffffff")], text = "The spring " &
+    "collection: twenty new pieces, made to last")
+  discard r.el(h, "p", [("color", "#e5e7eb"), ("margin", "8px 0 20px")],
+    text = "Linen, wool and recycled cotton, cut in our own workshop and " &
+    "shipped free until Sunday. Code " & longWord & ".")
+  discard r.el(h, "mailButton", attrs = [("href", "https://app.example.com/"),
+    ("align", "center")], text = "See the collection")
+  r.footer(result)
+
+proc heroInContextDoc*(): EmailNode =
+  let r = EmailRenderer()
+  result = r.storyDoc("New this week", "An image-led hero between a " &
+    "header and a card band.")
+  let head = r.band(result, "#ffffff", "16px 0")
+  discard r.el(head, "mailHeader", attrs = [("logo",
+    fixtureImageUrl("mark-outlined.png")), ("logo_width", "120"),
+    ("logo_alt", "Acme"), ("href", "https://example.com/")])
+  # The image-led hero: no background image, a fluid image first.
+  let h = r.el(result, "mailHero", [("background-color", "#f4f5f7"),
+    ("padding", "0 0 24px")])
+  discard r.el(h, "mailImage", [("width", "100%")], [("src",
+    fixtureImageUrl("scene.png")), ("alt", "A green valley at dawn")])
+  discard r.el(h, "h1", [("margin", "24px 0 8px")], text = "New this week")
+  discard r.el(h, "p", text = "Our new office opens on Monday, up on the " &
+    "hill above the valley.")
+  discard r.el(h, "mailButton", attrs = [("href", "https://app.example.com/")],
+    text = "Plan a visit")
+  let s = r.band(result)
+  discard r.el(s, "p", [("margin", "0")], text = "Below the hero, the " &
+    "message goes on in a white band.")
+  r.footer(result)
+
 # --- Registration -----------------------------------------------------------
 
-let backgroundStories*: array[6, KitStory] = [
+let backgroundStories*: array[9, KitStory] = [
   ("heroFullWidth", "A 320px hero across the container, its content " &
     "centred.", heroFullWidthDoc, false),
   ("sectionBackground", "A light striped band, a full-width landscape " &
@@ -176,6 +231,12 @@ let backgroundStories*: array[6, KitStory] = [
     heroImagesOffDoc, false),
   ("heroDark", "A hero and a band in their dark colours.", heroDarkDoc,
     true),
+  ("heroMinimal", "A hero with its defaults: a colour and its content.",
+    heroMinimalDoc, false),
+  ("heroMaximal", "A hero with every prop: an image, a minimum height, its " &
+    "content at the bottom, centred.", heroMaximalDoc, false),
+  ("heroInContext", "An image-led hero between a header and a band.",
+    heroInContextDoc, false),
 ]
 
 proc backgroundGroup(name: string): string = "background"

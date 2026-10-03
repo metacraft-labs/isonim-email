@@ -475,6 +475,13 @@ suite "the background stories":
     # the markup it exists to show.
     for st in backgroundStories:
       let html = renderBackgroundStory(st.name).html
+      if st.name in ["heroMinimal", "heroInContext"]:
+        # A hero with no background image: the band of colour whose
+        # content sits in one cell (R-VML-06), no image and no VML.
+        check "background-image:url(" notin html
+        check "<v:rect " notin html
+        check "<td valign=\"top\" align=\"left\" style=\"padding:" in html
+        continue
       check "background-image:url(" in html
       if st.name in ["heroFullWidth", "heroRtl", "heroImagesOff",
           "heroDark"]:

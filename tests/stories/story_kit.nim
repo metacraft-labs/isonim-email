@@ -8,6 +8,8 @@
 ## Backend-independent (tree building only), like the seed builders.
 import isonim_email
 import fixture_images
+when not defined(js):
+  import std/os
 
 type
   KitStory* = tuple[name, description: string;
@@ -84,14 +86,33 @@ proc dkFooter*(r: EmailRenderer; doc: EmailNode) =
   discard r.dkText(f, "p", "Acme Inc., 1 Example Street, Springfield",
     [("margin", "0")], tok"color.text.secondary")
 
+proc fixtureStore*(): AssetStore =
+  ## The capture fixture host as an asset store. The images a render
+  ## derives (the crops the asset pass makes, catalogue R-IMG-13) are
+  ## written, under their published names, to the directory the capture
+  ## CLI names in `ISONIM_EMAIL_DERIVED_ASSETS`, which the fixture host
+  ## serves; without it (the tests) nothing is written.
+  var hook: UploadHook = nil
+  when not defined(js):
+    let dir = getEnv("ISONIM_EMAIL_DERIVED_ASSETS")
+    if dir.len > 0:
+      hook = proc (a: AssetRef): string =
+        let path = dir / assetBaseName(a.name)
+        if a.bytes.len > 0 and (not fileExists(path) or
+            readFile(path) != a.bytes):
+          createDir(dir)
+          writeFile(path, a.bytes)
+        hostedUrl(fixtureHost, a)
+  memoryAssetStore(fixtureHost, hook)
+
 proc kitRender*(doc: EmailNode; dark = false): StoryHtml =
   ## Renders a story, publishing its images to the capture fixture host
   ## (the built-in social icons are served from there by the capture
-  ## harness, like the story fixtures).
+  ## harness, like the story fixtures, and so are its crops).
   var t = defaultTarget()
   if dark:
     t.darkMode = dmDesigned
-  renderStoryPipeline(doc, t, memoryAssetStore(fixtureHost))
+  renderStoryPipeline(doc, t, fixtureStore())
 
 proc renderOf*(build: proc(): EmailNode {.nimcall.};
     dark: bool): StoryRenderProc =

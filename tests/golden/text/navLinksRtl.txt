@@ -1,0 +1,11 @@
+الرئيسية (https://example.com/home)
+المستندات (https://example.com/docs)
+الدعم (https://example.com/support)
+
+مرحبا
+=====
+
+ثلاثة روابط في صف من اليمين.
+
+شركة أكمي، ١ شارع المثال، الرياض · إلغاء الاشتراك 
+(https://example.com/unsubscribe)

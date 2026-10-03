@@ -1,0 +1,9 @@
+A band, dark
+============
+
+A tinted band from edge to edge, its tint and text paired for the dark 
+scheme.
+
+Below the band, the card surface.
+
+Acme Inc., 1 Example Street, Springfield

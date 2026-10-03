@@ -20,7 +20,9 @@
 ## real destination (R-BTN-07). A `mailIf` names exactly one of `mso`
 ## (a boolean) and `family` (from the families with a selector; R-OL-02,
 ## R-RAW-05, R-RAW-06), and a `mailTable` holds exactly one `table`
-## (R-TBL-18).
+## (R-TBL-18). The content patterns' own checks are here too: a
+## `mailNavLinks` of more than five links (`W-PATTERN-NAV-LONG`) and a
+## `mailCountdown` without its deadline text (`E-PATTERN-MISSING-TEXT`).
 ##
 ## `mailRaw` (R-RAW-01…04): every use is reported once as `I-RAW-USED`,
 ## and each of its payloads is read by `raw.nim`: markup that would
@@ -187,6 +189,54 @@ proc checkBandNesting(node: EmailNode; acc: var seq[EmailDiagnostic]) =
       if a.expanded and through.len == 0:
         through = a.tag
     a = a.parent
+
+proc countTag(node: EmailNode; tag: string): int =
+  for c in node.children:
+    if c.kind == enElement:
+      if c.tag == tag:
+        inc result
+      result += countTag(c, tag)
+
+const navLinksMax = 5
+  ## Links in a `mailNavLinks` before `W-PATTERN-NAV-LONG`.
+
+proc checkContentPatterns(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## The content patterns' own diagnostics (layout-patterns.md §4): a
+  ## navigation of more than five links (`W-PATTERN-NAV-LONG`), and a
+  ## countdown without its deadline in text (`E-PATTERN-MISSING-TEXT`).
+  ## Read from the pattern element, whose props stay on it, and from
+  ## its expansion (the links are `mailNavLink`s there).
+  case node.tag
+  of "mailNavLinks":
+    var links = countTag(node, "mailNavLink")
+    if not node.expanded:
+      for c in node.children:
+        if c.kind == enElement and c.tag == "a":
+          inc links
+    if links > navLinksMax:
+      diags.add(EmailDiagnostic(severity: sevWarning,
+        code: codePatternNavLong,
+        message: "mailNavLinks with " & $links & " links: more than " &
+          $navLinksMax & " wrap into a block a reader skims past, and no " &
+          "collapsing menu is offered (most clients drop the media " &
+          "queries one needs): keep the five that matter, and put the " &
+          "rest in the footer (layout-patterns.md §4.1)",
+        origin: node.origin))
+  of "mailCountdown":
+    let deadline = node.attrs.getOrDefault("deadline_text",
+      node.styles.getOrDefault("deadline_text", "")).strip()
+    if deadline.len == 0:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codePatternMissingText,
+        message: "mailCountdown without deadline_text: the image's " &
+          "count is stale when the message is reopened, Word shows its " &
+          "first frame only (R-OL-13), and with images off nothing says " &
+          "when the offer ends; give the deadline in absolute terms " &
+          "(\"Offer ends 30 September 2026, 23:59 UTC\"), which is its " &
+          "alt text and its plain-text line (layout-patterns.md §4.2)",
+        origin: node.origin, rules: @["R-OL-13"]))
+  else:
+    discard
 
 proc checkHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
   ## R-BTN-07: a button, a navigation link or a social item goes
@@ -368,6 +418,9 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
     if node.kind == enElement and node.tag in ["mailButton", "mailNavLink",
         "mailSocialItem"]:
       checkHref(node, result)
+    if node.kind == enElement and node.tag in ["mailNavLinks",
+        "mailCountdown"]:
+      checkContentPatterns(node, result)
     if node.kind == enElement and node.tag == "mailIf":
       checkIf(node, result)
     if node.kind == enElement and node.tag == "mailTable":

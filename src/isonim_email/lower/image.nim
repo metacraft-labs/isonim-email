@@ -413,15 +413,20 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
   if alt.len > 0:
     # R-IMG-03: the alt text must read on the background it sits on.
     let bg = backgroundOf(node)
+    # The image's own colour, when it sets one (a light alt on a dark
+    # band), else the alt stack's.
+    var altColour = node.styles.getOrDefault("color", "").strip()
+    if altColour.len == 0 or altColour.startsWith("tok:"):
+      altColour = st.color
     try:
-      let fg = parseColor(st.color)
+      let fg = parseColor(altColour)
       let back = if bg.len > 0: parseColor(bg)
         else: parseColor("#ffffff")
       let ratio = contrastRatio(fg, back)
       if ratio < 4.5:
         diags.add(EmailDiagnostic(severity: sevWarning,
           code: codeA11yContrast,
-          message: "with images off, this image's alt text (" & st.color &
+          message: "with images off, this image's alt text (" & altColour &
             ") is at " & formatFloat(ratio, ffDecimal, 2) & ":1 on its " &
             "background (" & (if bg.len > 0: bg else: "#ffffff") &
             "), below 4.5:1 (R-IMG-03)",

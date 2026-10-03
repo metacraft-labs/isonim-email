@@ -1,0 +1,10 @@
+Home (https://example.com/home)
+Docs (https://example.com/docs)
+Pricing (https://example.com/pricing)
+
+Welcome, dark
+=============
+
+The links above take the link colour's dark pair.
+
+Acme Inc., 1 Example Street, Springfield

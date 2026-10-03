@@ -1,0 +1,15 @@
+Your order has shipped
+======================
+
+It arrives on Thursday.
+
+Track your parcel: https://example.com/track
+
+X: https://x.example/acme
+GitHub: https://github.example/acme
+
+Acme Inc., 1 Example Street, Springfield
+
+Unsubscribe (https://example.com/unsubscribe?t=7f3a9c2e5b1d4a60)
+
+Acme is a trademark of Acme Inc.

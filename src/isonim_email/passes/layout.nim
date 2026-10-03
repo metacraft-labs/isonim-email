@@ -785,7 +785,16 @@ proc solveSidebar(node: EmailNode; context: float; s: Solve; rtl: bool;
     # line at every width, so its fluid side is checked at 320px.
     let fluidSide = sides[1 - lb.fixedIndex]
     let content = narrowBox(node, s) - float(lb.fixedPx + lb.gutterPx)
-    let minimum = if hasText(fluidSide): 160.0 else: 120.0
+    var minimum = if hasText(fluidSide): 160.0 else: 120.0
+    # A side that declares its own minimum (a cluster of short links
+    # that wraps) is held to it, as a column's `min_width` is.
+    let own = rawValue(fluidSide, "min_width")
+    if own.len > 0:
+      try:
+        minimum = float(truncPx(resolveTok(own, s.theme)))
+      except StyleError:
+        diags.add(layoutDiag(fluidSide, codeVocabBadValue, "min_width '" &
+          own & "' is not a px length"))
     if content < minimum:
       diags.add(EmailDiagnostic(severity: sevWarning,
         code: codeLayoutMinColumn,

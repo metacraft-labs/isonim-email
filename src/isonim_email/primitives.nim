@@ -62,6 +62,8 @@ type
     row_gap*: string
     align*: string
     separator*: string
+    role*: string
+    label*: string
 
   SidebarProps* = object
     ## `mailSidebar` (layout-patterns.md §3.6).

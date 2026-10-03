@@ -910,7 +910,7 @@ proc lintInversion*(root: EmailNode;
   var counts: seq[int] = @[]
   var diags: seq[EmailDiagnostic] = @[]
   proc walk(node: EmailNode; ancestors: var seq[EmailNode]) =
-    if node == nil:
+    if node == nil or (node.kind == enElement and node.tag == "textOnly"):
       return
     if node.kind == enElement:
       let pair = textPairOf(node, ancestors)
@@ -1188,7 +1188,7 @@ proc darkContrastAdvice(bg: SchemeBackground): string =
 
 proc lintDarkContrastImpl(node: EmailNode; dark: openArray[DarkDecl];
                           diags: var seq[EmailDiagnostic]) =
-  if node == nil:
+  if node == nil or (node.kind == enElement and node.tag == "textOnly"):
     return
   if node.kind == enElement and node.tag.toLowerAscii() in ["h1", "h2",
       "h3", "h4", "h5", "h6", "p", "li", "span", "a", "td", "th"] and
@@ -1241,16 +1241,137 @@ proc lintDarkContrast*(root: EmailNode;
   ## Unparseable colours are skipped, as in the light check.
   lintDarkContrastImpl(root, dark, result)
 
+# ----------------------------------------------------------------------------
+# Adjacent bands that merge in dark mode (patterns §4.1, mailBand)
+# ----------------------------------------------------------------------------
+
+const bandStep* = 0.1
+  ## The OKLCH lightness two adjacent bands must differ by to read as
+  ## two (layout-patterns.md §4.1).
+
+proc bandOf(node: EmailNode): EmailNode =
+  ## The band a document child is: a section, wrapper or hero, or the
+  ## band an expanded pattern became; nil for anything else.
+  var n = node
+  while n != nil and n.kind == enElement:
+    if n.tag in ["mailSection", "mailWrapper", "mailHero"]:
+      return n
+    if not n.expanded:
+      return nil
+    var next: EmailNode = nil
+    for c in n.children:
+      if c.kind == enElement:
+        next = c
+        break
+    n = next
+  nil
+
+proc lintBandsMerge*(root: EmailNode;
+                     dark: seq[DarkDecl] = @[]): seq[EmailDiagnostic] =
+  ## `W-DARK-BANDS-MERGE` (P10, layout-patterns.md §4.1): two adjacent
+  ## bands of the document whose backgrounds differ by at least
+  ## `bandStep` in OKLCH lightness in the light palette, and by less
+  ## after R-DRK-04's partial inversion (light backgrounds darkened) or,
+  ## when `dark` holds the designed dark scheme, in their dark colours.
+  ## A band without a background shows the document's; a band with a
+  ## background image is the image's, and is not compared.
+  if root == nil or root.kind != enElement or root.tag != "mailDocument":
+    return
+  let white = Rgba(r: 255, g: 255, b: 255, a: 1.0)
+  var docBg = white
+  var docDark = ""
+  try:
+    let v = rawValue(root, "background-color")
+    if v.len > 0 and not v.startsWith("tok:"):
+      docBg = parseColor(v)
+      if docBg.a < 1.0:
+        docBg = blendOver(docBg, white)
+  except ValueError:
+    discard
+  docDark = darkValueOf(dark, root, "background-color")
+  type Band = tuple[node: EmailNode; light: Rgba; dark: string; ok: bool]
+  proc colourOf(band: EmailNode): Band =
+    if rawValue(band, "background-image").len > 0:
+      return (band, docBg, "", false)
+    let v = rawValue(band, "background-color")
+    var c = docBg
+    if v.len > 0 and not v.startsWith("tok:"):
+      try:
+        c = parseColor(v)
+        if c.a < 1.0:
+          c = blendOver(c, docBg)
+      except ValueError:
+        return (band, docBg, "", false)
+    var d = darkValueOf(dark, band, "background-color")
+    if d.len == 0 and v.len == 0:
+      d = docDark
+    (band, c, d, true)
+  proc lightness(c: Rgba): float = rgbToOklch(c).l
+  proc partial(c: Rgba): Rgba =
+    if relativeLuminance(c) > inversionPivot: invertLightness(c) else: c
+  var prev: Band
+  var havePrev = false
+  for child in root.children:
+    if child.kind != enElement:
+      continue
+    let band = bandOf(child)
+    if band == nil:
+      havePrev = false
+      continue
+    let cur = colourOf(band)
+    if havePrev and prev.ok and cur.ok:
+      let dl = abs(lightness(prev.light) - lightness(cur.light))
+      if dl >= bandStep:
+        let a = partial(prev.light)
+        let b = partial(cur.light)
+        let di = abs(lightness(a) - lightness(b))
+        if di < bandStep:
+          result.add(EmailDiagnostic(severity: sevWarning,
+            code: codeDarkBandsMerge,
+            message: "adjacent bands " & prev.light.toHex() & " and " &
+              cur.light.toHex() & " differ by " &
+              formatFloat(dl, ffDecimal, 2) & " in OKLCH lightness, but " &
+              "after partial inversion (" & formatFamilies(partialInverters) &
+              ") they become " & a.toHex() & " and " & b.toHex() & ", " &
+              formatFloat(di, ffDecimal, 2) & " apart, and read as one " &
+              "band: move them at least " & $bandStep & " apart where both " &
+              "stay light, or make one of them dark (layout-patterns.md " &
+              "§4.1, R-DRK-04)",
+            origin: band.origin, families: partialInverters,
+            rules: @["R-DRK-04"]))
+        elif prev.dark.len > 0 and cur.dark.len > 0:
+          try:
+            let da = parseColor(prev.dark)
+            let db = parseColor(cur.dark)
+            let dd = abs(lightness(da) - lightness(db))
+            if dd < bandStep:
+              result.add(EmailDiagnostic(severity: sevWarning,
+                code: codeDarkBandsMerge,
+                message: "adjacent bands " & prev.light.toHex() & " and " &
+                  cur.light.toHex() & " differ by " &
+                  formatFloat(dl, ffDecimal, 2) & " in OKLCH lightness, but " &
+                  "their designed dark colours " & da.toHex() & " and " &
+                  db.toHex() & " are " & formatFloat(dd, ffDecimal, 2) &
+                  " apart and read as one band in the dark scheme: move " &
+                  "them at least " & $bandStep & " apart " &
+                  "(layout-patterns.md §4.1)",
+                origin: band.origin, rules: @["R-DRK-02"]))
+          except ValueError:
+            discard
+    prev = cur
+    havePrev = true
+
 proc lintAltLength(node: EmailNode): seq[EmailDiagnostic] =
   ## R-IMG-04's length half (P1 owns presence): alt longer than 60
   ## characters warns — usually text baked into the image.
   if node.kind != enElement or node.tag notin ["mailImage", "img"]:
     return @[]
   let alt = node.attrs.getOrDefault("alt", "")
-  if alt.len > 60:
+  # Characters, not bytes: an Arabic alt is twice as many bytes.
+  if alt.runeLen > 60:
     return @[EmailDiagnostic(
       severity: sevWarning, code: codeA11yAltLong,
-      message: "<" & node.tag & "> alt is " & $alt.len &
+      message: "<" & node.tag & "> alt is " & $alt.runeLen &
         " characters (R-IMG-04: alt longer than 60 characters warns)",
       origin: node.origin, rules: @["R-IMG-04"],
     )]
@@ -1686,6 +1807,11 @@ proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
   let px = fontSizePx(size)
   if px <= 0:
     return
+  if px >= 12 and px < 14:
+    # R-TXT-03 allows 12px in one place: a footer's legal text.
+    for a in ancestors:
+      if a.kind == enElement and a.tag == "mailFooter" and a.expanded:
+        return
   if px < 12:
     result.add(EmailDiagnostic(severity: sevError, code: codeA11yFontTiny,
       message: "<" & node.tag & "> text is " & formatPx(px) & ": text " &
@@ -1704,6 +1830,9 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
   ## `lintTree` with the ancestor chain (for contrast backgrounds).
   if node == nil:
     return @[]
+  if node.kind == enElement and node.tag == "textOnly":
+    # Never written to the HTML: nothing in it is drawn.
+    return @[]
   case node.kind
   of enElement:
     let es = elementSlug(node.tag)
@@ -1718,7 +1847,9 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     var decls: seq[(string, string)] = @[]
     let lowerTag = node.tag.toLowerAscii()
     for prop, value in node.styles.pairs:
-      if (lowerTag, prop.toLowerAscii()) in nonCssProps:
+      if (lowerTag, prop.toLowerAscii()) in nonCssProps or node.expanded:
+        # A prop lowered to other markup, or any style of an expanded
+        # pattern (its expansion is what is emitted, and is linted).
         continue
       decls.add((prop, value))
     let own = backgroundDegradations(node)

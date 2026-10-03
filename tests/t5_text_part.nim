@@ -564,3 +564,42 @@ suite "format=flowed":
       check not l.endsWith(" ")
     # And a flowed reader keeps every line where it is.
     check sentText(doc) == text
+
+suite "the signature separator":
+  # RFC 3676 §4.3: a line that is exactly `-- ` ends the body for a
+  # flowed reader. The text part writes one only where the author did.
+  test "test_a_wrapped_double_dash_never_forms_a_signature_separator":
+    let r = EmailRenderer()
+    let (doc, s) = newDoc(r)
+    # The wrapper would put `--` alone on a soft line: the break moves.
+    let para = "a".repeat(74) & " -- " & "b".repeat(74)
+    discard r.child(s, "p", text = para)
+    # A `--` that ends a paragraph is a hard line, without the space.
+    let tail = "c".repeat(74) & " --"
+    discard r.child(s, "p", text = tail)
+    let text = textOf(doc)
+    check text == "a".repeat(74) & " \n-- " & "b".repeat(74) & "\n\n" &
+      "c".repeat(74) & " \n--\n"
+    for l in text.splitLines():
+      check l != "-- "
+    # A flowed reader rejoins both paragraphs into one line each.
+    check sentText(doc) == para & "\n\n" & tail & "\n"
+
+  test "test_a_pre_signature_separator_keeps_its_space":
+    let r = EmailRenderer()
+    let (doc, s) = newDoc(r)
+    discard r.child(s, "p", text = "Body.")
+    discard r.child(s, "pre", text = "line one  \n-- \nSigner\n--")
+    let text = textOf(doc)
+    # The author's `-- ` is kept; every other line is trimmed, and a
+    # `--` the author wrote without the space stays without it.
+    check text == "Body.\n\nline one\n-- \nSigner\n--\n"
+    # It goes out on the wire as the separator, which a flowed reader
+    # never joins to the next line.
+    let res = renderTree(doc)
+    let msg = toMessage(res, MessageHeaders(
+      fromAddr: mailbox("A", "a@example.com"),
+      to: @[mailbox("", "b@example.com")], subject: "x"))
+    let wire = qpDecode(textPlainBody(toRfc5322(msg, "seed")))
+    check "\r\nline one\r\n-- \r\nSigner\r\n--" in wire
+    check sentText(doc) == text

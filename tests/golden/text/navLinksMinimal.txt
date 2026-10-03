@@ -1,0 +1,11 @@
+Home (https://example.com/home)
+Docs (https://example.com/docs)
+Support (https://example.com/support)
+
+Welcome
+=======
+
+The navigation above is three links in a centred row.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

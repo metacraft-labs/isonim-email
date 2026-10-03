@@ -4,10 +4,11 @@
 // `https://x.test/`, content-hashed like any hosted asset
 // (`/{sha256[0:16]}/{name}`, catalogue R-IMG-07). Backend A answers
 // those requests from tests/stories/assets/ through a Playwright route,
-// and from the library's own built-in images (the social icons in
+// from the library's own built-in images (the social icons in
 // src/isonim_email/assets/social/, which a story publishes to the same
-// host), so story images render deterministically and without a
-// network. A
+// host) and from the images a story's render derived (its crops,
+// DERIVED_ASSETS_DIR), so story images render deterministically and
+// without a network. A
 // request whose hash prefix does not match the file's bytes, or whose
 // name is not a plain file in that directory, gets a 404 — the capture
 // then shows a broken image instead of a stale or wrong one.
@@ -18,10 +19,23 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { BrowserContext } from "playwright-core";
 
 export const FIXTURE_HOST = "https://x.test";
+
+// Images a story's render makes rather than reads (a crop the asset
+// pass cut from a fixture, catalogue R-IMG-13): the story driver writes
+// each one here, under its published name, when the capture CLI runs it
+// with ISONIM_EMAIL_DERIVED_ASSETS set to this directory, and the
+// fixture host serves it like a fixture (its hash prefix checked the
+// same way).
+export const DERIVED_ASSETS_DIR = join(
+  resolve(dirname(new URL(import.meta.url).pathname), "..", ".."),
+  "build",
+  "email-shots",
+  ".derived-assets",
+);
 
 export interface FixtureResponse {
   status: number;

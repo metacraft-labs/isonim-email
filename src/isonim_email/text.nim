@@ -54,6 +54,11 @@
 ##   quotations, `pre`, table rows and blocks, buttons, images and
 ##   cluster items. The MIME layer keeps the soft breaks
 ##   (`RenderedEmail.textFlowed`) and space-stuffs the lines.
+## - **The signature separator** `-- ` (RFC 3676 §4.3) ends the body
+##   for a flowed reader, so it is written only where the author wrote
+##   one: a `pre` line of `--` and white space is written `-- `. A
+##   wrapped paragraph never leaves `--` alone on a soft line (the break
+##   moves, so the line reads `-- word`).
 ##
 ## A walk that writes nothing but white space is `E-TEXT-EMPTY`: an
 ## empty text part is never sent, so the text is then empty and the
@@ -91,6 +96,9 @@ const
     ## Elements that contribute no text (`button` is a raw payload's
     ## form control: a template's button is a `mailButton`).
   space = {' ', '\t', '\n', '\r', '\f'}
+  sigSeparator = "-- "
+    ## RFC 3676 §4.3's signature separator: written only where the
+    ## author wrote one, as a `pre` line.
   softMark = '\x1F'
     ## Ends a line the wrapper broke inside a paragraph while the text is
     ## built; written as the soft break's trailing space at the end.
@@ -332,7 +340,18 @@ proc wrapInline(s: string; width: int; soft: bool): seq[string] =
     let line = collapse(part).strip()
     if line.len == 0:
       continue
-    let lines = wrapLine(line, width)
+    var lines = wrapLine(line, width)
+    if soft:
+      # A soft line that is `--` alone would go out as `-- `, the
+      # signature separator (RFC 3676 §4.3), and end the paragraph for a
+      # flowed reader: the break moves, so `--` starts the next line.
+      var i = 0
+      while i < lines.high:
+        if lines[i] == "--":
+          lines[i + 1] = "-- " & lines[i + 1]
+          lines.delete(i)
+        else:
+          inc i
     for i, l in lines:
       result.add(if soft and i < lines.high: l & softMark else: l)
 
@@ -462,7 +481,10 @@ proc preBlock(st: var State; node: EmailNode) =
     s = s[1 .. ^1]
   var b: Block
   for line in s.splitLines():
-    b.add(line.strip(leading = false, trailing = true))
+    let trimmed = line.strip(leading = false, trailing = true)
+    # The author's signature separator keeps its space (RFC 3676 §4.3):
+    # the one line the text part writes as `-- `.
+    b.add(if trimmed == "--" and line.len > 2: sigSeparator else: trimmed)
   while b.len > 0 and b[^1].len == 0:
     b.setLen(b.len - 1)
   st.add(b)
@@ -776,7 +798,8 @@ proc renderText*(doc: EmailNode): tuple[text: string;
     for l in b:
       # No trailing white space on a hard break; a soft break keeps
       # exactly one space (RFC 3676 §4.2).
-      var line = l.strip(leading = false, trailing = true)
+      var line = if l == sigSeparator: l
+        else: l.strip(leading = false, trailing = true)
       if line.endsWith(softMark):
         line = line[0 ..< ^1].strip(leading = false, trailing = true)
         if line.len > 0:

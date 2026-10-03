@@ -1,0 +1,15 @@
+Home (https://example.com/home)
+Documentation (https://example.com/documentation)
+Pricing and plans (https://example.com/pricing-and-plans)
+Community forum (https://example.com/community-forum)
+Supercalifragilisticexpialidociousnessless
+(https://example.com/supercalifragilisticexpialidociousnessless)
+
+Welcome
+=======
+
+Five links, the most a navigation holds, start-aligned and separated by 
+dots; on a phone the row wraps.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

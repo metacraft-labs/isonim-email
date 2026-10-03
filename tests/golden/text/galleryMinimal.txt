@@ -1,0 +1,9 @@
+New prints
+==========
+
+The coast (https://example.com/photos/0)
+A forest (https://example.com/photos/1)
+Dunes (https://example.com/photos/2)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

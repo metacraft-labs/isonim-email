@@ -36,6 +36,8 @@ import stories/seed_contrast
 import stories/story_kit
 import stories/seed_navigation
 import stories/seed_raw
+import stories/seed_structure
+import stories/seed_media
 
 proc splitMatrix(s: string): seq[string] =
   for part in s.split(','):
@@ -91,6 +93,10 @@ proc registerAll() =
     registerBackgroundStoryTrees()
     registerDarkStories()
     registerDarkStoryTrees()
+    registerStructureStories()
+    registerStructureStoryTrees()
+    registerMediaStories()
+    registerMediaStoryTrees()
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>

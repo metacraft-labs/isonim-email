@@ -1,0 +1,14 @@
+[Acme]
+
+Home (https://example.com/home)
+Docs (https://example.com/docs)
+Pricing (https://example.com/pricing)
+Sign in (https://example.com/sign-in)
+
+Welcome to Acme
+===============
+
+Your workspace is ready.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

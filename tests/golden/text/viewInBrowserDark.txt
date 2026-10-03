@@ -1,0 +1,8 @@
+View in browser: https://example.com/view/2026-41
+
+The weekly digest, dark
+=======================
+
+The small grey link above takes its dark pair in a dark scheme.
+
+Acme Inc., 1 Example Street, Springfield

@@ -27,6 +27,8 @@ import isonim_email/lower/conditional
 import isonim_email/patterns
 import isonim_email/primitives
 import isonim_email/navigation
+import isonim_email/content
+import isonim_email/crop
 import isonim_email/raw
 import isonim_email/passes/layout
 import isonim_email/support/[caniemail_data, families]
@@ -84,6 +86,8 @@ export conditional
 export patterns
 export primitives
 export navigation
+export content
+export crop
 export raw
 export layout
 export caniemail_data

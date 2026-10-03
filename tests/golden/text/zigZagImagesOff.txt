@@ -1,0 +1,21 @@
+Two places
+==========
+
+With images blocked, each row shows its image's alt text beside its text.
+
+[A lake]
+
+The lake
+--------
+
+A swim before lunch.
+
+[The city]
+
+The city
+--------
+
+A night tour of the old town.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

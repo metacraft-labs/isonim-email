@@ -232,8 +232,9 @@ function recordedAssertions(cap: Record<string, unknown>): unknown[] | null {
 
 // Tier-3 (--assert only): every story's assertions.json (written
 // by email-shots for every story in the index, even when its
-// captures failed) must record no failed DOM assertion. pass:null
-// (axe, unpinned — see email-shots.ts) never fails. Returns one
+// captures failed) must record no failed DOM assertion, axe-core's
+// included (axe.ts). pass:null (a check recorded as not run) never
+// fails. Returns one
 // message per failing assertion or unreadable record (empty = pass);
 // throws when the run holds no stories at all.
 export function tier3Check(runDir: string): string[] {
@@ -295,7 +296,7 @@ export function tier3Check(runDir: string): string[] {
       }
       for (const [j, a] of assertions.entries()) {
         // A result is an object whose pass is true, false or null
-        // (null: recorded as not run, e.g. axe); anything else is not
+        // (null: recorded as not run); anything else is not
         // a result, and is reported rather than skipped as a pass.
         if (
           !isRecord(a) ||

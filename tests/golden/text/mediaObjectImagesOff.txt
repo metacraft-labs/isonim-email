@@ -1,0 +1,15 @@
+Your trip
+=========
+
+With images blocked, each thumbnail shows its alt text beside its text.
+
+[The coast]
+
+Coast walk, Saturday at nine.
+
+[A lake]
+
+Lake swim, Sunday at ten.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

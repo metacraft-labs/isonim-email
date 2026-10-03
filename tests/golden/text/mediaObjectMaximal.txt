@@ -1,0 +1,19 @@
+Picked for you
+==============
+
+A linked square thumbnail on the right, centred against long text; on a 
+phone the image comes first.
+
+A forest (https://example.com/forest)
+
+A weekend in the forest cabins, with every meal included
+--------------------------------------------------------
+
+Two nights in a timber cabin under the pines, breakfast and dinner at the 
+lodge, and a guided walk on Sunday morning. Booking reference 
+Supercalifragilisticexpialidociousnessless.
+
+See the cabins: https://example.com/forest
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)
