@@ -251,3 +251,23 @@ suite "tokens resolve to literals with dark pairs":
         {"modes": {"dark": "{missing.key}"}}}}"""])
     expect TokenError:
       discard badMode.resolvePair(badModeModes, "a")
+
+suite "the default palette's link colour":
+  test "test_link_colour_passes_on_every_surface":
+    # The default theme paints links on its own surfaces (the text
+    # leaves' link default, outline and link buttons), so the link
+    # colour passes 4.5:1 on every surface token, not just white: the
+    # light value on the light surfaces, and the dark pair (painted
+    # under darkMode = designed) on the dark ones.
+    let theme = defaultTheme()
+    let link = parseColor(theme.lightFor("color.link"))
+    let darkLink = parseColor(theme.darkFor("color.link"))
+    for key in ["color.surface.canvas", "color.surface.card",
+        "color.surface.subtle"]:
+      let ratio = contrastRatio(link, parseColor(theme.lightFor(key)))
+      checkpoint(key & ": " & $ratio)
+      check ratio >= 4.5
+      let darkRatio = contrastRatio(darkLink,
+        parseColor(theme.darkFor(key)))
+      checkpoint(key & " (dark): " & $darkRatio)
+      check darkRatio >= 4.5

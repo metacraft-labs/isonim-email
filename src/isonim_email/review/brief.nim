@@ -30,6 +30,7 @@ import ../passes/layout
 import ../style/tokens
 import ../patterns
 import ../primitives
+import ../lower/button_style
 from ../lower/image import altStyle, altFitsOneLine
 
 ## The client families an edit to this module can change: read by
@@ -279,6 +280,12 @@ proc buttonLine(node: EmailNode): string =
   let fg = styleValue(node, "color")
   if fg.len > 0:
     parts.add(fg & " label")
+  let bc = styleValue(node, "border-color")
+  if bc.len > 0 and styleValue(node, "border-style").toLowerAscii() notin
+      ["", "none"]:
+    parts.add(styleValue(node, "border-width") & " " & bc & " border")
+  if styleValue(node, "text-decoration").toLowerAscii() == "underline":
+    parts.add("underlined")
   let rad = styleValue(node, "border-radius")
   if rad.len > 0:
     parts.add("rounded " & rad)
@@ -741,6 +748,69 @@ const alwaysDefect* = "\nAlways a defect, in every client: text cut at " &
   ## The standing check every brief ends with: a client's degradations
   ## never excuse clipped text.
 
+proc buttonForms(node: EmailNode; forms: var seq[string]) =
+  ## The Word forms (`lower/button_style.wordForm`) of the tree's
+  ## buttons, each once.
+  if node == nil:
+    return
+  if node.kind == enElement and node.tag == "mailButton":
+    let f = wordForm(node)
+    if f notin forms:
+      forms.add(f)
+  for c in node.children:
+    buttonForms(c, forms)
+
+proc wordButtonLines(doc: EmailNode; lines: var seq[string]) =
+  ## What the Word approximation shows of buttons Word does not draw
+  ## as a table (R-BTN-04, R-BTN-05).
+  var forms: seq[string] = @[]
+  buttonForms(doc, forms)
+  if "vml" in forms:
+    lines.add("fixed-width rounded buttons are VML in Word: this " &
+      "approximation draws each as a flat box labelled \"VML\" with a " &
+      "dashed outline (R-BTN-04)")
+  if "spacers" in forms:
+    lines.add("buttons with Word spacers get their padding in Word from " &
+      "mso-text-raise and mso-font-width, which this approximation " &
+      "does not apply: their labels sit unpadded (R-BTN-05)")
+
+proc spacerButtonAtTheRight(node: EmailNode; rtl: bool): bool =
+  ## A Word-spacer button placed at the right of its line: aligned
+  ## right, or at the start of right-to-left text.
+  if node == nil:
+    return false
+  if node.kind == enElement and node.tag == "mailButton" and
+      wordForm(node) == "spacers":
+    let a = attrValue(node, "align").toLowerAscii()
+    if a == "right" or (a.len == 0 and rtl):
+      return true
+  for c in node.children:
+    if spacerButtonAtTheRight(c, rtl):
+      return true
+  false
+
+proc clientButtonLines(id, scheme: string; doc: EmailNode;
+    lines: var seq[string]) =
+  ## What two real clients do to the Word-spacers option's buttons,
+  ## measured on the buttons' story set: Thunderbird's dark adaptation
+  ## clears the backgrounds of links, and litehtml (Claws Mail) places a
+  ## right-aligned inline block one padding width past the line's end.
+  ## (Thunderbird's dark handling of the default table button is a
+  ## defect to fix, not a degradation to expect, so it has no line.)
+  var forms: seq[string] = @[]
+  buttonForms(doc, forms)
+  if id == "thunderbird" and scheme != "light":
+    if "spacers" in forms:
+      lines.add("dark: a button with Word spacers has its fill on its " &
+        "link, and Thunderbird's dark adaptation clears a link's " &
+        "background: its label shows without the fill (R-BTN-05)")
+  if id == "claws-mail" and spacerButtonAtTheRight(doc,
+      directionLine(doc).len > 0):
+    lines.add("a right-aligned button with Word spacers (an inline " &
+      "block) sits one padding width past the right edge of the text " &
+      "(litehtml places a right-aligned inline block by its content box) " &
+      "(R-BTN-05)")
+
 proc degradationLines(family: string; doc: EmailNode;
                       images: seq[string];
                       view = BriefView()): seq[string] =
@@ -758,6 +828,8 @@ proc degradationLines(family: string; doc: EmailNode;
         if fam in d.families and declarationApplies(doc, d):
           result.add(if d.note.len > 0: d.note
                      else: d.name & " degrades as declared")
+      if fam == cfOutlookWord:
+        wordButtonLines(doc, result)
       if fam == cfApple:
         altDropLines(doc, result)
         if hasList(doc):
@@ -1137,6 +1209,7 @@ proc clientExpectedBlock*(story: Story; id, viewport,
     degr.add(c.rtlDegradation)
   if c.engine == "WebKitGTK" and hasList(doc):
     degr.add(webkitListMarkers)
+  clientButtonLines(c.id, scheme, doc, degr)
   if c.audience.len > 0:
     for d in degradationLines(c.audience, doc, images, view):
       if d != "(none)" and d notin degr:

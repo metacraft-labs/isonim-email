@@ -18,6 +18,7 @@ import stories/seed_broken
 import stories/seed_layout
 import stories/seed_primitives
 import stories/seed_leaves
+import stories/seed_buttons
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -72,6 +73,8 @@ proc main(): int =
     registerPrimitiveStories()
     # The content leaves' story set (tests/stories/seed_leaves.nim).
     registerLeafStories()
+    # The buttons' story set (tests/stories/seed_buttons.nim).
+    registerButtonStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

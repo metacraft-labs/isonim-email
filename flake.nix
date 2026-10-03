@@ -438,6 +438,12 @@
               # conformance fixtures with (see mjml above).
               ISONIM_EMAIL_MJML = "${mjml}/bin/mjml";
 
+              # The Python with fonttools that `just text-metrics`
+              # (tools/text-metrics/generate.py) reads the pinned fonts
+              # with; a variable rather than PATH, so it does not shadow
+              # the plain python3 above.
+              ISONIM_EMAIL_FONTTOOLS_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.fonttools ])}/bin/python3";
+
               shellHook = ''
                 echo "isonim-email dev shell — nim $(nim --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'), node $(node --version)"
               ''

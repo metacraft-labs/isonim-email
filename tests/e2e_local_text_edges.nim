@@ -1,8 +1,8 @@
 ## E2e: no text is cut off at the top of the reading pane.
 ##
 ## `e2e_local_text_not_clipped_at_the_top` renders the seed stories
-## (canary, receipt, alert), the content leaves' stories and the layout
-## primitives' stories, and loads each in the pinned Chromium, WebKit
+## (canary, receipt, alert), the content leaves' stories, the buttons'
+## stories and the layout primitives' stories, and loads each in the pinned Chromium, WebKit
 ## and Firefox at a phone (375 px at 3×) and a desktop width
 ## (`tools/capture/edge_ink.ts`): the first two device-pixel rows of
 ## every page hold no ink, only the background of whatever band starts
@@ -18,6 +18,7 @@ import isonim_email
 import stories/email_stories
 import stories/seed_primitives
 import stories/seed_leaves
+import stories/seed_buttons
 
 const repoRoot = parentDir(parentDir(currentSourcePath()))
 
@@ -44,6 +45,8 @@ suite "text at the edges":
       writeFile(work / s.name & ".html", renderLeafStory(s.name).html)
     for s in primitiveStories:
       writeFile(work / s.name & ".html", renderPrimitiveStory(s.name).html)
+    for s in buttonStories:
+      writeFile(work / s.name & ".html", renderButtonStory(s.name).html)
     let outFile = work / "edges.json"
     let (output, code) = execCmdEx("node " & quoteShell(repoRoot /
       "tools/capture/edge_ink.ts") & " " & quoteShell(work) & " " &
@@ -51,7 +54,8 @@ suite "text at the edges":
     checkpoint(output)
     check code == 0
     let pages = parseJson(readFile(outFile))
-    check pages.len == (3 + leafStories.len + primitiveStories.len) * 3 * 2
+    check pages.len == (3 + leafStories.len + primitiveStories.len +
+      buttonStories.len) * 3 * 2
     for page in pages:
       checkpoint($page)
       check page["inkTop"].getInt == 0

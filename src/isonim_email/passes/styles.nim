@@ -20,12 +20,14 @@
 ## that moved to cell padding (with `W-LAYOUT-MARGIN-CONVERTED`). Every
 ## other failure keeps the raw declaration beside its error diagnostic.
 ##
-## Two single-value consequences of `styles` being an `OrderedTable`:
-## translucent colours inline as the opaque blend alone (R-CSS-14's
-## blend-then-`rgba()` pair needs two declarations under one property
-## name, which the table cannot hold — the blend is Word-safe and correct
-## everywhere, just not translucent); and `HeadDecl` carries one
-## declaration each (P6 re-pairs where head CSS needs pairs).
+## A translucent colour on an HTML element inlines as R-CSS-14's pair:
+## with `outlookWord`, the opaque blend against the resolved background
+## first, then `rgba()`; the blend rides as the declaration's fallback
+## (`EmailNode.fallbacks`, R-CSS-19), which only the serialiser writes.
+## Without `outlookWord` it is `rgba()` alone. A vocabulary element's
+## translucent colour, and a head declaration's, stay the blend alone
+## (their lowering, or Word, needs one opaque colour), and `HeadDecl`
+## carries one declaration each (P6 re-pairs where head CSS needs pairs).
 ##
 ## An `md:` class arrives as a plain unprefixed inline style — the
 ## extractor only tags the `--variants` list (Justfile), so an untagged
@@ -46,6 +48,7 @@ import ../style/shorthand
 import ./lint
 import ../target
 import ../lower/text
+import ../lower/button_style
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -228,14 +231,30 @@ proc resolveBg(node: EmailNode; theme: EmailTheme): Rgba =
     n = n.parent
   parseColor("#ffffff")
 
-proc opaqueHex(node: EmailNode; theme: EmailTheme; value: string): string =
-  ## 6-digit hex for a colour value; translucent blends over the resolved
-  ## background (see the header note on why inline carries no `rgba()`).
+proc colourDecls(node: EmailNode; tag, prop, value: string;
+    theme: EmailTheme; target: EmailTarget; inline: bool):
+    seq[tuple[prop, value: string]] =
+  ## A colour declaration's inline form (R-CSS-14). Opaque: one hex
+  ## declaration. Translucent, inline on an HTML element (which reaches
+  ## the output as it is): with `outlookWord`, the opaque blend against
+  ## the resolved background, then `rgba()` (the caller keeps the blend
+  ## as the fallback of the pair, `EmailNode.fallbacks`, R-CSS-19);
+  ## without it, `rgba()` alone. A vocabulary element (`mail…`) and a
+  ## head declaration get the blend alone: their lowering, or Word,
+  ## needs one opaque colour.
   let fg = parseColor(value)
   if fg.a >= 1.0:
-    fg.toHex()
-  else:
-    blendOver(fg, resolveBg(node, theme)).toHex()
+    return @[(prop, fg.toHex())]
+  # A background blends over what is behind the element; a text or
+  # border colour over the element's own background.
+  let behind = if prop == "background-color": resolveBg(node.parent, theme)
+    else: resolveBg(node, theme)
+  let blend = blendOver(fg, behind).toHex()
+  if not inline or tag.startsWith("mail"):
+    return @[(prop, blend)]
+  if target.outlookWord:
+    return @[(prop, blend), (prop, fg.toRgba())]
+  @[(prop, fg.toRgba())]
 
 proc warnDarkRaw(diags: var seq[EmailDiagnostic]; prop, value: string;
                  origin: SourceSpan) =
@@ -383,10 +402,11 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
       return @[(prop, val)]
   if prop == "background":
     try:
-      let hex = opaqueHex(node, theme, val)
+      let decls = colourDecls(node, tag, "background-color", val, theme,
+        target, convertMargin)
       if target.darkMode == dmDesigned and not fromToken:
         warnDarkRaw(diags, "background-color", val, node.origin)
-      return @[("background-color", hex)]
+      return decls
     except StyleError:
       discard
     try:
@@ -424,10 +444,11 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
       ("border-color", ch)]
   if isColorProp(prop):
     try:
-      let hex = opaqueHex(node, theme, val)
+      let decls = colourDecls(node, tag, prop, val, theme, target,
+        convertMargin)
       if target.darkMode == dmDesigned and not fromToken:
         warnDarkRaw(diags, prop, val, node.origin)
-      return @[(prop, hex)]
+      return decls
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
       return @[(prop, val)]
@@ -568,6 +589,8 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       entries.add((k, v))
     for (k, v) in leafDefaults(node, target):
       entries.add((k, v))
+    for (k, v) in buttonDefaults(node, theme, target):
+      entries.add((k, v))
   except ThemeError as e:
     diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TXT-02"]))
   for k, v in node.styles.pairs:
@@ -598,6 +621,7 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     except StyleError:
       discard
   var res = initOrderedTable[string, string]()
+  var fallbacks = initOrderedTable[string, string]()
   for (key, raw) in entries:
     let (variant, base) = splitVariantKey(key)
     if variant != "":
@@ -647,8 +671,16 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       diags.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(val),
         profile, node.origin, removed = true))
       continue
+    var seen: seq[string] = @[]
     for (p, v) in normaliseDecl(node, tag, prop, val, fromToken, tkey,
         theme, target, fontSizePx, true, diags):
+      if p in seen:
+        # The second of a pair (R-CSS-14): the first becomes its
+        # fallback (R-CSS-19).
+        fallbacks[p] = res[p]
+      else:
+        fallbacks.del(p)
+        seen.add(p)
       res[p] = v
   if tag == "a":
     linkDefaults(node, theme, target, head, res)
@@ -710,7 +742,10 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
         except StyleError:
           discard
   if tag in bgAttrCarriers:
-    if "background-color" in res:
+    if "background-color" in fallbacks:
+      # A translucent background's attribute is its opaque blend.
+      node.attrs["bgcolor"] = fallbacks["background-color"]
+    elif "background-color" in res:
       try:
         node.attrs["bgcolor"] = normaliseColor(res["background-color"])
       except StyleError:
@@ -736,6 +771,21 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       if v in aligns:
         res["text-align"] = v
   node.styles = res
+  node.fallbacks = initOrderedTable[string, string]()
+  for k, v in fallbacks.pairs:
+    if k in res:
+      node.fallbacks[k] = v
+  if res.getOrDefault("color", "").startsWith("rgba(") and
+      "color" notin node.fallbacks:
+    # A colour inherited from an ancestor's translucent pair keeps the
+    # ancestor's blend as its fallback.
+    var a = node.parent
+    while a != nil:
+      if a.kind == enElement and "color" in a.styles:
+        if a.styles["color"] == res["color"] and "color" in a.fallbacks:
+          node.fallbacks["color"] = a.fallbacks["color"]
+        break
+      a = a.parent
 
 proc applyStylesImpl(node: EmailNode; theme: EmailTheme;
                      target: EmailTarget; profile: AudienceProfile;

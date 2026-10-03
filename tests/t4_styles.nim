@@ -412,20 +412,42 @@ suite "raw colours warn under darkMode=designed":
     let (_, calmDiags) = applyStyles(calm, defaultTheme(), defaultTarget())
     check calmDiags.len == 0
 
-suite "translucent colours inline as the blend":
-  test "test_translucent_colours_inline_as_blend":
+suite "translucent colours inline as the blend-then-rgba pair":
+  # rule: R-CSS-14
+  test "test_translucent_colours_inline_as_a_pair":
     # The catalogue's example value: rgba(0,0,0,.5) over the default
-    # white truncates to #7f7f7f (inline carries the blend alone — the
-    # style table holds one declaration per property).
+    # white truncates to #7f7f7f. With Word in the target the blend
+    # comes first, as the declaration's fallback, then rgba() for the
+    # other clients.
     let p = styled("p", [("color", "rgba(0,0,0,.5)")])
     let (_, diags) = applyStyles(p, defaultTheme(), defaultTarget())
     check diags.len == 0
-    check p.styles["color"] == "#7f7f7f"
-    # Against an ancestor background the blend follows it.
+    check p.styles["color"] == "rgba(0,0,0,.5)"
+    check p.fallbacks["color"] == "#7f7f7f"
+    check "color:#7f7f7f;color:rgba(0,0,0,.5);" in serialize(p)
+    # Against an ancestor background the blend follows it, and a
+    # background's pair mirrors its blend as the cell's bgcolor.
     let card = styled("div", [("background-color", "#1f6feb")],
       styled("p", [("color", "rgba(0,0,0,.5)")]))
     discard applyStyles(card, defaultTheme(), defaultTarget())
-    check card.children[0].styles["color"] == "#0f3775"
+    check card.children[0].fallbacks["color"] == "#0f3775"
+    let cell = styled("td", [("background-color", "rgba(0,0,0,.5)")])
+    discard applyStyles(cell, defaultTheme(), defaultTarget())
+    check cell.attrs["bgcolor"] == "#7f7f7f"
+    check cell.styles["background-color"] == "rgba(0,0,0,.5)"
+    # Without Word, rgba() alone.
+    var noWord = defaultTarget()
+    noWord.outlookWord = false
+    let q = styled("p", [("color", "rgba(0,0,0,.5)")])
+    discard applyStyles(q, defaultTheme(), noWord)
+    check q.styles["color"] == "rgba(0,0,0,.5)"
+    check "color" notin q.fallbacks
+    # A vocabulary element keeps the opaque blend alone: its lowering
+    # paints Word-safe hex.
+    let band = styled("mailSection", [("background-color", "rgba(0,0,0,.5)")])
+    discard applyStyles(band, defaultTheme(), defaultTarget())
+    check band.styles["background-color"] == "#7f7f7f"
+    check band.fallbacks.len == 0
 
 suite "text elements never inherit their colour":
   test "test_text_elements_get_the_theme_text_colour":
@@ -583,9 +605,9 @@ suite "an uncoloured text element gets the colour it would inherit":
     designed.darkMode = dmDesigned
     let (head, diags) = applyStyles(box, defaultTheme(), designed)
     check diags.len == 0
-    check own.styles["color"] == "#1f6feb"
+    check own.styles["color"] == "#0969da"
     check darkColorsOf(head, own).len == 0
-    check ownDark.styles["color"] == "#1f6feb"
+    check ownDark.styles["color"] == "#0969da"
     check darkColorsOf(head, ownDark) == @["#7aa7ff"]
 
   test "test_nearest_coloured_ancestor_wins":

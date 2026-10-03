@@ -76,6 +76,39 @@ describe("wordApprox step 2: CSS Word ignores is stripped", () => {
     assert.ok(out.includes(`<div style="">y</div>`), `grid kept:\n${out}`);
   });
 
+  it("lays a cell out with its mso-padding-alt, as Word does", () => {
+    // A table button: the padding is on the link (ignored), Word's on
+    // the cell as mso-padding-alt.
+    const out = wordApprox(
+      doc(
+        ``,
+        `<table><tr><td style="border:none;mso-padding-alt:12px 24px;background-color:#1f6feb;">` +
+          `<a style="display:inline-block;padding:12px 24px;mso-padding-alt:0px;">Go</a></td>` +
+          `<td style="padding:4px;mso-padding-alt:8px">x</td><td style="padding:6px">y</td></tr></table>`,
+      ),
+    );
+    assert.ok(
+      out.includes(
+        `<td style="border:none;mso-padding-alt:12px 24px;background-color:#1f6feb;padding:12px 24px;">`,
+      ),
+      `cell padding missing:\n${out}`,
+    );
+    assert.ok(
+      out.includes(`<a style="mso-padding-alt:0px;">Go</a>`),
+      `link kept its padding:\n${out}`,
+    );
+    // mso-padding-alt wins over the cell's own padding; a cell without
+    // one keeps its padding.
+    assert.ok(
+      out.includes(`<td style="mso-padding-alt:8px;padding:8px;">x</td>`),
+      `mso-padding-alt did not win:\n${out}`,
+    );
+    assert.ok(
+      out.includes(`<td style="padding:6px">y</td>`),
+      `padding lost:\n${out}`,
+    );
+  });
+
   it("strips box-shadow, which Word does not draw, and keeps the box's border", () => {
     const out = wordApprox(
       doc(

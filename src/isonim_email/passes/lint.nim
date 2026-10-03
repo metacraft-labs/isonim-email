@@ -58,6 +58,8 @@ import std/[math, strutils, tables]
 import ../diagnostics
 import ../renderer
 import ../style/colors
+import ../style/units
+import ../style/shorthand
 import ../support/families
 import ../target
 
@@ -727,7 +729,7 @@ proc lintContrast(node: EmailNode;
   ## R-A11Y-07: WCAG contrast below 4.5:1 warns (below 3:1 for large
   ## text: 24px+, or 18.66px+ bold). Foreground from the element's
   ## own `color` (absent means skipped), background from the nearest
-  ## ancestor `background-color`, else white. Unparseable colours
+  ## ancestor `background-color` (a button's own fill first), else white. Unparseable colours
   ## are skipped: P2 owns bad values, not this check.
   ##
   ## Light-scheme pairs only: dark-mode and inversion simulation
@@ -737,12 +739,17 @@ proc lintContrast(node: EmailNode;
   if node.kind != enElement:
     return @[]
   if node.tag.toLowerAscii() notin ["h1", "h2", "h3", "h4", "h5", "h6",
-      "p", "li", "span", "a", "td"]:
+      "p", "li", "span", "a", "td", "mailbutton"]:
     return @[]
   if "color" notin node.styles:
     return @[]
   var bgValue = ""
+  if node.tag == "mailButton":
+    # A button's label sits on its own fill, when it has one.
+    bgValue = node.styles.getOrDefault("background-color", "")
   for i in countdown(ancestors.high, 0):
+    if bgValue.len > 0:
+      break
     if ancestors[i] != nil and
         "background-color" in ancestors[i].styles:
       bgValue = ancestors[i].styles["background-color"]
@@ -1101,6 +1108,51 @@ proc lintTapSpacing(node: EmailNode): seq[EmailDiagnostic] =
           " links or buttons: a thumb hits the neighbour (R-TBL-12)",
         origin: node.origin, rules: @["R-TBL-12"]))
 
+proc lintButtonTap(node: EmailNode): seq[EmailDiagnostic] =
+  ## R-BTN-06: a button is at least 44px tall: its line height, its
+  ## vertical padding and its borders (read after the style pass, which
+  ## gave it the theme's defaults).
+  if node.kind != enElement or node.tag != "mailButton":
+    return
+  let st = node.styles
+  if "height" notin st and "line-height" notin st and "padding" notin st and
+      "padding-top" notin st and "padding-bottom" notin st:
+    # Not styled yet: the style pass gives every button its padding and
+    # line height, so a tree linted before it has nothing to measure.
+    return
+  var h = 0.0
+  let height = st.getOrDefault("height", "")
+  if height.len > 0 and pxOf(height) >= 0:
+    h = pxOf(height)
+  else:
+    var lh = pxOf(st.getOrDefault("line-height", ""))
+    if lh < 0:
+      let fs = pxOf(st.getOrDefault("font-size", "16px"))
+      lh = (if fs > 0: fs else: 16.0) * 1.2
+    var sides = [0.0, 0.0, 0.0, 0.0]
+    let pad = st.getOrDefault("padding", "")
+    if pad.len > 0:
+      try:
+        let s = expandBox(pad)
+        for i in 0 .. 3:
+          sides[i] = toPx(s[i])
+      except StyleError:
+        discard
+    for (i, k) in [(0, "padding-top"), (2, "padding-bottom")]:
+      if k in st and pxOf(st[k]) >= 0:
+        sides[i] = pxOf(st[k])
+    var border = 0.0
+    if st.getOrDefault("border-style", "none").toLowerAscii() notin
+        ["", "none"]:
+      border = max(0.0, pxOf(st.getOrDefault("border-width", "0")))
+    h = lh + sides[0] + sides[2] + 2 * border
+  if h < 44:
+    result.add(EmailDiagnostic(severity: sevWarning,
+      code: codeA11yTapTarget,
+      message: "mailButton is " & formatPx(h) & " tall: a tap target " &
+        "needs 44px (line height plus vertical padding and borders; " &
+        "R-BTN-06)", origin: node.origin, rules: @["R-BTN-06"]))
+
 proc msoNamesIn*(text: string): seq[string] =
   ## Every `mso-*` property name declared in a CSS or markup fragment
   ## (`mso-hide:all`, `mso-text-raise: 4px`), in order. A name counts
@@ -1245,6 +1297,7 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     result.add(lintImageFormat(node, profile))
     result.add(lintRagged(node))
     result.add(lintTapSpacing(node))
+    result.add(lintButtonTap(node))
   of enHeadStyle:
     result.add(lintHeadCss(node.text, profile, expected, node.origin))
   of enText, enRaw, enMsoIf, enNotMso, enVml:

@@ -813,11 +813,14 @@ proc solveNode(node: EmailNode; context: float; s: Solve; rtl: bool;
     for c in node.children:
       solveNode(c, float(node.layout.box), s, rtl, diags)
   else:
-    if tag in ["mailImage", "mailDivider", "mailSpacer", "mailText"]:
+    if tag in ["mailImage", "mailDivider", "mailSpacer", "mailText",
+        "mailButton"]:
       # Content leaves keep the width they sit in (not `solved`: they
-      # lay out nothing of their own): a fluid image's and a divider's
-      # Word width.
+      # lay out nothing of their own): a fluid image's, a divider's and
+      # a full-width VML button's Word width.
       node.layout.container = int(context)
+      node.layout.inlineItem = node.parent != nil and
+        node.parent.kind == enElement and node.parent.tag == "mailCluster"
     for c in node.children:
       solveNode(c, context, s, rtl, diags)
 
@@ -917,6 +920,26 @@ proc stackedPadding*(lb: LayoutBox): array[4, int] =
   [lb.padding[0] + lb.mobileGap, lb.padding[1], lb.padding[2],
     lb.padding[3]]
 
+proc mergesWithSection*(col: EmailNode): bool =
+  ## True for a section's one `mailColumn` that the section lowering
+  ## merges into the section (R-LAY-08): no background, border or
+  ## radius of its own, the section's full width, no reversal. It gets
+  ## no column markup, so its class would be dead head CSS.
+  let p = col.parent
+  if col.kind != enElement or col.tag != "mailColumn" or p == nil or
+      p.kind != enElement or p.tag != "mailSection" or p.layout.reversed:
+    return false
+  var cols = 0
+  for c in p.children:
+    if c.kind == enElement and c.tag in ["mailColumn", "mailGroup"]:
+      inc cols
+  if cols != 1:
+    return false
+  if rawValue(col, "background-color").len > 0 or max(col.layout.border) > 0 or
+      rawValue(col, "border-radius") notin ["", "0"]:
+    return false
+  not col.layout.pxWidth and col.layout.percent == 100.0
+
 proc collectRules(node: EmailNode; acc: var seq[ColumnRule];
     seen: var seq[string]) =
   if node == nil or node.kind != enElement:
@@ -929,7 +952,7 @@ proc collectRules(node: EmailNode; acc: var seq[ColumnRule];
       if key notin seen:
         seen.add(key)
         acc.add(r)
-    if lb.className.len > 0:
+    if lb.className.len > 0 and not mergesWithSection(node):
       let w = if lb.pxWidth: $lb.deskPx & "px"
         else: percentText(lb.deskPercent) & "%"
       add(acc, seen, ColumnRule(desktop: true, cls: lb.className,

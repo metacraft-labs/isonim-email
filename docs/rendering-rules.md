@@ -9,7 +9,7 @@
 > **Status:** Normative. This catalogue is the **exact behaviour** the
 > implementation must produce. The rule-traceability test
 > (`tests/t1_rule_traceability.nim`) reads it directly.
-> **Last Updated:** 2026-10-02
+> **Last Updated:** 2026-10-03
 
 This catalogue turns published HTML-email practice (RFCs, vendor
 documentation, caniemail data, framework sources and community write-ups)
@@ -172,7 +172,7 @@ img.g-img+div{display:none !important;}
 | R-CSS-11 | CSS custom properties (`var()`, `--x`) are never emitted. | P5 | gmail*, outlook*, yahoo | caniemail css-variables (read) | ✓ |
 | R-CSS-12 | Colours are 6-digit lower-case hex in both CSS and HTML attributes (`bgcolor`). 3-digit hex and named colours are converted. Some clients reject 3-digit hex in attributes. | style/colors | outlookWord | Maizzle sixHex transformer docs | ◐ |
 | R-CSS-13 | Lengths are px for box properties, `font-size` and `line-height`; `%` for widths only. `rem`/`em` are converted with a 16px root. Unitless numbers from the Tailwind extractor get `px` restored from the extractor's unit record. | style/units | outlookWord | Cerberus; caniemail Outlook notes (read) | ✓ |
-| R-CSS-14 | Semi-transparent colours: when the family set includes `outlookWord`, the opaque blend against the resolved background colour is emitted first, followed by `rgba()` for the others (`color:#7f7f7f;color:rgba(0,0,0,.5)`). | style/colors | outlookWord | inference (Word ignores rgba) | ☐ (to be settled by a Word-engine Outlook capture) |
+| R-CSS-14 | Semi-transparent colours: when the family set includes `outlookWord`, the opaque blend against the resolved background colour is emitted first, followed by `rgba()` for the others (`color:#7f7f7f;color:rgba(0,0,0,.5)`); without it, `rgba()` alone. A background blends over what is behind its element, a text or border colour over its element's background. The pair is an R-CSS-19 fallback pair on the HTML element that carries it (a cell's `bgcolor` is the blend); a vocabulary element, whose lowering paints its own markup, and a head declaration (which Word never reads) carry the blend alone. | P5, style/colors | outlookWord | inference (Word ignores rgba) | ☐ (to be settled by a Word-engine Outlook capture) |
 | R-CSS-15 | Any rule in the head that exists only to override an inline value (responsive or dark) is paired with a **class** on the element. Selectors never depend on the element's position or on inline style content. | P6 | all | inference, from R-CSS-09 | ✓ (design rule) |
 | R-CSS-16 | Declarations inside a generated rule are sorted by property name, and generated rules by selector, both deterministically. A shorthand always precedes its own longhands (`border`, then `border-top` and `border-color`, then `border-top-color`), so sorting never lets a shorthand override a longhand written to refine it. Sorting generated rules is cascade-safe, because each element gets at most one generated class per variant. The reset block (§2) is not generated: it is emitted verbatim in the catalogue's order (§2 explains why). | style/css | — | design rule: byte-identical output for the same input | ✓ (design rule) |
 | R-CSS-17 | `!important` is stripped by Gmail when images are off (email-bugs #70). No rule may depend on `!important` for **legibility**; it may only depend on it for layout improvement. | P6 | gmail* | hteumeuleu/email-bugs #70 | ◐ (to be confirmed by a real-client capture) |
@@ -299,7 +299,7 @@ and is removed by P9 when `outlookWord = false`.
 | R-OL-12 | `border-radius` is ignored by Word, so corners are square. Accepted as a declared degradation unless the component emits VML (R-BTN-04). | lower/button, P10 | caniemail css-border-radius (◐) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-OL-13 | Images: PNG, JPEG and GIF only. No WebP, SVG, `<picture>` or `data:` (R-IMG-08). Animated GIFs show only the first frame in Outlook 2007–2016, so the first frame must carry the message. | P10, lower/image | caniemail image-webp, html-svg, html-picture, image-base64 (read); GIF first-frame behaviour ◐ | ✓ / ◐ GIF |
 | R-OL-14 | `mso-hide:all` is emitted on every element that must not render in Word and is not already inside a `NotMso` comment (preheader, dark-swap images, hidden captions). | P5 | Cerberus (read) | ✓ |
-| R-OL-15 | **The closed list of `mso-*` properties** the library may emit is: `mso-line-height-rule`, `mso-table-lspace`, `mso-table-rspace`, `mso-padding-alt`, `mso-hide`, `mso-font-alt` (R-OL-07's web-font fallback; caniemail at-font-face notes 4–5, read). Adding one requires a Word-engine Outlook capture that shows its effect, recorded here. P10 checks the lowered document (inline styles, `style` attributes, MSO payloads, head blocks) and reports any other `mso-*` property, author-written or emitted, as `W-CSS-MSO-UNLISTED`. Candidates awaiting evidence: `mso-text-raise`, `mso-font-width` (R-BTN-05), `mso-generic-font-family`, `mso-special-format` (R-TXT-09), `mso-border-alt`, `mso-color-alt`, `mso-ansi-font-size`. | P5, P10 | community lists of `mso-*` properties; caniemail notes (list flagged "verify") | ☐ per candidate, each settled by a Word-engine Outlook capture |
+| R-OL-15 | **The closed list of `mso-*` properties** the library may emit is: `mso-line-height-rule`, `mso-table-lspace`, `mso-table-rspace`, `mso-padding-alt`, `mso-hide`, `mso-font-alt` (R-OL-07's web-font fallback; caniemail at-font-face notes 4–5, read). Adding one requires a Word-engine Outlook capture that shows its effect, recorded here. (The R-BTN-05 option emits `mso-text-raise` and `mso-font-width`, and is reported for them until they are admitted.) P10 checks the lowered document (inline styles, `style` attributes, MSO payloads, head blocks) and reports any other `mso-*` property, author-written or emitted, as `W-CSS-MSO-UNLISTED`. Candidates awaiting evidence: `mso-text-raise`, `mso-font-width` (R-BTN-05), `mso-generic-font-family`, `mso-special-format` (R-TXT-09), `mso-border-alt`, `mso-color-alt`, `mso-ansi-font-size`. | P5, P10 | community lists of `mso-*` properties; caniemail notes (list flagged "verify") | ☐ per candidate, each settled by a Word-engine Outlook capture |
 | R-OL-16 | 120-DPI rendering is part of backend C: classic Outlook is captured at 96 and at 120 DPI for every story that contains images or fixed-width elements. | capture | Cerberus (read) | ✓ (process rule) |
 
 ## 6. VML — Background images and shapes
@@ -324,33 +324,46 @@ and is removed by P9 when `outlookWord = false`.
 
 ## 7. BTN — Buttons
 
-Default (table) button, from MJML `mjml-button` (read; "No, VML is not
-used"):
+Default (table) button, from MJML `mj-button` (read; "No, VML is not
+used"), in its placement cell (a start- or end-aligned button; a centred
+one, a full-width one and an item of a `mailCluster` have no placement
+cell, and a cluster's has no `align`):
 
 ```html
-<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="{align}" style="border-collapse:separate;line-height:100%;">
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td align="{align}" style="text-align:{align};">
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="{align}" style="border-collapse:separate !important;line-height:100%;">
 <tr><td align="center" bgcolor="{bg}" role="presentation" valign="middle" style="border:{border};border-radius:{r}px;cursor:auto;mso-padding-alt:{pv}px {ph}px;background-color:{bg};">
 <a href="{href}" target="_blank" style="display:inline-block;background-color:{bg};color:{fg};font-family:{ff};font-size:{fs}px;font-weight:{fw};line-height:{lh}px;mso-line-height-rule:exactly;margin:0;text-decoration:none;text-transform:none;padding:{pv}px {ph}px;mso-padding-alt:0px;border-radius:{r}px;">{label}</a>
 </td></tr></table>
+</td></tr></table>
 ```
 
-VML variant (Campaign Monitor pattern):
+VML variant (Campaign Monitor pattern), in a block that aligns it for
+Word:
 
 ```html
-<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:{h}px;v-text-anchor:middle;width:{w}px;" arcsize="{round(r/h*100)}%" strokecolor="{border or bg}" fillcolor="{bg}">
-<w:anchorlock/><center style="color:{fg};font-family:{ff};font-size:{fs}px;font-weight:{fw};">{label}</center></v:roundrect><![endif]-->
+<!--[if mso]><div align="{align}"><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:{h}px;v-text-anchor:middle;width:{w}px;" arcsize="{round(r/h*100)}%" strokecolor="{border or bg}"[ strokeweight="{bw}px"] fillcolor="{bg}"><w:anchorlock /><center style="color:{fg};font-family:{ff};font-size:{fs}px;font-weight:{fw};">{label}</center></v:roundrect></div><![endif]-->
 <!--[if !mso]><!-->{table button}<!--<![endif]-->
+```
+
+An outline button's shape has no fill: `filled="f"` in place of
+`fillcolor`.
+
+Word-spacers variant (R-BTN-05, an option), from goodemailcode.com:
+
+```html
+<div align="{align}" style="text-align:{align};"><a href="{href}" target="_blank" style="display:inline-block;background-color:{bg};[border:{border};]color:{fg};…;padding:{pv}px {ph}px;mso-padding-alt:0;text-underline-color:{bg};border-radius:{r}px;"><!--[if mso]><i style="mso-font-width:{ph/fs}%;mso-text-raise:{(pt+pb)/fs}%" hidden>&emsp;</i><span style="mso-text-raise:{pb/fs}%;"><![endif]-->{label}<!--[if mso]></span><i style="mso-font-width:{ph/fs}%;" hidden>&emsp;&#8203;</i><![endif]--></a></div>
 ```
 
 | ID | Rule | Where | Source | Status |
 |---|---|---|---|---|
-| R-BTN-01 | The default button is the table button above: colour on both `td` (`bgcolor` + CSS) and `a`; padding on the `a`, with `mso-padding-alt` on the `td` and `mso-padding-alt:0px` on the `a`. | lower/button | mjml-button source (read) | ✓ |
+| R-BTN-01 | The default button is the table button above: colour on both `td` (`bgcolor` + CSS) and `a`; padding on the `a`, with `mso-padding-alt` on the `td` and `mso-padding-alt:0px` on the `a`. Two additions to MJML's markup, both for the reset (§2): `border-collapse:separate` is `!important`, because the reset collapses every table with `!important` and a collapsed cell draws its border and background square; and a start- or end-aligned button sits in a one-cell 100% placement table, because the reset centres every table with `margin:0 auto !important`, so only the table's `align` (a float) can place it, and a cell contains the float (without one the button hangs out of its box's bottom padding and the text after it flows beside it). | lower/button | mjml-button source (read); captures of the placement in Chromium, WebKit and Firefox, 2026-10-03 | ✓ |
 | R-BTN-02 | Declared degradation: in Word only the label text is clickable, and corners are square. The brief generator tells reviewers so. | lower/button, P10 | mjml-button source (read) | ✓ |
-| R-BTN-03 | The label may wrap. Button width is content-driven unless `width` is set; a set `width` goes on the `td`. | lower/button | MJML | ✓ |
-| R-BTN-04 | The VML variant is used when `vml = always`, or when `vml = auto` and `border_radius > 0` and `width` is set. It requires `width` and `height` in px. The label must fit (text metrics); if not, it is an error. The label cannot wrap. | lower/button, mso/vml | Campaign Monitor buttons.cm pattern (◐; not fetched) | ◐ (to be confirmed by a Word-engine Outlook capture) |
-| R-BTN-05 | Candidate: Good Email Code's link button, which fakes vertical padding in Word with `<i>` spacers using `mso-font-width` / `mso-text-raise` and `&#8202;`, making the full area clickable without VML. It is **not implemented** until a comparison with R-BTN-01/04 on backends C and D. If adopted, it replaces R-BTN-01 as the default, and its exact markup is recorded here from the source. | lower/button | goodemailcode.com link button ("not fetched; verify") | ☐ (to be settled by backend C and D captures) |
-| R-BTN-06 | The button's minimum tap target is 44 px tall: `lh + 2·pv ≥ 44`. P10 checks it, and the capture DOM assertion re-checks it. | P10 | WCAG-derived target size (◐) | ✓ (design rule) |
-| R-BTN-07 | `href` is absolute https (or `mailto:`/`tel:`), and never `#` or empty; a button with no destination is an error. | P1, P8 | design rule | ✓ |
+| R-BTN-03 | The label may wrap. Button width is content-driven unless `width` is set; a set `width` (px or %) goes on the button's `table` (attribute and CSS), whose width includes the cell's border, and the link becomes a centred block that fills the cell, so the whole width is the link. (MJML puts it on the `td`, whose width excludes its border.) | lower/button | MJML; design rule | ✓ |
+| R-BTN-04 | The VML variant is used when `vml = always`, or when `vml = auto` and `border_radius > 0` and `width` is set in px (a % width keeps the fluid table button; with `vml = always` it is taken of the box the button sits in). It requires `width` and `height` in px (`E-LAYOUT-VML-SIZE`); the height is the button's (line height + padding + borders, or its `height`). The label must fit: its width at the text metrics' worst case (the widest face of its font stack, +5%) must not exceed the width less the horizontal padding and the borders, or the render fails with `E-LAYOUT-LABEL-OVERFLOW`; characters outside the metrics add `I-LAYOUT-METRICS-APPROX`. The label cannot wrap. A `link` button never uses VML. | lower/button, mso/vml | Campaign Monitor buttons.cm pattern (◐; not fetched) | ◐ (to be confirmed by a Word-engine Outlook capture) |
+| R-BTN-05 | Candidate: Good Email Code's link button (the third template above), which gives Word its padding with hidden `<i>` spacers: an em space (`&emsp;`, `mso-font-width` = the side padding in % of the font size, at most 500% an em space, more em spaces beyond that) on each side, the first raised by the top and bottom padding together (`mso-text-raise`), the label raised by the bottom padding, a zero-width space (`&#8203;`) after the trailing em space (and in the leading one too, right to left), `mso-padding-alt:0` and `text-underline-color` on the link; the full area is the link without VML. Implemented as an option, `word_padding = spacers`; the default stays R-BTN-01 until a comparison on backends C and D. Local comparison (2026-10-03, backend A with the Word approximation, Roundcube, SnappyMail, Thunderbird, Evolution, Geary, KMail, Claws Mail): no client but Word gains from it, and two lose: Thunderbird's dark adaptation clears the fill (it is on the link), and litehtml places a right-aligned one a padding width past the line's end. Its `mso-font-width` and `mso-text-raise` are not on R-OL-15's list, so a render using it reports `W-CSS-MSO-UNLISTED`. | lower/button | goodemailcode.com, "CTA Link - button", last updated 2023-04-20 (read 2026-10-03) | ☐ (adoption to be settled by backend C and D captures) |
+| R-BTN-06 | The button's minimum tap target is 44 px tall: `lh + 2·pv (+ 2·border) ≥ 44`, or its `height`; below it is `W-A11Y-TAP-TARGET`. P10 checks it, and the capture DOM assertion re-checks it. The default (`button.font` 20px line, `button.padding` 12px) is exactly 44; a `font_size` given alone keeps the theme's line-height ratio. | P10 | WCAG-derived target size (◐) | ✓ (design rule) |
+| R-BTN-07 | `href` is absolute https (or `mailto:`/`tel:`), and never `#` or empty; a button with no destination is an error (`E-URL-EMPTY`), any other scheme or a relative URL `E-URL-SCHEME`. | P1 | design rule | ✓ |
 
 ## 8. IMG — Images
 
@@ -645,3 +658,14 @@ unsized cells (R-TBL-01, R-TBL-05).
   drawn above the top of the reading pane in WebKit); R-TXT-02 floors
   a default line height at the font's content area and lets an
   overlong word break.
+- 2026-10-03: Buttons built. R-BTN-01 adds the placement cell and
+  `border-collapse:separate !important` (both for the reset: captured
+  in Chromium, WebKit and Firefox, a left-aligned button floated out of
+  its box); R-BTN-03 puts a set width on the button's table; R-BTN-04
+  states the fit check and its diagnostics, and its VML template the
+  aligning block, `strokeweight` and the unfilled outline; R-BTN-05
+  records Good Email Code's markup from its source and the local
+  comparison, and is implemented as an option; R-BTN-06 counts borders
+  and `height`; R-BTN-07 names its codes. R-CSS-14 is emitted as a
+  fallback pair (R-CSS-19) on HTML elements, rgba() alone without
+  `outlookWord`.

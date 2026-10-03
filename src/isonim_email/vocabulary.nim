@@ -123,6 +123,7 @@ proc buildEmailVocabulary*(): VocabularyRef =
         attr("height", akStyle, "Len"),
         attr("align", akAttr, "Align"),
         attr("vml", akAttr, "auto|always|never"),
+        attr("word_padding", akAttr, "cell|spacers"),
         attr("font_size", akStyle, "Len"),
         attr("font_weight", akStyle, "string"),
         attr("line_height", akStyle, "Len"),

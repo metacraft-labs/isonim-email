@@ -204,8 +204,22 @@ const
     ## `passes/validate.nim`.
   codeA11yTapTarget* = "W-A11Y-TAP-TARGET"
     ## A tap target too small or too close: interactive items of a
-    ## `mailCluster` closer than 8px (R-TBL-12). Collected from
-    ## `passes/lint.nim`.
+    ## `mailCluster` closer than 8px (R-TBL-12), or a button less than
+    ## 44px tall (R-BTN-06). Collected from `passes/lint.nim`.
+  codeUrlEmpty* = "E-URL-EMPTY"
+    ## A button with no destination: no `href`, an empty one or `#`
+    ## (R-BTN-07). Collected from `passes/validate.nim`.
+  codeLayoutVmlSize* = "E-LAYOUT-VML-SIZE"
+    ## A VML button without a px width (R-BTN-04). Collected from
+    ## `lower/button.nim`.
+  codeLayoutLabelOverflow* = "E-LAYOUT-LABEL-OVERFLOW"
+    ## A VML button whose label does not fit its width at the text
+    ## metrics' worst case (R-BTN-04). Collected from
+    ## `lower/button.nim`.
+  codeLayoutMetricsApprox* = "I-LAYOUT-METRICS-APPROX"
+    ## A fit check measured characters outside the text-metrics table
+    ## with an average advance, so its verdict is approximate.
+    ## Collected from `lower/button.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

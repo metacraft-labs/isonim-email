@@ -10,7 +10,8 @@
 // 2: inline styles are re-escaped after rewriting.
 // 3: declarations whose value uses calc() are stripped (step 2).
 // 4: box-shadow is stripped (step 2).
-export const WORD_APPROX_TRANSFORM_VERSION = 4;
+// 5: a cell's mso-padding-alt is its padding (step 2).
+export const WORD_APPROX_TRANSFORM_VERSION = 5;
 
 import { joinChunks, splitTopLevel } from "./gmailWeb.ts";
 import { stripBackgroundImageFromCss } from "./imagesOff.ts";
@@ -138,13 +139,23 @@ function stripStep2Styles(html: string): string {
 }
 
 // Inline style=: td/th keep their padding (and lose the rest); every
-// other element loses padding too. Decoded, rewritten and re-escaped
-// through mapStyleAttributes.
+// other element loses padding too. A cell's `mso-padding-alt` is the
+// padding Word lays it out with, in place of its CSS padding (R-OL-05,
+// R-BTN-01: a table button's padding is on its link, which Word
+// ignores, and on its cell as mso-padding-alt). Decoded, rewritten and
+// re-escaped through mapStyleAttributes.
+const MSO_PADDING_ALT_RE =
+  /(?:^|(?<=;))\s*mso-padding-alt\s*:\s*([^;{}]*?)\s*(?:;|$)/i;
+
 function stripStep2Inline(html: string): string {
   return mapStyleAttributes(html, (attr: string, tag: string): string => {
     const keepPadding = /^<(td|th)\b/i.test(tag);
     const css = stripNonPaddingDecls(attr);
-    return keepPadding ? css : css.replace(PADDING_RE, "");
+    if (!keepPadding) return css.replace(PADDING_RE, "");
+    const alt = MSO_PADDING_ALT_RE.exec(css);
+    if (alt === null) return css;
+    const rest = css.replace(PADDING_RE, "").replace(/;?\s*$/, "");
+    return `${rest}${rest.length > 0 ? ";" : ""}padding:${alt[1]};`;
   });
 }
 

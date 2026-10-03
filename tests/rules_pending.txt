@@ -21,16 +21,9 @@
 # Implemented: R-LAY-01, R-LAY-02, R-LAY-03, R-LAY-04, R-LAY-07, R-LAY-10, R-LAY-11, R-LAY-12, R-LAY-13, R-LAY-14, R-TBL-03, R-TBL-11 (tests/t5_columns.nim; R-LAY-18, -19 and -20 were added to the catalogue with their test, never pending). Also R-LAY-15, R-OL-08 (tests/t5_columns.nim) and R-LAY-16 (tests/t5_columns.nim for hand-built rows, tests/t2_vocabulary_compile_fail.nim for templates). R-OL-06 (tests/t4_styles.nim, the existing MSO-additions test).
 # Implemented: R-TBL-07, R-TBL-09, R-TBL-10, R-TBL-12, R-TBL-16 and R-TBL-17, added with its test, never pending (tests/t5_primitives.nim; R-TBL-07 for the sidebar's image cells, R-TBL-16 as built: the radius with border-collapse:separate, the 3×3 VML-corner variant reported, not emitted).
 # Implemented: R-TXT-02, R-TXT-04, R-TXT-09, R-OL-04 (tests/t5_text.nim; R-OL-04's conversion also in tests/t4_styles.nim), R-IMG-02, R-IMG-03, R-IMG-04, R-IMG-08, R-IMG-09, R-IMG-11, R-TBL-13, R-OL-13 (tests/t5_images.nim; R-IMG-03 also in tests/e2e_local_images_off.nim; R-OL-13's animated-GIF sentence is authoring guidance, nothing to check). R-TXT-11 was added to the catalogue with its test, never pending. R-A11Y-09 stays: P7 backfills `scope` (tests/t5_images.nim, unclaimed) but the hidden caption belongs to the data-table lowering.
+# Implemented: R-BTN-01..07, R-OL-05, R-OL-12 (tests/t5_button.nim; R-BTN-01 also tests/t5_welcome_golden.nim), R-CSS-14 (tests/t4_styles.nim: P5 now carries the pair as a fallback, the carrier the 2026-09-27 note above lacked).
 R-A11Y-05
 R-A11Y-09
-R-BTN-01
-R-BTN-02
-R-BTN-03
-R-BTN-04
-R-BTN-05
-R-BTN-06
-R-BTN-07
-R-CSS-14
 R-CSS-15
 R-CSS-17
 R-CSS-18
@@ -46,11 +39,9 @@ R-INT-01
 R-INT-02
 R-INT-03
 R-OL-02
-R-OL-05
 R-OL-07
 R-OL-09
 R-OL-11
-R-OL-12
 R-OL-14
 R-OL-16
 R-PRE-02

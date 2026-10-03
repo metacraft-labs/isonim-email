@@ -16,6 +16,7 @@
 ## checked here too (R-LAY-11): only a non-text column may move, and
 ## never in a right-to-left row. Other nesting and vocabulary rules
 ## belong to the static vocabulary check, contrast and sizes to P10.
+## A `mailButton` must have a real destination (R-BTN-07).
 
 import std/[strutils, tables, unicode]
 import ../diagnostics
@@ -175,6 +176,27 @@ proc checkBandNesting(node: EmailNode; acc: var seq[EmailDiagnostic]) =
         through = a.tag
     a = a.parent
 
+proc checkButtonHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
+  ## R-BTN-07: a button goes somewhere real: an absolute https URL, or a
+  ## `mailto:` or `tel:` one; never nothing or `#`.
+  let href = node.attrs.getOrDefault("href", "").strip()
+  if href.len == 0 or href.startsWith("#"):
+    diags.add(EmailDiagnostic(severity: sevError, code: codeUrlEmpty,
+      message: "mailButton without a destination (href '" & href &
+        "'): a button must link to an absolute https URL, mailto: or " &
+        "tel: (R-BTN-07)", origin: node.origin, rules: @["R-BTN-07"]))
+    return
+  let lower = href.toLowerAscii()
+  let ok = (lower.startsWith("https://") and href.len > "https://".len and
+    href["https://".len] notin {'/', '?', '#'}) or
+    (lower.startsWith("mailto:") and href.len > "mailto:".len) or
+    (lower.startsWith("tel:") and href.len > "tel:".len)
+  if not ok or href.contains({' ', '\t', '\r', '\n', '"', '<', '>'}):
+    diags.add(EmailDiagnostic(severity: sevError, code: codeUrlScheme,
+      message: "mailButton href '" & href & "' is not an absolute https " &
+        "URL, mailto: or tel: (R-BTN-07)", origin: node.origin,
+      rules: @["R-BTN-07"]))
+
 proc validate*(root: EmailNode): seq[EmailDiagnostic] =
   ## P1 over the authoring tree. Collects every finding; an empty
   ## result means the tree is structurally valid.
@@ -223,6 +245,8 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
       checkReversal(node, result)
     if node.kind == enElement and node.tag == "mailGrid":
       checkGrid(node, result)
+    if node.kind == enElement and node.tag == "mailButton":
+      checkButtonHref(node, result)
     if node.kind == enElement and node.tag in ["mailSection", "mailWrapper"]:
       checkBandNesting(node, result)
     if node.kind == enRaw and not insideMailRaw(node):

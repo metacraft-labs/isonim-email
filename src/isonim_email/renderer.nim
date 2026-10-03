@@ -58,6 +58,7 @@ type
     boxExact*: float      ## `box` before truncation (columns and groups pass fractions on)
     percent*: float       ## Column or group desktop width, % of the parent box (0 for px widths)
     pxWidth*: bool        ## True when the author gave the width in px
+    inlineItem*: bool     ## Buttons: an item of a `mailCluster`, laid out inline (shrink-to-fit)
     padding*: array[4, int] ## Resolved own padding, top, right, bottom, left (px)
     border*: array[4, int]  ## Resolved own border widths, same order (px)
     className*: string    ## Responsive column class (`e-col-…` / `e-colpx-…`), columns and groups only

@@ -10,7 +10,8 @@
 ## the layout primitives (`mailBox`, `mailGrid`, `mailCluster`,
 ## `mailSidebar`: `lower/box.nim`, `grid.nim`, `cluster.nim`,
 ## `sidebar.nim`), `mailImage` (`lower/image.nim`), the content leaves
-## `mailSpacer`, `mailDivider` and `mailText` (`lower/leaves.nim`), and
+## `mailSpacer`, `mailDivider` and `mailText` (`lower/leaves.nim`),
+## `mailButton` (`lower/button.nim`), and
 ## every expanded
 ## pattern (`patterns.nim`), which leaves its expansion in its place.
 ## `mailDocument` is lowered separately, around
@@ -55,6 +56,7 @@ import ./grid
 import ./cluster
 import ./sidebar
 import ./leaves
+import ./button
 import ../passes/layout
 import ../patterns
 import ../target
@@ -66,7 +68,7 @@ const affects*: set[ClientFamily] = allFamilies
 const loweredHere* = ["mailImage", "mailSection", "mailWrapper",
   "mailStack", "mailColumns", "mailColumn", "mailGroup", "mailBox",
   "mailGrid", "mailCluster", "mailSidebar", "mailSpacer", "mailDivider",
-  "mailText"]
+  "mailText", "mailButton"]
   ## Elements this pass lowers (plus every expanded pattern, which it
   ## replaces by its expansion).
 const loweredElsewhere* = ["mailDocument"]
@@ -128,6 +130,10 @@ proc walk(parent: EmailNode; ctx: LowerCtx;
       replaceChild(parent, c, nodes)
     elif c.kind == enElement and c.tag == "mailDivider":
       let (nodes, found) = lowerDivider(c, ctx)
+      diags.add(found)
+      replaceChild(parent, c, nodes)
+    elif c.kind == enElement and c.tag == "mailButton":
+      let (nodes, found) = lowerButton(c, ctx)
       diags.add(found)
       replaceChild(parent, c, nodes)
     elif c.kind == enElement and c.tag == "mailText":

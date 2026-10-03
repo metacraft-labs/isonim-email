@@ -296,7 +296,7 @@ proc defaultTheme*(): EmailTheme =
     ("color.border.subtle", ThemePair(light: "#e5e7eb", dark: "#2f343d")),
     ("color.accent.primary", ThemePair(light: "#1f6feb", dark: "#4c8dff")),
     ("color.accent.primaryText", ThemePair(light: "#ffffff", dark: "#0b1220")),
-    ("color.link", ThemePair(light: "#1f6feb", dark: "#7aa7ff")),
+    ("color.link", ThemePair(light: "#0969da", dark: "#7aa7ff")),
     ("color.status.info", ThemePair(light: "#1f6feb", dark: "#4c8dff")),
     ("color.status.info.bg", ThemePair(light: "#ddf4ff", dark: "#0c2d6b")),
     ("color.status.success", ThemePair(light: "#1a7f37", dark: "#3fb950")),

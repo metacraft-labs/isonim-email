@@ -60,7 +60,7 @@ No catalogue rule; models images blocked by default: empty `img[src]`/`srcset`,
 drop CSS `background-image`. `--images off` applies it after any
 family's own transform, and blocks image requests to the fixture host.
 
-## wordApprox (`wordApprox.ts`, version 4)
+## wordApprox (`wordApprox.ts`, version 5)
 
 Lint-grade (emulation steps 1–5): reveal mso conditionals; strip
 `max-width` (R-OL-03), `display:flex|grid|inline-block`, declarations
@@ -68,7 +68,9 @@ using `calc()` (caniemail `css-unit-calc`: no support in Outlook for
 Windows; the Fab Four width, R-LAY-18), `box-shadow` (caniemail
 `box-shadow`: no support in Outlook for Windows; R-TBL-09), CSS
 `background-image` (R-OL-11), `border-radius` (R-OL-12), `margin:auto`
-(R-LAY-08) and non-`td`/`th` padding (R-OL-05, R-TBL-02); strip
+(R-LAY-08) and non-`td`/`th` padding (R-OL-05, R-TBL-02); lay a
+cell out with its `mso-padding-alt` in place of its padding, as Word
+does (R-OL-05, R-BTN-01); strip
 `<style>` media queries (R-LAY-02 excludes outlookWord); stand VML
 shapes in as flat labelled rectangles (R-VML-01/02); flatten `rgba()`
 (R-CSS-14).

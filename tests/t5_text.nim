@@ -189,7 +189,7 @@ suite "links":
     discard r.child(pic, "mailImage", [("width", "120px")],
       [("src", "https://x.test/logo.png"), ("alt", "Logo")])
     let html = renderTree(doc).html
-    check "<a href=\"https://x.test/a\" style=\"color:#1f6feb;" &
+    check "<a href=\"https://x.test/a\" style=\"color:#0969da;" &
       "text-decoration:underline;\">" in html
     # In text the author coloured, a link keeps that colour, underlined.
     check "<a href=\"https://x.test/b\" style=\"color:#f9fafb;" &
@@ -197,7 +197,7 @@ suite "links":
     check "<a href=\"https://x.test/c\" style=\"color:#cf222e;" &
       "text-decoration:none;\">" in html
     # A link around images only is not underlined.
-    check "<a href=\"https://x.test/d\" style=\"color:#1f6feb;" &
+    check "<a href=\"https://x.test/d\" style=\"color:#0969da;" &
       "text-decoration:none;\">" in html
 
   test "test_link_dark_pair_under_designed":
