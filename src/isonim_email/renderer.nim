@@ -22,6 +22,7 @@ import isonim/core/[types, graph, signals, computation, resource]
 import isonim/viewmodel
 import ./style/tokens
 import ./target
+import ./markup_types
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -30,6 +31,7 @@ const affects*: set[ClientFamily] = allFamilies
 export abstract_renderer
 export owner
 export viewmodel
+export markup_types
 
 type
   SourceSpan* = object
@@ -97,6 +99,7 @@ type
     priority*: int                ## enHeadStyle block priority (head-block assembly order)
     layout*: LayoutBox            ## P3 widths (layout elements only; see `LayoutBox`)
     expanded*: bool               ## A pattern element whose expansion replaced its children (`patterns.nim`)
+    markup*: seq[GmailMarkup]     ## `mailDocument` only: the Gmail markup blocks (`gmail_markup.nim`), in the order added
 
   EmailAsyncResource* = ref object
     ## One async load a template started. Created pending (`asLoading`)

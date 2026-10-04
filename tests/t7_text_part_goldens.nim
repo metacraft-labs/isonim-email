@@ -37,6 +37,7 @@ import stories/seed_actions
 import stories/seed_markdown
 import stories/seed_reference
 import stories/seed_domain
+import stories/seed_markup
 
 const goldenDir = currentSourcePath().parentDir / "golden" / "text"
 
@@ -62,6 +63,7 @@ registerActionStories()
 registerMarkdownStories()
 registerReferenceStories()
 registerDomainStories()
+registerMarkupStories()
 
 const cssProperties = ["color", "background", "background-color",
   "background-image", "border", "border-radius", "border-collapse",

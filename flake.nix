@@ -106,6 +106,18 @@
           # MJML's. Built from the lockfile's registry tarballs in a
           # fixed-output derivation; the check never fetches anything.
           mjml = pkgs.callPackage ./nix/mjml { };
+          # The schema.org vocabulary, pinned (release 30.1, every
+          # layer, http IRIs as Gmail's markup writes them), for the
+          # Gmail markup test (tests/t6_gmail_markup_json_ld_valid.nim):
+          # the emitted JSON-LD is checked against its classes,
+          # properties, ranges and enumeration members. A fixed-output
+          # fetch; the test never touches the network. To move the pin,
+          # change the release in the URL (twice) and the hash
+          # (`nix store prefetch-file <url>`).
+          schemaOrg = pkgs.fetchurl {
+            url = "https://raw.githubusercontent.com/schemaorg/schemaorg/v30.1/data/releases/30.1/schemaorg-all-http.jsonld";
+            hash = "sha256-V6heRm1ilWv/VR870hzWtRuwllcVa3FZgnAXIIWXKPw=";
+          };
           # The linux-desktop provider's accessibility client: Python
           # with PyGObject and the AT-SPI typelib, run outside the
           # capture session against the session's own accessibility bus
@@ -467,6 +479,10 @@
               # The pinned MJML CLI `just test-conformance` compiles the
               # conformance fixtures with (see mjml above).
               ISONIM_EMAIL_MJML = "${mjml}/bin/mjml";
+
+              # The pinned schema.org vocabulary (see schemaOrg above)
+              # the Gmail markup test validates the emitted JSON-LD with.
+              ISONIM_EMAIL_SCHEMAORG = "${schemaOrg}";
 
               # The Python with fonttools that `just text-metrics`
               # (tools/text-metrics/generate.py) reads the pinned fonts

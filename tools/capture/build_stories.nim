@@ -44,6 +44,7 @@ import stories/seed_actions
 import stories/seed_markdown
 import stories/seed_reference
 import stories/seed_domain
+import stories/seed_markup
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -163,6 +164,9 @@ proc main(): int =
     # The domain view stories (tests/stories/seed_domain.nim: the
     # invoice email of examples/invoice_summary_email.nim).
     registerDomainStories()
+    # The Gmail markup stories (tests/stories/seed_markup.nim: two
+    # reference emails with JSON-LD in the head).
+    registerMarkupStories()
   if listOnly:
     var list = newJArray()
     for s in stories():

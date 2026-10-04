@@ -76,7 +76,10 @@ Markdown bodies' (`seed_markdown.nim`) and the reference emails
 (`examples/reference_set.nim`, registered by
 `tests/stories/seed_reference.nim`: `receiptTypical` …
 `newsletterColumns`) and the domain view's invoice email
-(`tests/stories/seed_domain.nim`: `invoiceSummary`) are captured with
+(`tests/stories/seed_domain.nim`: `invoiceSummary`) and the Gmail
+markup stories (`tests/stories/seed_markup.nim`: `receiptMarkup`,
+`shippingMarkup`, two reference emails with JSON-LD in the head,
+`docs/gmail-markup.md`) are captured with
 `ISONIM_CAPTURE_LAYOUT=1 just email-shots layoutOneColumn …`; they are
 outside the regression matrix, apart from the reference emails: the
 matrix (`just email-capture-ci`,

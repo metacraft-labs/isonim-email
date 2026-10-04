@@ -46,6 +46,9 @@ import ../passes/head
 ## the capture CLI to pick the families of an `--affected` run.
 const affects*: set[ClientFamily] = allFamilies
 
+const jsonLdType* = "application/ld+json"
+  ## The `type` of a Gmail markup block's script element (R-SND-07).
+
 const contentCellAlign* = "center"
   ## The horizontal alignment of the skeleton's content cell
   ## (`<td align="center">`, catalogue §1): what content inherits when
@@ -98,13 +101,18 @@ proc fixLayoutTables*(n: EmailNode) =
     fixLayoutTables(c)
 
 proc lowerDocument*(doc: EmailNode; sections: EmailNode;
-    head: seq[EmailNode]; target: EmailTarget): EmailNode =
+    head: seq[EmailNode]; target: EmailTarget;
+    markup: seq[string] = @[]): EmailNode =
   ## Lowers `mailDocument` to the catalogue §1 skeleton. `sections`
   ## (nil for an empty document) lands in the wrapper cell; `head`
   ## holds P6's `enHeadStyle` blocks, placed as separate `<style>`
   ## elements in priority order (R-DOC-12, R-CSS-07): the fonts block
   ## inside `NotMso`, the mso block inside `MsoIf` only when
-  ## `target.outlookWord`, plus the `lte mso 11` group fix.
+  ## `target.outlookWord`, plus the `lte mso 11` group fix. `markup`
+  ## holds the checked Gmail markup blocks' JSON-LD (R-SND-07), each
+  ## written as a `<script type="application/ld+json">` at the end of
+  ## the head; its strings are already escaped for the element
+  ## (R-SND-08).
   let r = EmailRenderer()
   let lang = docAttr(doc, "lang", "en")
   let dir = docAttr(doc, "dir", "ltr")
@@ -173,6 +181,13 @@ proc lowerDocument*(doc: EmailNode; sections: EmailNode;
     for b in mso:
       r.appendChild(headEl, msoWrap(b))
     r.appendChild(headEl, msoGroupFix())
+  for json in markup:
+    # A data block, never executed: its text holds no `<` (R-SND-08),
+    # so it is written as it is.
+    let script = r.createElement("script")
+    r.setAttribute(script, "type", jsonLdType)
+    r.appendChild(script, raw(json))
+    r.appendChild(headEl, script)
 
   # R-DOC-14: no `class` on <body> (Roundcube copies it over the
   # `rcmBody` class its scoped head rules select).

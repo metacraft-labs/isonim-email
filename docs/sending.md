@@ -87,3 +87,12 @@ must configure in DNS:
 
 Complaint rates are read from the receivers' own sender dashboards
 (for Gmail, Postmaster Tools) and the ESP's feedback-loop reports.
+
+## Gmail markup needs a registered sender (R-SND-07)
+
+The schema.org blocks a template attaches with `addGmailMarkup` (go-to
+and one-click actions, bills, parcel deliveries) are shown by Gmail only
+for mail authenticated with DKIM or SPF and, beyond messages sent to
+oneself, from a sender registered with Google. The authentication above
+is the first half; [`gmail-markup.md`](./gmail-markup.md) covers the
+markup, its checks and the registration.

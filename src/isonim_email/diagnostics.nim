@@ -296,6 +296,18 @@ const
     ## Text below 14px (R-TXT-03). Collected from `passes/lint.nim`.
   codeA11yFontTiny* = "E-A11Y-FONT-TINY"
     ## Text below 12px (R-TXT-03). Collected from `passes/lint.nim`.
+  codeMarkupRequired* = "E-MARKUP-REQUIRED"
+    ## A Gmail markup block without a property Gmail's reference
+    ## requires (or the library requires of an Invoice), an organisation
+    ## without its name, a price without its amount, a product without
+    ## its name (R-SND-07); the block is not written. Collected from
+    ## `gmail_markup.nim`.
+  codeMarkupValue* = "E-MARKUP-VALUE"
+    ## A Gmail markup value of the wrong form: a URL that is not
+    ## absolute https, a date outside ISO 8601's forms, a currency that
+    ## is not three capitals, invalid UTF-8, an action's URL given to the
+    ## wrong kind (R-SND-07); the block is not written. Collected from
+    ## `gmail_markup.nim`.
 
 type EmailDiagnostic* = object
   severity*: Severity

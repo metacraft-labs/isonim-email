@@ -57,6 +57,8 @@ client.
 
 The exact skeleton that `lower/document.nim` emits. `{…}` are values.
 Lines marked `⟪mso⟫` are emitted only when `EmailTarget.outlookWord`.
+The line marked `⟪markup⟫` is emitted once per Gmail markup block the
+template attaches (R-SND-07), and not at all without one.
 
 ```html
 <!doctype html>
@@ -79,6 +81,7 @@ Lines marked `⟪mso⟫` are emitted only when `EmailTarget.outlookWord`.
 <style>{block 6: Thunderbird}</style>
 ⟪mso⟫<!--[if mso]><style>{mso block}</style><![endif]-->
 ⟪mso⟫<!--[if lte mso 11]><style>.e-mso-group-fix{width:100% !important;}</style><![endif]-->
+⟪markup⟫<script type="application/ld+json">{one Gmail markup block — R-SND-07}</script>
 </head>
 <body xml:lang="{lang}" style="margin:0;padding:0;word-spacing:normal;background-color:{bg};">
 {preheader — §9}
@@ -508,7 +511,7 @@ Every rule in this section was checked against the RFC text on 2026-09-27.
 | R-MIME-12 | `MIME-Version: 1.0`, `Date` (RFC 5322 date-time, from the time facade), and a `Message-ID` of the form `<{id}@{sender-domain}>`, suppliable for deterministic tests. | mime/headers | RFC 5322 §3.6 | ✓ |
 | R-MIME-13 | CRLF line endings throughout the serialised message. | mime | RFC 5322 | ✓ |
 
-## 15. SND — Headers the receiving system acts on
+## 15. SND — Headers and markup the receiving system acts on
 
 | ID | Rule | Where | Source | Status |
 |---|---|---|---|---|
@@ -518,6 +521,8 @@ Every rule in this section was checked against the RFC text on 2026-09-27.
 | R-SND-04 | Both headers must be covered by a DKIM signature (`h=` tag). DKIM is the ESP's job. `toMessage` records in the message metadata that DKIM must include them, and the Mailgun transport sets no option that would exclude them. | docs, transport | RFC 8058 §4 | ✓ |
 | R-SND-05 | Transactional helpers set `Auto-Submitted: auto-generated`. | mime/headers | RFC 3834 | ◐ |
 | R-SND-06 | Bulk-sender context, for docs only: Gmail and Yahoo require SPF+DKIM, aligned DMARC, one-click unsubscribe for marketing mail, and a spam rate < 0.3% (from Feb 2024; stricter enforcement from Nov 2025). Microsoft requires SPF/DKIM/DMARC above 5,000/day (from 2025-05-05). | docs | Google sender guidelines (support.google.com/mail/answer/14229414); Microsoft high-volume sender requirements (via search) | ◐ |
+| R-SND-07 | **Gmail markup** is schema.org JSON-LD in the head: one `<script type="application/ld+json">` per block, after the style blocks, built from typed blocks (`EmailMessage` with a `ViewAction`, `ConfirmAction` or `SaveAction`; `Invoice`; `ParcelDelivery`) that carry only properties Gmail's markup reference documents in its property tables and examples (an organisation's `url` only for the carrier and the publisher, where Gmail lists it; the Invoice's provider and customer and the parcel's merchant carry a name only). A block missing a property the reference marks required (an `EmailMessage`'s action with its name and URL; a `ParcelDelivery`'s delivery address, latest arrival, carrier, items shipped and order with its number and merchant) is `E-MARKUP-REQUIRED`; Gmail marks no `Invoice` property required, and the library requires the provider's name and one amount due, without which the block states no bill. A value of the wrong form (a URL that is not absolute https, a date outside ISO 8601's forms, a string, URLs included, that is not valid UTF-8) is `E-MARKUP-VALUE`. A block with an error is not written. Gmail acts on markup only from senders who authenticate with SPF or DKIM and, for anything beyond messages to oneself, are registered with Google (`docs/gmail-markup.md`). The blocks count toward the message's size (their own R-SIZE-02 entry) but not toward the head CSS budget. | P1, lower/document | Gmail markup reference: go-to and one-click actions, Invoice, ParcelDelivery, registering with Google, securing actions (read); schema.org 30.1 vocabulary (read, checked by the tests) | ◐ (that Gmail shows these blocks from this library's messages awaits a registered sender, or a capture of a message sent to oneself) |
+| R-SND-08 | **No markup value can end its script element.** Inside the JSON-LD, `<`, `>` and `&` are written `\u003c`, `\u003e` and `\u0026`, U+2028 and U+2029 `\u2028` and `\u2029`, besides JSON's own escapes (`"`, `\`, control characters). The element's text then holds no `<`, so neither `</script>` nor `<!--` can appear in it, and a JSON parser reads every string back unchanged. | gmail_markup | HTML Standard, restrictions for contents of script elements; RFC 8259 §7 (string escapes) | ✓ (design rule) |
 
 ## 16. INT — Interactive content (optional)
 
@@ -591,8 +596,10 @@ when `outlookWord = false` (R-OL-01).
 7. The text part is non-empty and contains no markup.
 8. `lang`/`dir` are on `html` and the wrapper; there is an `h1` (R-DOC-02, R-A11Y-03).
 9. No `var(`, `data:`, `javascript:`, `<script`, `on*=`, `data-hk`
-or `data-isonim-` anywhere the library generates (R-CSS-11, R-IMG-08);
-a `mailRaw` payload is the author's, written as it is (R-RAW-03).
+or `data-isonim-` anywhere the library generates (R-CSS-11, R-IMG-08),
+but for R-SND-07's `<script type="application/ld+json">` data blocks,
+which no client executes; a `mailRaw` payload is the author's, written
+as it is (R-RAW-03).
 10. No whitespace between inline-block column siblings (R-LAY-05).
 11. No `nav`/`main`/`article`/`section`/`header`/`footer`/`aside`/
 `details`/`summary` elements (R-A11Y-10).
@@ -808,3 +815,9 @@ unsized cells (R-TBL-01, R-TBL-05).
   R-TBL-12's stay recommendations for P10. R-IMG-06 gains
   `e-dk-show-inline` for an inline-form image's dark copy. §18's image
   invariant names the inline form and the hidden dark copy.
+- 2026-10-04: R-SND-07 and R-SND-08 added: Gmail markup as typed
+  schema.org JSON-LD blocks in the head (`EmailMessage` actions,
+  `Invoice`, `ParcelDelivery`), checked before they are written, with
+  `<`, `>` and `&` escaped so no value can end the script element. The
+  §1 skeleton shows the `⟪markup⟫` line; §18's check 9 admits the data
+  blocks.

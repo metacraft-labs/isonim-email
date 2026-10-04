@@ -43,6 +43,7 @@ import ./navigation
 import ./content
 import ./text
 import ./crop
+import ./gmail_markup
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -53,6 +54,7 @@ export target
 export diagnostics
 export assets
 export tokens
+export gmail_markup
 
 type RenderedEmail* = object
   ## One rendered email: the document bytes, the plain-text
@@ -136,6 +138,7 @@ proc cloneTree*(node: EmailNode; parent: EmailNode = nil): EmailNode =
     priority: node.priority,
     layout: node.layout,
     expanded: node.expanded,
+    markup: node.markup,
   )
   for c in node.children:
     result.children.add(cloneTree(c, result))
@@ -447,6 +450,10 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   # Patterns expand first, so their expansions go through every pass.
   var diags = expandPatterns(doc, theme, target)
   diags.add(validate(doc))
+  # P1's Gmail markup check (R-SND-07): the blocks with no error are
+  # written at the end of the head by the document lowering.
+  let markup = gmailMarkupBlocks(doc)
+  diags.add(markup.diagnostics)
   # P3 reads the authoring values (P5 rounds percentages to two
   # decimals; the width maths needs them whole) and annotates the tree,
   # so the semantic tree carries the widths too.
@@ -525,7 +532,8 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
     else: work.children # Copy: appendChild detaches as it moves.
   for c in kids:
     r.appendChild(sections, c)
-  let lowered = lowerDocument(work, sections, headRes.blocks, target)
+  let lowered = lowerDocument(work, sections, headRes.blocks, target,
+    markup.json)
   # P10 over what is emitted: the closed mso-* list (R-OL-15), the
   # layout-table depth outside Outlook conditionals (R-TBL-15) and no
   # sectioning element (R-A11Y-10).

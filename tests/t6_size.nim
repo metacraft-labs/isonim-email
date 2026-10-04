@@ -15,7 +15,7 @@
 import std/[strutils, unittest]
 import isonim_email
 
-proc sizedTpl(r: EmailRenderer; x: int): EmailNode =
+proc sizedBody(r: EmailRenderer; x: int): EmailNode =
   ui(r):
     mailDocument(lang = "en", title = "Size",
         preheader = "Your account is ready."):
@@ -28,6 +28,14 @@ proc sizedTpl(r: EmailRenderer; x: int): EmailNode =
       a(href = "https://app.example.com/?utm_campaign=x",
           border_radius = "6px"):
         text "Open dashboard"
+
+proc sizedTpl(r: EmailRenderer; x: int): EmailNode =
+  # A Gmail markup block, so the breakdown's `Gmail markup` entry is
+  # measured too.
+  result = sizedBody(r, x)
+  result.addGmailMarkup(gmailMarkup(EmailMessageMarkup(action: MarkupAction(
+    kind: maView, name: "Open dashboard",
+    url: "https://app.example.com/?utm_campaign=x"))))
 
 proc msoRegions(html: string): seq[(int, int)] =
   ## `[start, end)` of every `<!--[if mso…]>…<![endif]-->` region (the
@@ -137,7 +145,7 @@ suite "size budget":
       keys.add(k)
       total += v
     check keys == @["head CSS", "inline styles", "URLs",
-      "preheader padding", "MSO/VML", "markup and text"]
+      "preheader padding", "MSO/VML", "Gmail markup", "markup and text"]
     check total == res.htmlBytes
     # Re-derived independently from the finished bytes.
     var mso = 0
@@ -152,13 +160,16 @@ suite "size budget":
       spans(rest, " src=\"", "\"", inner = true)
     let padding = defaultTarget().preheaderPad.repeat(
       preheaderPaddingUnits("Your account is ready.")).len
+    let markup = spans(rest, "<script type=\"application/ld+json\">",
+      "</script>", inner = false)
     check res.sizeBreakdown.entry("MSO/VML") == mso
     check res.sizeBreakdown.entry("head CSS") == headCss
     check res.sizeBreakdown.entry("inline styles") == inline
     check res.sizeBreakdown.entry("URLs") == urls
     check res.sizeBreakdown.entry("preheader padding") == padding
+    check res.sizeBreakdown.entry("Gmail markup") == markup
     check res.sizeBreakdown.entry("markup and text") ==
-      res.htmlBytes - mso - headCss - inline - urls - padding
+      res.htmlBytes - mso - headCss - inline - urls - padding - markup
     # Every contributor this story has is non-zero, and the tracking
     # parameters count toward URLs.
     for (k, v) in res.sizeBreakdown:

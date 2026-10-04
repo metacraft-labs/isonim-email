@@ -63,6 +63,9 @@ type
       ## Everything inside `<!--[if mso …]>…<![endif]-->` (VML, ghost
       ## tables, their styles and URLs) plus the `<!--[if !mso]>`
       ## markers.
+    scGmailMarkup = "Gmail markup"
+      ## The Gmail markup blocks: each `<script type="application/ld+json">`
+      ## element, tags included (R-SND-07).
     scMarkup = "markup and text"
       ## Everything else: the doctype, tags, other attributes, text.
 
@@ -164,6 +167,22 @@ proc serializeNode(sink: var SerialSink; node: EmailNode; minify: bool;
   of enHeadStyle:
     sink.put("<style>" & node.text & "</style>", scHeadCss, context)
   of enElement:
+    if node.tag == "script" and
+        node.attrs.getOrDefault("type", "") == "application/ld+json":
+      # A Gmail markup block (R-SND-07): its JSON arrives escaped for
+      # the element (R-SND-08), as one raw child, and is written whole.
+      var text = ""
+      for c in node.children:
+        if c.kind != enRaw:
+          raise newException(EmailRenderError,
+            "a JSON-LD script element holds only its escaped JSON")
+        text.add c.text
+      if "<" in text:
+        raise newException(EmailRenderError, "E-MARKUP-VALUE: JSON-LD " &
+          "holding '<' could end its script element (R-SND-08)")
+      sink.put("<script type=\"application/ld+json\">" & text &
+        "</script>", scGmailMarkup, context)
+      return
     let childPre =
       if node.tag.toLowerAscii() in ["pre", "textarea"]: preDepth + 1
       else: preDepth
