@@ -59,6 +59,12 @@ type
     theme*: EmailTheme
     target*: EmailTarget
     r*: EmailRenderer
+    diagnostics*: ref seq[EmailDiagnostic]
+      ## What an expansion reports beside the tree it returns (a warning
+      ## about the content it was given, an error for content it left
+      ## out); collected with the expansion's own `E-VOCAB-BAD-VALUE`.
+      ## Nil outside `expandPatterns`: `report` then drops nothing, it
+      ## raises.
 
   BriefView* = object
     ## The client a review brief is written for, as a pattern's
@@ -94,6 +100,15 @@ type
   PatternError* = object of ValueError
     ## A prop value that does not parse, or an expansion that refuses its
     ## input; reported as `E-VOCAB-BAD-VALUE` at the element.
+
+proc report*(ctx: ExpandCtx; d: EmailDiagnostic) =
+  ## Records `d` for the render, beside the expansion's tree. Without a
+  ## collector (an expansion run outside `expandPatterns`) an error is a
+  ## `PatternError`, so it is never lost; anything less is dropped.
+  if ctx.diagnostics != nil:
+    ctx.diagnostics[].add(d)
+  elif d.severity == sevError:
+    raise newException(PatternError, d.code & ": " & d.message)
 
 proc narrow*(view: BriefView): bool =
   ## True when the viewport is below the breakpoint (a phone).
@@ -345,6 +360,10 @@ proc expandPatterns*(root: EmailNode; theme: EmailTheme;
   ## expansions' own patterns included, then wraps a document's loose
   ## content in sections (`wrapLooseContent`). Idempotent: an expanded
   ## element is not expanded again.
-  let ctx = ExpandCtx(theme: theme, target: target, r: EmailRenderer())
+  var reported: ref seq[EmailDiagnostic]
+  new(reported)
+  let ctx = ExpandCtx(theme: theme, target: target, r: EmailRenderer(),
+    diagnostics: reported)
   expandNode(root, ctx, 0, result)
+  result.add(reported[])
   wrapLooseContent(root)

@@ -12,7 +12,8 @@
 > `mailStack`, `mailBox`, `mailColumns` with its four strategies,
 > `mailGrid`, `mailCluster`, `mailSidebar`) and `defineMailPattern`
 > (§4, §5), and the structure, media, container and data patterns
-> (§4.1–§4.4), and the actions and inline items (§4.5). An element
+> (§4.1–§4.4), the actions and inline items (§4.5), Markdown bodies
+> (§4.7) and the layouts with their reference emails (§4.8). An element
 > without a lowering is reported (`E-LOWER-MISSING`), never emitted
 > raw.
 > **Last Updated:** 2026-10-04
@@ -1003,9 +1004,189 @@ Store` and `Get it on Google Play`; `other` needs one.
 | Survey                                | Header, RatingScale, Footer                                            |
 
 Each row is built from exactly these patterns, with no raw markup and no
-error, by `test_common_email_types_are_buildable`; the layouts that wrap
-them (`receiptLayout`, …) and the reference emails come with the
-templates.
+error, by `test_common_email_types_are_buildable`. The layouts of §4.8
+wrap five of the rows (`receiptLayout`, `securityCodeLayout`,
+`alertLayout`, `digestLayout`, and `transactionalLayout` for the rest),
+and the reference emails in `examples/` build every row.
+
+### 4.7 Markdown bodies: `mailMarkdown`
+
+**`mailMarkdown`** (a body written in Markdown)
+
+- _Props:_ `src` (required: the Markdown; empty is `E-VOCAB-BAD-VALUE`),
+  `heading_offset: int = 0` (0–5: added to every heading's level, at most
+  `h6`; a body under the template's own `h1` sets 1), `image_width` (px:
+  the width of the body's images; by default each image's intrinsic
+  size, R-IMG-01, so an image of unknown size needs it).
+- _Content:_ none (the Markdown is `src`).
+- _Reads:_ the Markdown of isonim-docs (`core/markdown_vm`), through its
+  AST (`parseMarkdownBlocks`, `parseInlineSpans`), never through HTML.
+  That AST is the docs site's dialect, and leaves some of CommonMark as
+  text, so over the same AST the element adds: block quotes (`>` lines,
+  a lazy continuation line included, read as Markdown again), thematic
+  breaks (`---`, `***`, `___`, spaces between allowed), setext headings
+  (a line of `=` or `-` under a paragraph), hard line breaks (a line
+  ending in two spaces or a backslash), emphasis and strong emphasis
+  (`*`, `_`, by CommonMark's delimiter-run rules: `snake_case` is no
+  emphasis), `~~strikethrough~~` (GFM), autolinks (`<https://…>`,
+  `<mailto:…>`), backslash escapes of ASCII punctuation, and character
+  references (`&amp;`, `&#169;`, the common named ones). Fenced code
+  and `:::` blocks are left as written.
+- _Built from:_ a `mailStack(gap = space.4)` (16px between blocks: a
+  code block, a table, a callout and a quote have no margins of their
+  own) holding, node by node:
+
+  | Markdown                                                      | Element                                                                                                                                                                                 |
+  | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | heading (ATX or setext)                                       | `h1`–`h6`: its level plus `heading_offset`, at most 6                                                                                                                                   |
+  | paragraph                                                     | `p`                                                                                                                                                                                     |
+  | emphasis, strong emphasis, strikethrough                      | `em`, `strong`, `s`                                                                                                                                                                     |
+  | hard line break                                               | `br`                                                                                                                                                                                    |
+  | code span                                                     | `codeInline`                                                                                                                                                                            |
+  | link, autolink                                                | `a` (a title in the target is its `title`)                                                                                                                                              |
+  | image                                                         | `mailImage` (`alt`, `fluid_on_mobile`, `image_width`; no alt: decorative), a block of its own: the text around it becomes the paragraphs before and after it                            |
+  | bullet / ordered list                                         | `ul` / `ol` of `li` (one level: the AST has no nesting, so an indented item is a sibling)                                                                                               |
+  | fenced code                                                   | `mailCodeBlock` (the info string is not used)                                                                                                                                           |
+  | block quote                                                   | `blockquote` holding the quote's own elements                                                                                                                                           |
+  | thematic break                                                | `mailDivider`                                                                                                                                                                           |
+  | pipe table                                                    | `mailTable` whose hidden caption is the header labels (joined with a comma; the Arabic comma in Arabic script languages), `thead` of `th`, `tbody` of `td`, each cell's inline Markdown |
+  | `:::note`, `tip`, `important`, `warning`, `caution`, `danger` | `mailCallout` in tone `info`, `success`, `primary`, `warning`, `danger`, `danger`, its word (`Note`, `Tip`, …) the label, its paragraphs the body                                       |
+  | `:::button href="…" variant="…"`                              | `mailButton` (`primary` → `solid`, `secondary` → `outline`)                                                                                                                             |
+
+- _Special:_ never markup. Raw HTML (a tag, an end tag, a comment) and
+  footnotes (`[^1]`) are written as the text the author typed, escaped,
+  and reported once per kind and element, `W-MARKDOWN-UNSUPPORTED`:
+  `mailRaw` is the one way to write markup. An image where only text
+  goes (a heading, a list item, a table cell) is its alt text, reported
+  the same way. A link whose target is not an absolute URL (`https:`,
+  `http:`, `mailto:`, `tel:`) is `E-URL-SCHEME`: the docs dialect
+  resolves a relative target against the docs site, which a mail client
+  cannot follow. The docs site's blocks with no email form (`:::tabs`,
+  `:::cards`, `:::hero`, `:::faq`, `:::video`, `:::form`, a component tag
+  `<Name …/>`) are left out, `E-MARKDOWN-UNSUPPORTED`. Not read as
+  Markdown, because the AST has no node for them (written as text,
+  without a diagnostic): indented code blocks (write a fence), nested
+  lists, reference-style links, and HTML entities outside the common set.
+- _Text:_ follows from the elements (the text rules above: headings
+  underlined, lists, code indented, the quote indented, the divider
+  `----`, the table as a `mailTable`, links `label (url)`); struck text
+  is written as is.
+
+### 4.8 Layouts
+
+A layout is a template: `proc(r: EmailRenderer; p: XLayoutProps):
+EmailNode`, returning a whole `mailDocument`, which `renderEmail` and
+`story` take as they take any template. Its props are a plain object,
+every field typed; what the five share is one `LayoutFrame`. Content a
+caller adds goes through a slot, `LayoutSlot = proc(r: EmailRenderer;
+parent: EmailNode)`, which appends to the content card. A layout is
+built only from patterns and primitives, following its row of §4.6, and
+every colour it writes is a theme token (the digest hero's text over its
+image aside), so `darkMode = designed` gives it its dark palette with no
+`@dark:` of its own. A required prop left empty is reported by the
+pattern that needs it (the header's logo, the footer's address:
+`E-VOCAB-BAD-VALUE`; no title or heading: `E-A11Y-TITLE-MISSING`,
+`E-A11Y-NO-H1`), never filled in.
+
+**The frame** (`LayoutFrame`, in every layout's `frame`)
+
+- _Props:_ `lang = "en"`, `dir = "ltr"`, `title` (required), `preheader`;
+  the brand: `brand` (its name, the logo's alt text, required), `logo`
+  (required), `logoWidth` (px, required), `logoDark`, `homeUrl`, `links`
+  (the header's `LayoutLink(label, href)`s); `viewInBrowser` (the web
+  copy's URL), `viewInBrowserLabel = "View in browser"`; the footer:
+  `address` (required), `reason`, `legal`, `unsubscribe`,
+  `unsubscribeLabel = "Unsubscribe"`, `preferences`, `preferencesLabel =
+"Preferences"`, `social` (`LayoutSocial(network, href)`s).
+- _Built from:_ the document on `color.surface.canvas`; a
+  `mailViewInBrowser` after the preheader when `viewInBrowser` is set; a
+  header band holding the `mailHeader` (logo and links); the content card,
+  a `mailSection` on `color.surface.card` holding a `mailStack` (gap
+  `space.5`); a footer band holding the `mailFooter`, its `mailSocial`
+  row above the address. Without `unsubscribe` the footer is
+  `transactional`.
+
+**`transactionalLayout`** (`TransactionalLayoutProps`): header, content
+slot, footer.
+
+- _Props:_ `frame`, `heading` (the `h1`, required), `intro`, `markdown`
+  (a `mailMarkdown` body with `heading_offset = 1`), `content` (a slot),
+  `actions` (1–3 `LayoutLink`s: a `mailButtonGroup`, stacked on a phone).
+- _Built from:_ the card's stack holds the heading, the intro, the
+  Markdown, the slot and the actions, in that order.
+
+**`receiptLayout`** (`ReceiptLayoutProps`): Header, KeyValue, LineItems,
+ButtonGroup, Footer.
+
+- _Props:_ `frame`, `heading`, `intro`, `summaryCaption = "Order
+summary"` and `summary` (`LayoutRow(label, value, emphasis)`s),
+  `itemsCaption = "Items"`, `itemLabel`, `qtyLabel`, `amountLabel` and
+  `items` (`ReceiptItem(description, amount, detail, qty, thumb,
+thumbAlt)`), `totalsCaption = "Totals"` and `totals` (the last row is
+  the total), `actions`, `note`, `content`.
+- _Built from:_ the heading and intro, a `mailKeyValue` of the summary,
+  a `mailLineItems` of the items, a `mailKeyValue(total_row)` of the
+  totals, the button group, the note, the slot.
+
+**`securityCodeLayout`** (`SecurityCodeLayoutProps`): Header,
+SecurityCode, Callout(warning), Footer.
+
+- _Props:_ `frame`, `heading`, `intro`, `code` and `expires` (required),
+  `codeLabel = "Your code"`, `expiresLabel = "Expires at"`, `magicLink`
+  and `cta = "Sign in"`, `warningLabel = "Warning"`, `warningTitle =
+"Didn't request this?"`, `warning` (the callout's body), `content`.
+- _Built from:_ the heading and intro, a `mailSecurityCode` (its button
+  the magic link, when there is one), a warning `mailCallout`, the slot.
+
+**`alertLayout`** (`AlertLayoutProps`): Header, Callout, KeyValue,
+CodeBlock, ButtonGroup, Footer.
+
+- _Props:_ `frame`, `severity: AlertSeverity = asCritical`
+  (`asCritical`, `asWarning`, `asInfo`, `asResolved`), `severityLabel`
+  (default the severity's word), `heading`, `status` (the band's title,
+  required), `summary`, `factsCaption = "Details"` and `facts`,
+  `codeTitle` and `code` (the evidence), `actions`, `content`.
+- _Built from:_ the heading; the **severity band**: a `mailCallout` in the
+  severity's tone (`danger`, `warning`, `info`, `success`), its word the
+  label (`Critical`, `Warning`, `Info`, `Resolved`), the status its title,
+  the summary its body; a `mailKeyValue` of the facts; an `h2` and a
+  `mailCodeBlock` when there is evidence; the slot; the button group.
+
+**`digestLayout`** (`DigestLayoutProps`): Header, Hero, Grid of Cards or
+ZigZag, Footer.
+
+- _Props:_ `frame`, `hero` (`DigestHero(title, text, image, color =
+"#1b2a4a", textColor = "#ffffff", height = 280, cta, href)`; no title,
+  no hero), `heading`, `intro`, `arrangement: DigestArrangement = daGrid`
+  (`daGrid`, `daZigZag`), `columns = 2`, `items` (`DigestItem(title,
+body, image, imageAlt, imageWidth = 200, crop = true, cta, href)`),
+  `imageRatio = "3:2"` (the items' images cropped to it, R-IMG-13, where
+  `crop`), `content`.
+- _Built from:_ a `mailHero` (`min_height` the hero's height, its text
+  middle-aligned: an `h1`, a paragraph, a button) between the header and
+  the card; then the heading (`h2` under a hero, else the `h1`) and the
+  items: a `mailGrid(columns, mobile_columns = 1)` of `mailCard`s (their
+  titles one level below the heading) or a `mailZigZag` of
+  `mailMediaObject`s; then the slot.
+- _Special:_ the hero's text sits over an image no colour scheme
+  changes, so its colours are the caller's literals (`color`,
+  `textColor`): under `designed` they are `W-DARK-RAW-COLOR`, as any
+  literal is.
+
+**The reference emails** (`examples/reference_set.nim`) build each
+layout and each row of §4.6, and between them every element of the
+vocabulary: `receiptTypical`, `receiptHebrew`, `securityCodeJapanese`,
+`alertCritical`, `alertArabic`, `digestGrid`, `digestZigZag`,
+`digestNearBudget`, `notificationMarkdown`, `shippingChinese`,
+`surveyRequest`, `darkPalette` (`darkMode = designed`),
+`eventInvitation` and `newsletterColumns` (the last two composed from
+the frame and patterns, with no layout). Their edge cases: long unbroken
+words and URLs, right to left (Hebrew, Arabic), CJK (Japanese, Chinese),
+sections of one to four columns, text over a hero image, a missing
+(404) image, a message near the 90 KB budget, and every colour token in
+the designed dark palette. Each has a real footer whose unsubscribe link
+is visible, a reviewed text golden, and is held to the reference set's
+invariants (`test_reference_set_invariants`).
 
 ---
 
@@ -1037,7 +1218,11 @@ registered primitive and pattern to the rule with exactly these:
   stories are its parent's, which show every item kind it has. Items a
   parent reads and consumes (`mailKeyValueRow`, `mailLineItem`,
   `mailStat`, `mailTimelineEvent`, `mailAppBadge`) are not registered
-  patterns at all.
+  patterns at all. An item is declared twice, and the two must agree
+  (`test_item_of_matches_the_vocabulary_parents`): in the registry
+  (`declareItemOf`), and in the vocabulary, whose only parent for it is
+  its pattern (`restrictPatternParents`); an element only one pattern may
+  hold is that pattern's item.
 - **No `rtl` story where right to left is refused**: `mailZigZag`
   (R-LAY-11).
 

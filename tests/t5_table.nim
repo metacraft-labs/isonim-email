@@ -174,6 +174,24 @@ suite "mailTable markup":
     let cell = between(html, "1 Oct</td>", "</td>")
     check "word-break:break-word;" in cell
 
+  test "test_a_cell_holding_a_phrase_carries_the_text_colour":
+    # rule: R-TXT-02
+    # A cell whose text sits in a phrase element (`<strong>$20</strong>`)
+    # holds text all the same: it gets its colour and type inline, so a
+    # client whose dark scheme supplies a light default colour cannot
+    # paint the phrase light on the table's light cell.
+    let r = EmailRenderer()
+    let (doc, s) = newDoc(r)
+    let mt = r.dataTable(s, ["Plan", "Price"], [@["Team", ""]])
+    let td = mt.children[0].children[1].children[0].children[1]
+    discard r.child(td, "strong", text = "$20")
+    let html = body(renderTree(doc).html)
+    let at = html.find("$20</strong>")
+    require at > 0
+    let cell = html[html.rfind("<td", last = at) ..< at]
+    check "color:#111827;" in cell
+    check "font-family:" in cell
+
 suite "mailTable mobile modes":
   test "test_wide_tables_stack_with_labels":
     # rule: R-TBL-18

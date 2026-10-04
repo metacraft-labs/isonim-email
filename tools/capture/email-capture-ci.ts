@@ -26,6 +26,10 @@
 // captures — writes their baselines and removes the marker. The
 // canary can never be pending: Tier-1 hashes it on every run.
 //
+// Exclusions: a variant listed in TIER2_EXCLUDED, with its reason, is
+// captured but not compared and has no committed baseline; every run
+// names it with the reason and counts it in the verdict.
+//
 // Usage:
 //   node tools/capture/email-capture-ci.ts RUN_DIR [--assert]
 //     [--require-approved] [--update-baselines [--approve S,…]]
@@ -49,14 +53,49 @@ const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
 
 export const CANARY_STORY = "canary";
+// The stories Tier-1 exact-hashes, every variant of each: a run must
+// hold done captures of every one, their baselines carry a .sha256 per
+// PNG, and none can await re-approval. Widened only together with
+// their approved baselines (tests/baselines/README.md).
+export const TIER1_STORIES: readonly string[] = [
+  CANARY_STORY,
+  // The reference emails that stand for the rest: a receipt left to
+  // right, an alert right to left (Arabic) and a login code in CJK
+  // (Japanese).
+  "receiptTypical",
+  "alertArabic",
+  "securityCodeJapanese",
+];
 export const TIER2_MAX_DIFF_RATIO = 0.001;
+
+// Variants Tier-2 does not compare, each with its reason: their
+// captures are still made (and reviewed in-session), but no baseline
+// is committed for them. Never silent: every run names each excluded
+// variant it holds, with the reason, and counts them in the verdict;
+// --update-baselines does not write them; a baseline committed for one
+// anyway is a failure (it would go stale unchecked). A Tier-1 story
+// cannot be excluded.
+export const OVER_FILE_LIMIT = "baseline over the repository's 1 MB file limit";
+export const TIER2_EXCLUDED: Readonly<Record<string, string>> = {
+  // A message near the 90 KB budget is a very long page on a phone:
+  // these three full-page captures are 1.5-2.2 MB. Its desktop
+  // variants are compared, and its size is checked by the reference
+  // set's invariants.
+  "digestNearBudget/a-thunderbird-firefox-mobile-light-on": OVER_FILE_LIMIT,
+  "digestNearBudget/a-apple-webkit-mobile-light-on": OVER_FILE_LIMIT,
+  "digestNearBudget/a-chromium-baseline-chromium-mobile-light-on":
+    OVER_FILE_LIMIT,
+};
 export const PENDING_MARKER = "PENDING-REVIEW";
 
 // Stories whose baselines await re-approval, with the recorded
 // reason: every <baselinesDir>/<story>/PENDING-REVIEW. An empty
-// marker, or a marker on the canary, is refused (throws): a pending
+// marker, or a marker on a Tier-1 story, is refused (throws): a pending
 // state must say why, and Tier-1 cannot be suspended.
-export function readPendingReview(baselinesDir: string): Map<string, string> {
+export function readPendingReview(
+  baselinesDir: string,
+  tier1: readonly string[] = TIER1_STORIES,
+): Map<string, string> {
   const pending = new Map<string, string>();
   if (!existsSync(baselinesDir)) return pending;
   for (const e of readdirSync(baselinesDir, { withFileTypes: true })) {
@@ -68,9 +107,9 @@ export function readPendingReview(baselinesDir: string): Map<string, string> {
       throw new Error(
         `capture-ci: ${marker} is empty — a pending review must record why the baselines are out of date`,
       );
-    if (e.name === CANARY_STORY)
+    if (tier1.includes(e.name))
       throw new Error(
-        `capture-ci: ${marker} — the canary is Tier-1 and can never await re-approval`,
+        `capture-ci: ${marker} — ${e.name === CANARY_STORY ? "the canary" : e.name} is Tier-1 and can never await re-approval`,
       );
     pending.set(e.name, reason);
   }
@@ -90,6 +129,39 @@ export function tier2Pending(runDir: string, baselinesDir: string): string[] {
     .map(
       (story) =>
         `capture-ci: Tier-2 ${story} awaiting re-approval — ${counts.get(story)} capture(s) not compared (${pending.get(story)})`,
+    );
+}
+
+// Refuses an exclusion of a Tier-1 variant (Tier-1 hashes every one).
+function checkExclusions(
+  excluded: Readonly<Record<string, string>>,
+  tier1: readonly string[],
+): void {
+  for (const [variant, reason] of Object.entries(excluded)) {
+    const story = variant.slice(0, variant.indexOf("/"));
+    if (tier1.includes(story))
+      throw new Error(
+        `capture-ci: ${variant} is Tier-1 and cannot be excluded from the baselines`,
+      );
+    if (reason.trim().length === 0)
+      throw new Error(
+        `capture-ci: the exclusion of ${variant} gives no reason`,
+      );
+  }
+}
+
+// One line per excluded variant the run holds: not compared, and why.
+export function tier2Excluded(
+  runDir: string,
+  excluded: Readonly<Record<string, string>> = TIER2_EXCLUDED,
+): string[] {
+  checkExclusions(excluded, TIER1_STORIES);
+  return doneEntries(readIndex(runDir))
+    .map(variantOf)
+    .filter((v) => excluded[v] !== undefined)
+    .sort()
+    .map(
+      (v) => `capture-ci: Tier-2 excludes ${v} — not compared (${excluded[v]})`,
     );
 }
 
@@ -127,19 +199,24 @@ function readBaselineHash(path: string, variant: string): string {
   return hex;
 }
 
-// Tier-1: exact sha256 of each done canary PNG vs the checked-in
-// .sha256 files. Returns one message per failing variant (empty =
-// pass); throws when the run holds no done canary captures at all.
-export function tier1Check(runDir: string, baselinesDir: string): string[] {
-  const canaries = doneEntries(readIndex(runDir)).filter(
-    (e) => e.story === CANARY_STORY,
-  );
-  if (canaries.length === 0)
-    throw new Error(
-      `capture-ci: Tier-1 found no done canary captures in ${runDir} — refusing a vacuous pass`,
-    );
+// Tier-1: exact sha256 of each done PNG of the Tier-1 stories vs the
+// checked-in .sha256 files. Returns one message per failing variant
+// (empty = pass); throws when the run holds no done capture of one of
+// the stories (a vacuous pass).
+export function tier1Check(
+  runDir: string,
+  baselinesDir: string,
+  stories: readonly string[] = TIER1_STORIES,
+): string[] {
+  const done = doneEntries(readIndex(runDir));
+  for (const story of stories)
+    if (!done.some((e) => e.story === story))
+      throw new Error(
+        `capture-ci: Tier-1 found no done ${story === CANARY_STORY ? "canary" : story} captures in ${runDir} — refusing a vacuous pass`,
+      );
+  const hashed = done.filter((e) => stories.includes(e.story));
   const failures: string[] = [];
-  for (const entry of canaries) {
+  for (const entry of hashed) {
     const variant = variantOf(entry);
     const pngPath = join(runDir, entry.png as string);
     let want: string;
@@ -147,7 +224,7 @@ export function tier1Check(runDir: string, baselinesDir: string): string[] {
       want = readBaselineHash(
         join(
           baselinesDir,
-          CANARY_STORY,
+          entry.story,
           `${basename(entry.png as string, ".png")}.sha256`,
         ),
         variant,
@@ -173,7 +250,12 @@ export function tier1Check(runDir: string, baselinesDir: string): string[] {
 // holds no done captures at all.
 // Stories awaiting re-approval (PENDING-REVIEW) are not compared;
 // tier2Pending reports them.
-export function tier2Check(runDir: string, baselinesDir: string): string[] {
+export function tier2Check(
+  runDir: string,
+  baselinesDir: string,
+  excluded: Readonly<Record<string, string>> = TIER2_EXCLUDED,
+): string[] {
+  checkExclusions(excluded, TIER1_STORIES);
   const entries = doneEntries(readIndex(runDir));
   if (entries.length === 0)
     throw new Error(
@@ -189,6 +271,13 @@ export function tier2Check(runDir: string, baselinesDir: string): string[] {
       entry.story,
       basename(entry.png as string),
     );
+    if (excluded[variant] !== undefined) {
+      if (existsSync(baseline))
+        failures.push(
+          `capture-ci: Tier-2 excludes ${variant} (${excluded[variant]}) but ${baseline} exists — delete it or drop the exclusion`,
+        );
+      continue;
+    }
     if (!existsSync(baseline)) {
       failures.push(
         `capture-ci: Tier-2 has no approved baseline for ${variant} (${baseline} missing) — regenerate with \`just email-capture-ci --update-baselines\``,
@@ -318,8 +407,9 @@ export function tier3Check(runDir: string): string[] {
 }
 
 // --update-baselines: copy every done capture's PNG into the
-// baselines tree and (re)write the canary .sha256 files from the
-// same bytes. Adds and overwrites; never prunes stale variants.
+// baselines tree and (re)write the Tier-1 stories' .sha256 files from
+// the same bytes. Adds and overwrites; never prunes stale variants.
+// Excluded variants (TIER2_EXCLUDED) are never written.
 // Stories awaiting re-approval are skipped unless named in
 // `approve`: approving writes their baselines and removes the
 // PENDING-REVIEW marker. Naming a story that is not pending is
@@ -328,13 +418,22 @@ export function updateBaselines(
   runDir: string,
   baselinesDir: string,
   approve: string[] = [],
-): { pngs: number; hashes: number; skipped: string[]; approved: string[] } {
+  tier1: readonly string[] = TIER1_STORIES,
+  excluded: Readonly<Record<string, string>> = TIER2_EXCLUDED,
+): {
+  pngs: number;
+  hashes: number;
+  skipped: string[];
+  approved: string[];
+  excluded: string[];
+} {
+  checkExclusions(excluded, tier1);
   const entries = doneEntries(readIndex(runDir));
   if (entries.length === 0)
     throw new Error(
       `capture-ci: no done captures in ${runDir} — refusing to write baselines from an empty run`,
     );
-  const pending = readPendingReview(baselinesDir);
+  const pending = readPendingReview(baselinesDir, tier1);
   const inRun = new Set(entries.map((e) => e.story));
   for (const story of approve) {
     if (!pending.has(story))
@@ -348,9 +447,14 @@ export function updateBaselines(
   }
   const approved = new Set<string>();
   const skipped = new Set<string>();
+  const notWritten: string[] = [];
   let pngs = 0;
   let hashes = 0;
   for (const entry of entries) {
+    if (excluded[variantOf(entry)] !== undefined) {
+      notWritten.push(variantOf(entry));
+      continue;
+    }
     if (pending.has(entry.story) && !approve.includes(entry.story)) {
       skipped.add(entry.story);
       continue;
@@ -362,7 +466,7 @@ export function updateBaselines(
     const file = basename(entry.png as string);
     writeFileSync(join(storyDir, file), bytes);
     pngs++;
-    if (entry.story === CANARY_STORY) {
+    if (tier1.includes(entry.story)) {
       const hex = createHash("sha256").update(bytes).digest("hex");
       writeFileSync(
         join(storyDir, `${basename(file, ".png")}.sha256`),
@@ -378,6 +482,7 @@ export function updateBaselines(
     hashes,
     skipped: [...skipped].sort(),
     approved: [...approved].sort(),
+    excluded: notWritten.sort(),
   };
 }
 
@@ -461,12 +566,16 @@ function main(): void {
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
     }
+    for (const variant of result.excluded)
+      process.stdout.write(
+        `capture-ci: did not write ${variant} — excluded from the baselines (${TIER2_EXCLUDED[variant]})\n`,
+      );
     for (const story of result.skipped)
       process.stdout.write(
         `capture-ci: left ${story} alone — it awaits re-approval (review its captures, then pass --approve ${story})\n`,
       );
     process.stdout.write(
-      `capture-ci: wrote ${result.pngs} baseline PNGs + ${result.hashes} canary hashes to ${baselinesDir} (from ${runDir})${result.approved.length > 0 ? `; approved ${result.approved.join(", ")}` : ""}\n`,
+      `capture-ci: wrote ${result.pngs} baseline PNGs + ${result.hashes} Tier-1 hashes to ${baselinesDir} (from ${runDir})${result.approved.length > 0 ? `; approved ${result.approved.join(", ")}` : ""}\n`,
     );
     return;
   }
@@ -474,20 +583,32 @@ function main(): void {
   let tier1: string[];
   let tier2: string[];
   let pending: string[];
+  let excludedLines: string[];
   let tier3: string[] = [];
   try {
     tier1 = tier1Check(runDir, baselinesDir);
     tier2 = tier2Check(runDir, baselinesDir);
     pending = tier2Pending(runDir, baselinesDir);
+    excludedLines = tier2Excluded(runDir);
     if (gate) tier3 = tier3Check(runDir);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
-  for (const line of [...tier1, ...tier2, ...pending, ...tier3])
+  for (const line of [
+    ...tier1,
+    ...tier2,
+    ...pending,
+    ...excludedLines,
+    ...tier3,
+  ])
     process.stdout.write(`${line}\n`);
   const pendingNote =
     pending.length > 0
       ? `; ${pending.length} story(ies) awaiting re-approval, not compared`
+      : "";
+  const excludedNote =
+    excludedLines.length > 0
+      ? `; ${excludedLines.length} variant(s) excluded from Tier-2, not compared`
       : "";
   const pendingFail = requireApproved ? pending.length : 0;
   if (
@@ -497,10 +618,10 @@ function main(): void {
     pendingFail > 0
   )
     fail(
-      `capture-ci: FAIL — Tier-1 ${tier1.length} failure(s), Tier-2 ${tier2.length} failure(s), Tier-3 ${tier3.length} failure(s)${requireApproved ? `, ${pendingFail} story(ies) awaiting re-approval (--require-approved)` : pendingNote} (run at ${runDir})`,
+      `capture-ci: FAIL — Tier-1 ${tier1.length} failure(s), Tier-2 ${tier2.length} failure(s), Tier-3 ${tier3.length} failure(s)${requireApproved ? `, ${pendingFail} story(ies) awaiting re-approval (--require-approved)` : pendingNote}${excludedNote} (run at ${runDir})`,
     );
   process.stdout.write(
-    `capture-ci: PASS — Tier-1 + Tier-2${gate ? " + Tier-3" : ""} clean${pendingNote} (run at ${runDir})\n`,
+    `capture-ci: PASS — Tier-1 + Tier-2${gate ? " + Tier-3" : ""} clean${pendingNote}${excludedNote} (run at ${runDir})\n`,
   );
 }
 

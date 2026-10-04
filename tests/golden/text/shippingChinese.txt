@@ -1,0 +1,41 @@
+在浏览器中查看: https://example.com/view/2041
+
+Acme
+
+订单 (https://example.com/zh/orders)
+帮助 (https://example.com/zh/help)
+
+您的订单已发货
+=======
+
+订单 2041 正在运送途中，预计 10 月 7 日（星期三）送达。
+
+第 2 步，共 4 步：已发货。下一步：运输中。
+
+[海岸风景画]
+
+海岸风景画
+A3，哑光，1 件
+
+[橡木画框]
+
+橡木画框
+适用于 A3，1 件
+
+10月4日 09:12 — 包裹已从上海仓库发出。
+10月4日 18:40 — 包裹已到达杭州转运中心。
+
+跟踪包裹: https://example.com/zh/track/2041
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+您收到此邮件是因为您在 Acme 下了订单。
+
+Acme 有限公司，上海市示例路 1 号
+
+退订 (https://example.com/unsubscribe?u=4f2a)
+通知设置 (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme 有限公司 保留所有权利。

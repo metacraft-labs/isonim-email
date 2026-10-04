@@ -30,6 +30,32 @@ export const DOM_ASSERTION_CHECKS = [
   "clipped",
 ];
 
+// Checks that do not apply to a story by design, with the reason: the
+// result is recorded as `pass: null` (never a failure, as axe's
+// "not run") carrying the reason. Only the canary is listed: it is the
+// fixed minimal document of the determinism checks, with no footer.
+export const NOT_APPLICABLE: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  canary: {
+    unsubscribe:
+      "not applicable: the canary is the fixed minimal document of the determinism checks, with no footer by design",
+  },
+};
+
+// The story's results with its not-applicable checks recorded as such.
+export function applyNotApplicable<
+  T extends { check: string; pass: boolean | null; detail: string },
+>(story: string, results: T[]): T[] {
+  const na = NOT_APPLICABLE[story];
+  if (na === undefined) return results;
+  return results.map((r) =>
+    na[r.check] === undefined
+      ? r
+      : ({ ...r, pass: null, detail: na[r.check] } as T),
+  );
+}
+
 export function domAssertionsScript(): string {
   // Plain JS only (no TS syntax, no backticks, no ${}): node passes
   // this string to page.evaluate, which runs it in the page.
@@ -63,29 +89,126 @@ export function domAssertionsScript(): string {
       (worst ? "; widest overhang: <" + label(worst) + "> (right edge at " + Math.round(worstRight) + "px)" : ""));
   }
 
-  // -- touch: every visible link/button is at least 44px on its
-  // short side. Hidden elements (offsetParent === null, which also
-  // covers display:none ancestors) are skipped, never failed. --
+  // -- touch: WCAG 2.2 SC 2.5.8 Target Size (Minimum), level AA
+  // (catalogue R-A11Y-11). A visible link or button passes when its box
+  // is at least 24x24 CSS px, or when a 24px-diameter circle centred on
+  // its box intersects no other target and no other undersized target's
+  // circle (the spacing exception). An inline link in a sentence or
+  // block of text (its block holds text outside any target) is exempt
+  // (the inline exception). A box is the union of the element's client
+  // rects (WebKit reports a wrapped inline's bounding box 0px tall; the
+  // builds captured here report its line boxes 0px tall too, at the
+  // baseline, and those of an inline element are given the height of its
+  // font's line, at most its line height; a box that is 0px tall because
+  // its CSS makes it so stays 0px tall and undersized).
+  // Hidden elements (offsetParent === null) are skipped, never failed. --
+  const TARGET_MIN = 24;
+  const lineHeightOf = (el) => {
+    const cs = getComputedStyle(el);
+    const lh = parseFloat(cs.lineHeight);
+    const fs = parseFloat(cs.fontSize);
+    const font = fs > 0 ? fs * 1.2 : 0;
+    return lh > 0 ? Math.min(lh, font) : font;
+  };
+  const boxOf = (el) => {
+    const list = typeof el.getClientRects === "function" ? el.getClientRects() : [];
+    const inlineBox = getComputedStyle(el).display === "inline";
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (c.width === 0 && c.height === 0) continue;
+      let top = c.top, bottom = c.bottom;
+      if (c.height === 0 && inlineBox) {
+        // The WebKit builds captured here report every line box of an
+        // inline 0px tall, at its baseline: the box is its font's line,
+        // about four fifths of it above the baseline.
+        const lh = lineHeightOf(el);
+        top = c.top - lh * 0.8;
+        bottom = top + lh;
+      }
+      l = Math.min(l, c.left); t = Math.min(t, top);
+      r = Math.max(r, c.right); b = Math.max(b, bottom);
+    }
+    if (l === Infinity) {
+      const c = el.getBoundingClientRect();
+      const right = c.right;
+      const left = c.left !== undefined ? c.left : right - c.width;
+      const top = c.top !== undefined ? c.top : 0;
+      return { left: left, top: top, right: right, bottom: top + c.height };
+    }
+    return { left: l, top: t, right: r, bottom: b };
+  };
+  const isTarget = (el) => {
+    const tag = el.tagName ? el.tagName.toLowerCase() : "";
+    return tag === "a" || tag === "button";
+  };
+  const textOutsideTargets = (node) => {
+    let out = "";
+    const kids = node.childNodes || [];
+    for (let i = 0; i < kids.length; i++) {
+      const k = kids[i];
+      if (k.nodeType === 3) out += k.textContent || "";
+      else if (k.nodeType === 1 && !isTarget(k)) out += textOutsideTargets(k);
+    }
+    return out;
+  };
+  const isInlineInText = (el) => {
+    const cs = getComputedStyle(el);
+    if (!cs || cs.display !== "inline") return false;
+    let block = el.parentElement;
+    while (block) {
+      const d = getComputedStyle(block).display;
+      if (d && d !== "inline" && d !== "contents") break;
+      block = block.parentElement;
+    }
+    return block !== null && textOutsideTargets(block).trim().length > 0;
+  };
   const taps = document.querySelectorAll("a,button");
-  let vis = 0;
-  let small = null;
-  let smallW = 0;
-  let smallH = 0;
-  let smallMin = Infinity;
+  const targets = [];
   for (let i = 0; i < taps.length; i++) {
     const el = taps[i];
     if (el.offsetParent === null) continue;
-    vis++;
-    const r = el.getBoundingClientRect();
-    const m = Math.min(r.width, r.height);
-    if (m < smallMin) { smallMin = m; small = el; smallW = r.width; smallH = r.height; }
+    // A target inside another (a button in a link) is that target.
+    let p = el.parentElement, nested = false;
+    while (p) { if (isTarget(p)) { nested = true; break; } p = p.parentElement; }
+    if (nested) continue;
+    const box = boxOf(el);
+    const w = box.right - box.left, h = box.bottom - box.top;
+    targets.push({ el: el, box: box, w: w, h: h,
+      cx: (box.left + box.right) / 2, cy: (box.top + box.bottom) / 2,
+      small: w < TARGET_MIN || h < TARGET_MIN, inline: isInlineInText(el) });
   }
-  if (vis === 0) {
+  const distToBox = (x, y, b) => {
+    const dx = Math.max(b.left - x, 0, x - b.right);
+    const dy = Math.max(b.top - y, 0, y - b.bottom);
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  let touchFail = null, exempt = 0, spaced = 0, smallest = null;
+  for (let i = 0; i < targets.length; i++)
+    if (!targets[i].inline && (smallest === null ||
+        Math.min(targets[i].w, targets[i].h) < Math.min(smallest.w, smallest.h)))
+      smallest = targets[i];
+  for (let i = 0; i < targets.length && touchFail === null; i++) {
+    const a = targets[i];
+    if (a.inline) { exempt++; continue; }
+    if (!a.small) continue;
+    for (let j = 0; j < targets.length; j++) {
+      if (j === i) continue;
+      const b = targets[j];
+      const nearBox = distToBox(a.cx, a.cy, b.box) < TARGET_MIN / 2;
+      const nearCircle = b.small &&
+        Math.hypot(a.cx - b.cx, a.cy - b.cy) < TARGET_MIN;
+      if (nearBox || nearCircle) { touchFail = { a: a, b: b }; break; }
+    }
+    if (touchFail === null) spaced++;
+  }
+  if (targets.length === 0) {
     push("touch", true, "no visible links/buttons (vacuous pass)");
-  } else if (smallMin >= 44) {
-    push("touch", true, vis + " visible link(s)/button(s), smallest min-dimension " + Math.round(smallMin) + "px (>= 44px)");
+  } else if (touchFail === null) {
+    push("touch", true, targets.length + " visible target(s): " + exempt + " inline in text (exempt), " + spaced + " under 24px but spaced, the rest at least 24x24px" + (smallest === null ? "" : "; smallest measured <" + label(smallest.el) + "> " + Math.round(smallest.w) + "x" + Math.round(smallest.h) + "px") + " (WCAG 2.5.8)");
   } else {
-    push("touch", false, "smallest visible target <" + label(small) + "> is " + Math.round(smallW) + "x" + Math.round(smallH) + "px (min-dimension " + Math.round(smallMin) + "px < 44px)");
+    const a = touchFail.a, b = touchFail.b;
+    push("touch", false, "target <" + label(a.el) + "> is " + Math.round(a.w) + "x" + Math.round(a.h) + "px, under 24px, and its 24px circle meets <" + label(b.el) + "> (" + Math.round(b.w) + "x" + Math.round(b.h) + "px) (WCAG 2.5.8)");
   }
 
   // -- bodyfont: body text is at least 14px. --

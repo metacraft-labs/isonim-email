@@ -1,0 +1,31 @@
+عرض في المتصفح: https://example.com/view/2041
+
+Acme
+
+المساعدة (https://example.com/ar/help)
+
+استخدام التخزين أعلى من ٨٠٪
+===========================
+
+تحذير: ستنفد المساحة خلال ثلاثة أيام
+يستخدم مشروعك ٨٤٪ من مساحة التخزين. بهذا المعدل ستنفد المساحة يوم الأربعاء.
+
+المشروع: متجر أكمي
+المستخدم: ٨٤ من ١٠٠ غيغابايت
+النمو اليومي: ٥٫٢ غيغابايت
+
+زيادة المساحة: https://example.com/ar/storage/upgrade
+عرض الاستخدام: https://example.com/ar/storage
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+تصلك هذه الرسالة لأن لديك حسابًا في أكمي.
+
+شركة أكمي، ١ شارع المثال، الرياض
+
+إلغاء الاشتراك (https://example.com/unsubscribe?u=4f2a)
+التفضيلات (https://example.com/preferences?u=4f2a)
+
+© ٢٠٢٦ شركة أكمي. جميع الحقوق محفوظة.

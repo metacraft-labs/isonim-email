@@ -15,6 +15,17 @@
 ##
 ## A pattern registered later without its six stories fails here.
 ##
+## The item exception is checked against the vocabulary, not against a
+## pinned list: an element registered with `itemOf` must be one the
+## static vocabulary lets only that parent hold (its `allowedParents`,
+## the transparent wrappers aside), and an element only one pattern may
+## hold must be registered as that pattern's item. The two are declared
+## separately (`declareItemOf` at run time, the vocabulary's parents at
+## compile time), so a pattern wrongly declared an item, or an item whose
+## parent restriction was dropped, fails here. Items a parent reads and
+## consumes (`defineMailItem`) are in the vocabulary only, never
+## registered patterns.
+##
 ## C backend only: registers every capture story set, as the text-part
 ## goldens test does.
 import std/[algorithm, sequtils, strutils, unittest]
@@ -33,6 +44,7 @@ import stories/seed_media
 import stories/seed_containers
 import stories/seed_data
 import stories/seed_actions
+import stories/seed_markdown
 
 registerLayoutStories()
 registerPrimitiveStories()
@@ -48,8 +60,14 @@ registerMediaStories()
 registerContainerStories()
 registerDataStories()
 registerActionStories()
+registerMarkdownStories()
 
 const
+  tagParents = staticTagParents()
+    ## The static vocabulary's elements and the parents each admits, read
+    ## at compile time once every pattern has registered its element.
+  wrappers = ["mailIf", "textOnly", "htmlOnly"]
+    ## Transparent: every restricted element admits them too.
   storyKinds = ["Minimal", "Maximal", "Rtl", "ImagesOff", "Dark",
     "InContext"]
   rtlRefused = ["mailZigZag"]
@@ -89,3 +107,58 @@ suite "every pattern ships its story set":
     # The exceptions are what they say: a refused pattern is registered.
     for name in rtlRefused:
       check isPattern(name)
+
+proc parentsOf(name: string): seq[string] =
+  ## The vocabulary's parents of `name`, the transparent wrappers and the
+  ## document's "" aside.
+  for (n, parents) in tagParents:
+    if n == name:
+      for p in parents:
+        if p notin wrappers and p.len > 0:
+          result.add(p)
+      return
+
+proc inVocabulary(name: string): bool =
+  for (n, _) in tagParents:
+    if n == name:
+      return true
+  false
+
+suite "an item is what the vocabulary says it is":
+  test "test_item_of_matches_the_vocabulary_parents":
+    let names = patternNames()
+    # Vacuity guard: every registered pattern is in the vocabulary, and
+    # the check below meets both kinds (items and patterns that stand on
+    # their own).
+    var items, standing = 0
+    for name in names:
+      check inVocabulary(name)
+      let parent = patternOf(name).itemOf
+      let parents = parentsOf(name)
+      if parent.len > 0:
+        inc items
+        # Declared an item of `parent`: only `parent` may hold it.
+        if parents != @[parent]:
+          checkpoint(name & " is declared an item of " & parent &
+            ", but the vocabulary lets " & (if parents.len == 0: "any " &
+            "element" else: parents.join(", ")) & " hold it")
+        check parents == @[parent]
+      else:
+        inc standing
+        # Held by one pattern only: then it is that pattern's item.
+        let onlyOne = parents.len == 1 and isPattern(parents[0])
+        if onlyOne:
+          checkpoint(name & " may only sit in " & parents[0] &
+            ", but is not registered as its item")
+        check not onlyOne
+    check items >= 3
+    check standing >= 30
+    # The consumed items (`defineMailItem`) are the vocabulary's only:
+    # each admits one registered pattern, and is no pattern itself.
+    var consumed = 0
+    for (name, _) in tagParents:
+      let parents = parentsOf(name)
+      if not isPattern(name) and parents.len == 1 and isPattern(parents[0]):
+        inc consumed
+        check patternOf(parents[0]).itemOf.len == 0
+    check consumed >= 5

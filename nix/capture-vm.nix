@@ -63,6 +63,8 @@ let
       # compile their fixture images in. Not the baselines or goldens.
       (lib.fileset.fileFilter (file: file.hasExt "nim") (src + "/tests"))
       (src + "/tests/stories")
+      # The reference emails and their images, which the drivers compile in.
+      (src + "/examples")
       (src + "/tools/capture/build_stories.nim")
       (src + "/tools/review/brief_driver.nim")
       (src + "/tools/tailwind")
@@ -172,7 +174,10 @@ let
       virtualisation = {
         memorySize = 8192;
         cores = 8;
-        diskSize = 4096;
+        # The matrix is fifteen stories since the reference emails
+        # joined it: their captures, contact sheets and baselines ran a
+        # 4 GiB disk out of space.
+        diskSize = 8192;
       };
       users.users.capture = {
         isNormalUser = true;

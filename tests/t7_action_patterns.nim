@@ -308,6 +308,13 @@ suite "mailDividerLabel":
       "border-top-color:#e5e7eb") == 2
     check "bgcolor=\"#e5e7eb\"" notin res.html
     check res.text.body == "—— or ——\n"
+    # A short CJK label: word joiners between its ideographs, so a
+    # client that drops `white-space` cannot break it into a column of
+    # characters; the text part keeps it as written.
+    let cjk = dividerDoc("または")
+    check "ま\u2060た\u2060は" in cjk.html
+    check cjk.text.body == "—— または ——\n"
+    check "o\u2060r" notin res.html
     # A long label wraps in the middle 60%, breaking a word too long.
     let long = dividerDoc("or continue with one of your recovery codes")
     let lc = long.semantic.find("mailDividerLabel").find("tr").elementsOf

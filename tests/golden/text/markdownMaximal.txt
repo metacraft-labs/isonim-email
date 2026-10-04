@@ -1,0 +1,44 @@
+Everything Markdown
+===================
+
+Headings, emphasis, code, lists, a quote, a rule, a table, a callout and a 
+button, from one Markdown string.
+
+Everything a body can hold
+--------------------------
+
+A paragraph with strong, emphasis, both, struck text, inline code, a link 
+(https://example.com/docs) and an autolink: 
+https://example.com/a/very/long/path/that/keeps/going/and/going/without/a/single/space/in/it. 
+A word that never breaks: Supercalifragilisticexpialidociousnessless. Hard 
+break here
+and the next line.
+
+Second level
+------------
+
+- A bullet
+- Another, with code
+
+1. First
+2. Second
+
+    for i in 0 ..< 3:
+      echo "line ", i, " of a code block whose line is long enough to wrap"
+
+  A quotation, read as Markdown again: emphasis inside.
+
+----
+
+Plan, Seats, Price
+Plan | Seats | Price
+Hobby | 1 | Free
+Team | 5 | $20
+
+NOTE
+An admonition becomes a callout.
+
+Get started: https://example.com/start
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

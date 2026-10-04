@@ -317,6 +317,9 @@
                 carlito
                 roboto
                 noto-fonts
+                # Chinese, Japanese and Korean: Noto Sans CJK (the
+                # reference emails' CJK stories; Noto Sans has no CJK).
+                noto-fonts-cjk-sans
               ];
               impureFontDirectories = [ ];
               # Arabic prefers Noto Sans Arabic UI; the calligraphic Noto

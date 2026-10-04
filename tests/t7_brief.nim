@@ -9,7 +9,7 @@
 ##
 ## Backend-independent (tree building + pure passes), so `just test`
 ## also runs it on JS.
-import std/[strutils, unittest]
+import std/[strutils, tables, unittest]
 import isonim_email
 import stories/email_stories
 import stories/seed_receipt
@@ -355,3 +355,52 @@ suite "the broken-story fixture (methodology checklist item 7)":
       except StoryError:
         raised = true
       check raised
+
+proc markdownListDoc(): EmailNode =
+  ## A Markdown body whose only list is in its source.
+  let r = EmailRenderer()
+  result = r.createElement("mailDocument")
+  r.setAttribute(result, "lang", "en")
+  r.setAttribute(result, "title", "Notes")
+  let s = r.createElement("mailSection")
+  r.appendChild(result, s)
+  let h = r.createElement("h1")
+  r.setTextContent(h, "Notes")
+  r.appendChild(s, h)
+  let md = r.createElement("mailMarkdown")
+  r.setAttribute(md, "src", "Steps:\n\n- one\n- two")
+  r.appendChild(s, md)
+
+proc markdownStrikeDoc(): EmailNode =
+  ## A Markdown body with struck text.
+  result = markdownListDoc()
+  for c in result.children[0].children:
+    if c.kind == enElement and c.tag == "mailMarkdown":
+      c.attrs["src"] = "Settings are ~~old~~ gone."
+
+suite "review brief: Markdown bodies":
+  test "test_markdown_lists_declare_the_webkit_markers":
+    # The WebKit builds draw no list markers; a list written in a
+    # Markdown body is declared like any other list.
+    registerStory(Story(name: "markdownList", group: "markdownList",
+      render: proc(): StoryHtml = renderStoryPipeline(markdownListDoc(),
+        defaultTarget())))
+    registerStoryTree("markdownList", markdownListDoc)
+    let apple = expectedBlock(getStory("markdownList"), "apple", "mobile",
+      "light")
+    check webkitListMarkers in apple
+    check webkitListMarkers notin expectedBlock(getStory("markdownList"),
+      "chromium-baseline", "mobile", "light")
+    # Struck text, likewise (WebKit draws its line low).
+    check webkitStrike notin apple
+    registerStory(Story(name: "markdownStrike", group: "markdownStrike",
+      render: proc(): StoryHtml = renderStoryPipeline(markdownStrikeDoc(),
+        defaultTarget())))
+    registerStoryTree("markdownStrike", markdownStrikeDoc)
+    check webkitStrike in expectedBlock(getStory("markdownStrike"), "apple",
+      "mobile", "light")
+    check webkitStrike notin expectedBlock(getStory("markdownStrike"),
+      "chromium-baseline", "mobile", "light")
+    # A body without a list declares nothing of the kind.
+    check webkitListMarkers notin expectedBlock(getStory("canary"), "apple",
+      "mobile", "light")

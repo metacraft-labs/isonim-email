@@ -1,0 +1,32 @@
+Acme
+
+ヘルプ (https://example.com/ja/help)
+
+ログインコード
+=======
+
+Acme にログインするには、次のコードを入力してください。コードは一度だけ使用できます。
+
+あなたのコード: 482913 (有効期限 14:05 UTC)
+
+ワンクリックでログイン: https://example.com/ja/magic?t=8c1f
+
+ご注意: 心当たりがない場合
+このリクエストに心当たりがない場合は、このメールを無視してください。パスワードは変更されません。
+
+—— または ——
+
+ボタンが機能しない場合は、次のリンクをブラウザに貼り付けてください: https://example.com/ja/magic?t=8c1f
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+Acme アカウントのログインがリクエストされたため、このメールをお送りしています。
+
+Acme株式会社 〒100-0001 東京都千代田区1-1
+
+配信停止 (https://example.com/unsubscribe?u=4f2a)
+通知設定 (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme株式会社

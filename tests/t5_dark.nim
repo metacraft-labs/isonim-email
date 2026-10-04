@@ -430,6 +430,38 @@ suite "the dark-image swap (R-IMG-06, R-A11Y-05, R-OL-14)":
     check ".e-dk-show{display:block !important}" in blk
     check "[data-ogsc] .e-dk-hide{display:none !important}" in blk
     check "[data-ogsc] .e-dk-show{display:block !important}" in blk
+    # The inline form's show rule (a social icon's dark plate).
+    check ".e-dk-show-inline{display:inline !important}" in blk
+    check "e-dk-show-inline" notin darkTag
+
+  test "test_inline_dark_copy_shows_inline":
+    # rule: R-IMG-03
+    # The dark plate of an image in the inline form (a 24px social icon)
+    # is shown inline, as its light plate is, so with images off its alt
+    # is laid out as text rather than clipped in a 24px box.
+    let r = EmailRenderer()
+    let doc = r.createElement("mailDocument")
+    r.setAttribute(doc, "lang", "en")
+    r.setAttribute(doc, "title", "Social")
+    let s = r.createElement("mailSection")
+    r.appendChild(doc, s)
+    let h = r.createElement("h1")
+    r.setTextContent(h, "Social")
+    r.appendChild(s, h)
+    let so = r.createElement("mailSocial")
+    r.appendChild(s, so)
+    let it = r.createElement("mailSocialItem")
+    r.setAttribute(it, "network", "github")
+    r.setAttribute(it, "href", "https://github.com/")
+    r.appendChild(so, it)
+    let html = renderTree(doc, target = target(dmDesigned),
+      assets = memoryAssetStore("https://cdn.example.com")).html
+    let at = html.find("social-github-dark.png")
+    require at > 0
+    let tag = html[html.rfind("<img", last = at) ..< html.find(">", at)]
+    check "e-dk-show-inline" in tag
+    check "vertical-align:middle" in tag
+    check ".e-dk-show-inline{display:inline !important}" in darkBlock(html)
 
   test "test_dark_copy_without_word_has_no_mso_hide":
     var t = target(dmDesigned)
@@ -949,5 +981,5 @@ suite "the dark stories":
     check "@dark" notin designed
     let logo = renderDarkStory("darkLogoSwap").html
     # The dark copy, its rule and the rule's Outlook copy.
-    check logo.count("e-dk-show") == 3
+    check logo.count("e-dk-show") - logo.count("e-dk-show-inline") == 3
     check "mark-dark.png" in logo

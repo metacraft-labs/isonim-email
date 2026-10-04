@@ -935,6 +935,15 @@ proc hasList(node: EmailNode): bool =
     return false
   if node.kind == enElement and node.tag in ["ul", "ol"]:
     return true
+  if node.kind == enElement and node.tag == "mailMarkdown":
+    # A Markdown body's lists are in its source: read it as it expands.
+    try:
+      let ctx = ExpandCtx(r: EmailRenderer(), target: defaultTarget())
+      for c in markdownNodes(ctx, node, readProps[MarkdownProps](node)):
+        if hasList(c):
+          return true
+    except PatternError:
+      discard
   for c in node.children:
     if hasList(c):
       return true
@@ -946,6 +955,29 @@ const webkitListMarkers* = "list items show no bullet or number: the " &
   "indent"
   ## A capture-environment limit, not the message's: declared so a
   ## reviewer does not report it as a defect.
+
+const webkitStrike* = "struck-through text shows a line under it, not " &
+  "through it: the WebKit builds captured here (Playwright's WebKit, " &
+  "WebKitGTK) draw `line-through` low, even when it is written inline; " &
+  "the words are the same"
+  ## A capture-environment limit, not the message's (a probe of a bare
+  ## `<s>`, a `<del>` and an inline `text-decoration:line-through` draws
+  ## the same): declared so a reviewer does not report it.
+
+proc hasStrike(node: EmailNode): bool =
+  if node == nil:
+    return false
+  if node.kind == enElement:
+    if node.tag in ["s", "del", "strike"] or
+        "line-through" in node.styles.getOrDefault("text-decoration", ""):
+      return true
+    if node.tag == "mailMarkdown" and
+        node.attrs.getOrDefault("src", "").contains("~~"):
+      return true
+  for c in node.children:
+    if hasStrike(c):
+      return true
+  false
 
 const alwaysDefect* = "\nAlways a defect, in every client: text cut at " &
   "any edge of the capture (the tops of the first line's letters " &
@@ -1038,6 +1070,8 @@ proc degradationLines(family: string; doc: EmailNode;
         altDropLines(doc, result)
         if hasList(doc):
           result.add(webkitListMarkers)
+        if hasStrike(doc):
+          result.add(webkitStrike)
   patternDegradations(doc, view, result)
   if result.len == 0:
     result.add("(none)")
@@ -1466,6 +1500,8 @@ proc clientExpectedBlock*(story: Story; id, viewport,
     degr.add(c.rtlDegradation)
   if c.engine == "WebKitGTK" and hasList(doc):
     degr.add(webkitListMarkers)
+  if c.engine == "WebKitGTK" and hasStrike(doc):
+    degr.add(webkitStrike)
   clientButtonLines(c.id, scheme, doc, degr,
     storyDarkModes.getOrDefault(story.name, dmAccommodate))
   if c.audience.len > 0:

@@ -1,0 +1,54 @@
+צפייה בדפדפן: https://example.com/view/2041
+
+Acme
+
+הזמנות (https://example.com/he/orders)
+עזרה (https://example.com/he/help)
+
+תודה על ההזמנה
+==============
+
+קיבלנו את התשלום שלך. ההזמנה בדרך אליך.
+
+הזמנה: 2041
+תאריך: 4 באוקטובר 2026
+אמצעי תשלום: ויזה המסתיים ב-4242
+
+פריטים
+
+פריט: הדפס חוף (A3, מט)
+כמות: 1
+סכום: 64.00 $
+
+פריט: [הדפס עיר] Supercalifragilisticexpialidociousnessless
+  Supercalifragilisticexpialidociousnessless (מק״ט
+  ACME-PRINT-2041-XL-SUPERCALIFRAGILISTICEXPIALIDOCIOUSNESSLESS)
+כמות: 1
+סכום: 98.00 $
+
+פריט: מסגרת אלון (ל-A3)
+כמות: 1
+סכום: 14.00 $
+
+סכום ביניים: 176.00 $
+משלוח: 4.90 $
+מע״מ: 5.50 $
+סה״כ: 186.40 $
+
+צפייה בהזמנה: https://example.com/he/orders/2041
+
+לשאלות על ההזמנה: 
+https://example.com/he/support/orders/2041/questions-about-your-order-and-its-delivery-schedule
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+קיבלת הודעה זו כי יש לך חשבון ב-Acme.
+
+Acme בע״מ, רחוב הדוגמה 1, תל אביב
+
+ביטול הרשמה (https://example.com/unsubscribe?u=4f2a)
+העדפות (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme בע״מ. כל הזכויות שמורות.

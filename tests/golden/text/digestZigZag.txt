@@ -1,0 +1,64 @@
+View in browser: https://example.com/view/2041
+
+Acme
+
+Orders (https://example.com/orders)
+Help (https://example.com/help)
+
+Three slow weekends
+===================
+
+Picked by our editors, one for each mood.
+
+A coastline at dusk (https://example.com/stories/1)
+
+Story 1: a field guide to quiet places
+--------------------------------------
+
+Six small towns where the evenings are long and the trains still stop. A 
+slow weekend, planned for you.
+
+Read the story (https://example.com/stories/1)
+
+A city at night (https://example.com/stories/2)
+
+Story 2: a field guide to quiet places
+--------------------------------------
+
+Six small towns where the evenings are long and the trains still stop. A 
+slow weekend, planned for you.
+
+Read the story (https://example.com/stories/2)
+
+A field of wheat (https://example.com/stories/3)
+
+Story 3: a field guide to quiet places
+--------------------------------------
+
+Six small towns where the evenings are long and the trains still stop. A 
+slow weekend, planned for you.
+
+Read the story (https://example.com/stories/3)
+
+From our readers
+----------------
+
+A coastline at dusk (https://example.com/gallery)
+A lake under hills (https://example.com/gallery)
+A field of wheat (https://example.com/gallery)
+
+Download on the App Store: https://apps.example.com/ios
+Get it on Google Play: https://apps.example.com/android
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+You're receiving this because you have an Acme account.
+
+Acme Inc., 1 Example Street, Springfield, IL 62701, USA
+
+Unsubscribe (https://example.com/unsubscribe?u=4f2a)
+Preferences (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme Inc. All rights reserved.

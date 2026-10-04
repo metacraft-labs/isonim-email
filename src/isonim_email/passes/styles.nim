@@ -538,9 +538,16 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
   @[(prop, val.strip())]
 
 proc holdsText(node: EmailNode): bool =
-  ## True when `node` has a non-blank text child of its own.
+  ## True when `node` has a non-blank text child of its own, or text in
+  ## a phrase element that is its child (a cell holding only
+  ## `<strong>$20</strong>` holds text: the phrase inherits its colour
+  ## and type from the cell).
   for c in node.children:
     if c.kind == enText and c.text.strip().len > 0:
+      return true
+    if c.kind == enElement and c.tag.toLowerAscii() in ["strong", "em", "b",
+        "i", "u", "s", "span", "code", "small", "sup", "sub", "codeinline"] and
+        holdsText(c):
       return true
   false
 

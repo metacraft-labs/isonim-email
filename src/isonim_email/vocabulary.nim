@@ -172,6 +172,8 @@ proc buildEmailVocabulary*(): VocabularyRef =
       ]),
       TagDef(name: "mailMarkdown", attrs: @[
         attr("src", akAttr, "string"),
+        attr("heading_offset", akAttr, "int"),
+        attr("image_width", akAttr, "Len"),
       ]),
       # No `mode` prop: the hero's image/background mode is read from
       # the props given.
@@ -483,3 +485,30 @@ proc registerPatternTag*(def: TagDef) {.compileTime.} =
     vocabCache = buildEmailVocabulary()
   if not vocabCache.hasTag(def.name):
     vocabCache.tags.add(def)
+
+proc restrictPatternParents*(name: string; parents: openArray[string])
+    {.compileTime.} =
+  ## Narrows the static vocabulary's entry for the pattern `name` to the
+  ## elements that may hold it (`parents`, plus the transparent wrappers
+  ## `mailIf`, `textOnly` and `htmlOnly`), so a template that writes an
+  ## item element outside its parent does not compile. Called once
+  ## `name` is registered (`registerPatternTag`); a name the vocabulary
+  ## does not hold fails the build.
+  if vocabCache == nil:
+    vocabCache = buildEmailVocabulary()
+  for t in vocabCache.tags.mitems:
+    if t.name == name:
+      t.allowedParents = @parents & @["mailIf", "textOnly", "htmlOnly"]
+      return
+  raise newException(ValueError, "restrictPatternParents: no element '" &
+    name & "' in the vocabulary")
+
+proc staticTagParents*(): seq[tuple[name: string; parents: seq[string]]]
+    {.compileTime.} =
+  ## Every element of the static vocabulary, patterns included, with the
+  ## elements that may hold it (empty: any). Read at compile time into a
+  ## constant by a test that checks the pattern registry against it.
+  if vocabCache == nil:
+    vocabCache = buildEmailVocabulary()
+  for t in vocabCache.tags:
+    result.add((t.name, t.allowedParents))

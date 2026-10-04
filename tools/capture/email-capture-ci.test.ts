@@ -6,7 +6,9 @@
 // Approval state: a story awaiting re-approval (PENDING-REVIEW) is not
 // compared but is always reported, --require-approved fails on it,
 // --update-baselines leaves it alone and --approve clears it; the
-// checked-in canary is never pending.
+// checked-in canary is never pending. An excluded variant (a baseline
+// over the file limit) is not compared, has no committed baseline, and
+// every run names it with the reason.
 // Run with:
 //   node --test tools/capture/email-capture-ci.test.ts
 
@@ -26,10 +28,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+  OVER_FILE_LIMIT,
   PENDING_MARKER,
+  TIER1_STORIES,
+  TIER2_EXCLUDED,
   readPendingReview,
   tier1Check,
   tier2Check,
+  tier2Excluded,
   tier2Pending,
   tier3Check,
   updateBaselines,
@@ -155,6 +161,67 @@ describe("capture-ci Tier-1", () => {
   });
 });
 
+describe("capture-ci Tier-1 over a list of stories", () => {
+  // The list is the Tier-1 stories. Here a copy of the tree gives a
+  // Tier-2-only story, `alertCritical`, hashes too (written by
+  // updateBaselines with a list of its own), so the same checks run
+  // over a list the tests choose.
+  it("hashes every listed story, and refuses a run missing one", () => {
+    assert.deepEqual(
+      [...TIER1_STORIES],
+      ["canary", "receiptTypical", "alertArabic", "securityCodeJapanese"],
+    );
+    const runDir = fakeRunFromBaselines();
+    const wide = ["canary", "alertCritical"];
+    const baselines = baselinesCopy();
+    const written = updateBaselines(runDir, baselines, [], wide);
+    const alertPngs = readdirSync(join(runDir, "alertCritical")).filter((f) =>
+      f.endsWith(".png"),
+    );
+    const canaryPngs = readdirSync(join(runDir, "canary")).filter((f) =>
+      f.endsWith(".png"),
+    );
+    assert.equal(written.hashes, alertPngs.length + canaryPngs.length);
+    for (const png of alertPngs)
+      assert.ok(
+        existsSync(
+          join(baselines, "alertCritical", png.replace(/\.png$/, ".sha256")),
+        ),
+      );
+    assert.deepEqual(tier1Check(runDir, baselines, wide), []);
+    // A byte of an alertCritical copy flipped: Tier-1 names it under the wide
+    // list, and not under the canary alone.
+    const victim = firstPng(join(runDir, "alertCritical"));
+    const path = join(runDir, "alertCritical", victim);
+    const bytes = Buffer.from(readFileSync(path));
+    bytes.writeUInt8(bytes.readUInt8(bytes.length - 5) ^ 1, bytes.length - 5);
+    writeFileSync(path, bytes);
+    assert.match(
+      only(tier1Check(runDir, baselines, wide)),
+      new RegExp(
+        `Tier-1 hash mismatch for alertCritical/${victim.replace(/\.png$/, "")}`,
+      ),
+    );
+    assert.deepEqual(tier1Check(runDir, baselines, ["canary"]), []);
+    // A listed story with no capture in the run is a vacuous pass,
+    // refused.
+    assert.throws(
+      () => tier1Check(runDir, baselines, ["canary", "welcomeMissing"]),
+      /no done welcomeMissing captures/,
+    );
+    // And a Tier-1 story can never await re-approval.
+    writeFileSync(join(baselines, "alertCritical", PENDING_MARKER), "test\n");
+    assert.throws(
+      () => readPendingReview(baselines, wide),
+      /alertCritical is Tier-1 and can never await/,
+    );
+    assert.equal(
+      readPendingReview(baselines, ["canary"]).get("alertCritical"),
+      "test",
+    );
+  });
+});
+
 describe("capture-ci Tier-2", () => {
   it("passes on PNGs identical to the baselines", () => {
     const runDir = fakeRunFromBaselines();
@@ -169,7 +236,7 @@ describe("capture-ci Tier-2", () => {
     // the victim's story is compared whatever the tree's state.
     const runDir = fakeRunFromBaselines();
     const approved = baselinesCopy();
-    const story = "alert";
+    const story = "alertCritical";
     const victim = firstPng(join(runDir, story));
     const variant = `${story}/${victim.replace(/\.png$/, "")}`;
     flipPixels(join(runDir, story, victim));
@@ -192,20 +259,141 @@ describe("capture-ci Tier-2", () => {
   });
 });
 
+// Adds `variants` of `story` to a fake run: each a copy of the story's
+// first PNG under the variant's name, done in the index.
+function addVariants(runDir: string, story: string, variants: string[]): void {
+  const src = join(runDir, story, firstPng(join(runDir, story)));
+  const index = JSON.parse(
+    readFileSync(join(runDir, "index.json"), "utf8"),
+  ) as Record<string, unknown>[];
+  for (const v of variants) {
+    cpSync(src, join(runDir, story, `${v}.png`));
+    index.push({ story, status: "done", png: `${story}/${v}.png` });
+  }
+  writeFileSync(join(runDir, "index.json"), JSON.stringify(index));
+}
+
+describe("capture-ci variants excluded from the baselines", () => {
+  const mobile = [
+    "a-thunderbird-firefox-mobile-light-on",
+    "a-apple-webkit-mobile-light-on",
+    "a-chromium-baseline-chromium-mobile-light-on",
+  ];
+
+  it("lists digestNearBudget's three mobile captures, over the file limit, none committed", () => {
+    assert.deepEqual(
+      Object.keys(TIER2_EXCLUDED).sort(),
+      mobile.map((v) => `digestNearBudget/${v}`).sort(),
+    );
+    for (const [variant, reason] of Object.entries(TIER2_EXCLUDED)) {
+      assert.equal(reason, OVER_FILE_LIMIT);
+      assert.equal(reason, "baseline over the repository's 1 MB file limit");
+      assert.ok(!existsSync(join(baselinesDir, `${variant}.png`)), variant);
+    }
+    // The story's desktop variants stay compared.
+    assert.ok(
+      existsSync(
+        join(
+          baselinesDir,
+          "digestNearBudget",
+          "a-apple-webkit-desktop-light-on.png",
+        ),
+      ),
+    );
+  });
+
+  it("does not compare an excluded variant, and names it with the reason on every run", () => {
+    // A run like the matrix's: the excluded captures are made. Their
+    // pixels differ from anything committed, and there is no baseline
+    // for them: without the exclusion each is a Tier-2 failure.
+    const runDir = fakeRunFromBaselines();
+    addVariants(runDir, "digestNearBudget", mobile);
+    for (const v of mobile)
+      flipPixels(join(runDir, "digestNearBudget", `${v}.png`));
+    const approved = baselinesCopy();
+    assert.deepEqual(tier2Check(runDir, approved), []);
+    assert.equal(tier2Check(runDir, approved, {}).length, 3);
+    const lines = tier2Excluded(runDir);
+    assert.equal(lines.length, 3);
+    for (const v of mobile)
+      assert.ok(
+        lines.some(
+          (l) =>
+            l.includes(`Tier-2 excludes digestNearBudget/${v}`) &&
+            l.includes("(baseline over the repository's 1 MB file limit)"),
+        ),
+        v,
+      );
+    const r = spawnSync(
+      process.execPath,
+      [join(scriptDir, "email-capture-ci.ts"), runDir, "--baselines", approved],
+      { encoding: "utf8" },
+    );
+    assert.equal(r.status, 0, r.stderr as string);
+    assert.match(
+      r.stdout as string,
+      /Tier-2 excludes digestNearBudget\/a-apple-webkit-mobile-light-on — not compared \(baseline over the repository's 1 MB file limit\)/,
+    );
+    assert.match(
+      r.stdout as string,
+      /PASS — Tier-1 \+ Tier-2 clean; 3 variant\(s\) excluded from Tier-2, not compared/,
+    );
+    // Negative control: a run without them says nothing about it.
+    assert.deepEqual(tier2Excluded(fakeRunFromBaselines()), []);
+  });
+
+  it("fails a committed baseline of an excluded variant, and never writes one", () => {
+    const runDir = fakeRunFromBaselines();
+    addVariants(runDir, "digestNearBudget", mobile);
+    const approved = baselinesCopy();
+    cpSync(
+      join(runDir, "digestNearBudget", `${mobile[0]}.png`),
+      join(approved, "digestNearBudget", `${mobile[0]}.png`),
+    );
+    const failure = only(tier2Check(runDir, approved));
+    assert.match(
+      failure,
+      /excludes digestNearBudget\/a-thunderbird-firefox-mobile/,
+    );
+    assert.match(failure, /exists — delete it or drop the exclusion/);
+    const fresh = baselinesCopy();
+    const result = updateBaselines(runDir, fresh);
+    assert.deepEqual(
+      result.excluded,
+      mobile.map((v) => `digestNearBudget/${v}`).sort(),
+    );
+    for (const v of mobile)
+      assert.ok(!existsSync(join(fresh, "digestNearBudget", `${v}.png`)), v);
+  });
+
+  it("refuses to exclude a Tier-1 variant", () => {
+    const runDir = fakeRunFromBaselines();
+    assert.throws(
+      () =>
+        tier2Check(runDir, baselinesCopy(), {
+          "canary/a-apple-webkit-mobile-light-on": OVER_FILE_LIMIT,
+        }),
+      /is Tier-1 and cannot be excluded/,
+    );
+  });
+});
+
 describe("capture-ci baselines awaiting re-approval", () => {
   it("does not compare a pending story, and says so on every run", () => {
     // The same pixel flip that fails an approved story is not a
     // Tier-2 failure once the story awaits re-approval — but it is
     // reported, with the recorded reason, and counted in the verdict.
     const runDir = fakeRunFromBaselines();
-    const pendingDir = baselinesCopy(["alert"]);
-    flipPixels(join(runDir, "alert", firstPng(join(runDir, "alert"))));
+    const pendingDir = baselinesCopy(["alertCritical"]);
+    flipPixels(
+      join(runDir, "alertCritical", firstPng(join(runDir, "alertCritical"))),
+    );
     assert.deepEqual(tier2Check(runDir, pendingDir), []);
     const lines = tier2Pending(runDir, pendingDir);
     const line = only(lines);
     assert.match(
       line,
-      /Tier-2 alert awaiting re-approval — 6 capture\(s\) not compared \(test: out of date\)/,
+      /Tier-2 alertCritical awaiting re-approval — 6 capture\(s\) not compared \(test: out of date\)/,
     );
     const r = spawnSync(
       process.execPath,
@@ -218,7 +406,7 @@ describe("capture-ci baselines awaiting re-approval", () => {
       { encoding: "utf8" },
     );
     assert.equal(r.status, 0);
-    assert.match(r.stdout as string, /alert awaiting re-approval/);
+    assert.match(r.stdout as string, /alertCritical awaiting re-approval/);
     assert.match(
       r.stdout as string,
       /PASS — Tier-1 \+ Tier-2 clean; 1 story\(ies\) awaiting re-approval, not compared/,
@@ -248,7 +436,7 @@ describe("capture-ci baselines awaiting re-approval", () => {
         runDir,
         "--require-approved",
         "--baselines",
-        baselinesCopy(["receipt"]),
+        baselinesCopy(["receiptHebrew"]),
       ],
       { encoding: "utf8" },
     );
@@ -273,7 +461,7 @@ describe("capture-ci baselines awaiting re-approval", () => {
 
   it("refuses an empty marker and a pending canary", () => {
     const empty = baselinesCopy();
-    writeFileSync(join(empty, "alert", PENDING_MARKER), "  \n");
+    writeFileSync(join(empty, "alertCritical", PENDING_MARKER), "  \n");
     assert.throws(() => readPendingReview(empty), /must record why/);
     const canary = baselinesCopy(["canary"]);
     assert.throws(() => readPendingReview(canary), /can never await/);
@@ -281,27 +469,27 @@ describe("capture-ci baselines awaiting re-approval", () => {
 
   it("--update-baselines leaves pending stories alone; --approve clears them", () => {
     const runDir = fakeRunFromBaselines();
-    const victim = firstPng(join(runDir, "alert"));
-    flipPixels(join(runDir, "alert", victim));
-    const dir = baselinesCopy(["alert"]);
-    const before = readFileSync(join(dir, "alert", victim));
+    const victim = firstPng(join(runDir, "alertCritical"));
+    flipPixels(join(runDir, "alertCritical", victim));
+    const dir = baselinesCopy(["alertCritical"]);
+    const before = readFileSync(join(dir, "alertCritical", victim));
     const kept = updateBaselines(runDir, dir);
-    assert.deepEqual(kept.skipped, ["alert"]);
+    assert.deepEqual(kept.skipped, ["alertCritical"]);
     assert.deepEqual(kept.approved, []);
-    assert.deepEqual(readFileSync(join(dir, "alert", victim)), before);
-    assert.ok(existsSync(join(dir, "alert", PENDING_MARKER)));
+    assert.deepEqual(readFileSync(join(dir, "alertCritical", victim)), before);
+    assert.ok(existsSync(join(dir, "alertCritical", PENDING_MARKER)));
     // Approving a story that is not pending is refused.
     assert.throws(
-      () => updateBaselines(runDir, dir, ["receipt"]),
+      () => updateBaselines(runDir, dir, ["receiptHebrew"]),
       /not awaiting re-approval/,
     );
-    const done = updateBaselines(runDir, dir, ["alert"]);
-    assert.deepEqual(done.approved, ["alert"]);
+    const done = updateBaselines(runDir, dir, ["alertCritical"]);
+    assert.deepEqual(done.approved, ["alertCritical"]);
     assert.deepEqual(
-      readFileSync(join(dir, "alert", victim)),
-      readFileSync(join(runDir, "alert", victim)),
+      readFileSync(join(dir, "alertCritical", victim)),
+      readFileSync(join(runDir, "alertCritical", victim)),
     );
-    assert.ok(!existsSync(join(dir, "alert", PENDING_MARKER)));
+    assert.ok(!existsSync(join(dir, "alertCritical", PENDING_MARKER)));
     assert.deepEqual(tier2Check(runDir, dir), []);
   });
 

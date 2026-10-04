@@ -500,6 +500,25 @@ proc ruleCell(ctx: ExpandCtx; n: EmailNode; share: string): EmailNode =
   add(ctx, t, tr)
   add(ctx, result, t)
 
+proc isCjk(r: Rune): bool =
+  let c = int(r)
+  c in 0x3000 .. 0x9FFF or c in 0xAC00 .. 0xD7AF or c in 0xF900 .. 0xFAFF or
+    c in 0xFF00 .. 0xFFEF or c in 0x20000 .. 0x2FFFF
+
+proc joinCjk(n: EmailNode) =
+  ## A word joiner (U+2060) between two CJK characters of `n`'s text.
+  if n.kind == enText:
+    var outText = ""
+    var prev = Rune(0)
+    for r in n.text.runes:
+      if outText.len > 0 and isCjk(prev) and isCjk(r):
+        outText.add("\u2060")
+      outText.add($r)
+      prev = r
+    n.text = outText
+  for c in n.children:
+    joinCjk(c)
+
 proc dividerLabelExpand(n: EmailNode; p: DividerLabelProps;
     ctx: ExpandCtx): EmailNode =
   let content = inlineSlot(n, "its label (text)")
@@ -516,8 +535,14 @@ proc dividerLabelExpand(n: EmailNode; p: DividerLabelProps;
       ("text-align", "center"), ("vertical-align", "middle")])
   let short = label.runeLen <= shortLabelChars
   if short:
-    # One line, as wide as its text: the rules share the rest.
+    # One line, as wide as its text: the rules share the rest. A client
+    # that drops `white-space` (SnappyMail) still keeps a short CJK
+    # label whole: word joiners between its ideographs remove the break
+    # opportunity every pair of them is (the text part keeps the label
+    # as written).
     ctx.r.setStyle(mid, "white-space", "nowrap")
+    for c in content:
+      joinCjk(c)
   else:
     # A long label wraps in the middle 60%, a word too long for it
     # broken there (an automatic layout would otherwise grow the cell to

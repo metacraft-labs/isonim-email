@@ -1,0 +1,55 @@
+View in browser: https://example.com/view/2041
+
+Acme
+
+Orders (https://example.com/orders)
+Help (https://example.com/help)
+
+Acme Build Day 2026
+===================
+
+A day of talks on shipping software, in Springfield and online.
+
+You're invited
+--------------
+
+Join us for a day of talks on shipping software.
+
+Build Day 2026
+--------------
+
+Twelve talks, two workshops, and lunch with the people who build Acme.
+
+Saturday, 14 November 2026, 09:30–17:00 CET
+
+Springfield Hall, 1 Example Street
+
+Google Calendar (https://calendar.example.com/google/build-day)
+Outlook (https://calendar.example.com/outlook/build-day)
+Apple Calendar (.ics) (https://calendar.example.com/build-day.ics)
+
+Early-bird tickets end 31 October 2026, 23:59 CET 
+(https://example.com/tickets)
+
+Speakers
+--------
+
+Amara Okafor — Staff engineer, Acme
+
+Leo Marchetti — Head of platform, Example Corp
+
+Register: https://example.com/build-day/register
+See the programme: https://example.com/build-day
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+You're receiving this because you have an Acme account.
+
+Acme Inc., 1 Example Street, Springfield, IL 62701, USA
+
+Unsubscribe (https://example.com/unsubscribe?u=4f2a)
+Preferences (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme Inc. All rights reserved.

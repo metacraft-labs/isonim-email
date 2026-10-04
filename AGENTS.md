@@ -67,9 +67,16 @@ MJML 5's for the fixtures in `tests/conformance/`; MJML is pinned in
 (`tests/stories/seed_layout.nim`) and the layout primitives' story set
 (`tests/stories/seed_primitives.nim`: `boxMinimal` … `sidebarInContext`)
 and the content patterns' story sets (`tests/stories/seed_structure.nim`,
-`seed_media.nim`: `headerMinimal` … `countdownInContext`) are
-captured with `ISONIM_CAPTURE_LAYOUT=1 just email-shots
-layoutOneColumn …`; they are outside the regression matrix. Images a
+`seed_media.nim`: `headerMinimal` … `countdownInContext`), the
+Markdown bodies' (`seed_markdown.nim`) and the reference emails
+(`examples/reference_set.nim`, registered by
+`tests/stories/seed_reference.nim`: `receiptTypical` …
+`newsletterColumns`) are captured with `ISONIM_CAPTURE_LAYOUT=1 just
+email-shots layoutOneColumn …`; they are outside the regression matrix,
+apart from the reference emails: the matrix (`just email-capture-ci`,
+gated with `--assert` in `just test`) is the canary and the fourteen
+reference emails, Tier-1 the canary, `receiptTypical`, `alertArabic`
+and `securityCodeJapanese` (`tests/baselines/README.md`). Images a
 story's render derives (the crops of `mailImage(crop)`) are written to
 `build/email-shots/.derived-assets/`, which the fixture host serves.
 Every backend-a capture also runs the pinned axe-core
@@ -103,6 +110,10 @@ src/
   isonim_email.nim                 # public umbrella - re-exports land here
   isonim_email/                    # library modules (renderer,
                                    # vocabulary, style compiler, MIME, …)
+examples/
+  reference_set.nim                # the reference emails: the layouts and
+                                   # every common email type, with their
+                                   # fixed data (and assets/, their images)
 tests/
   t1_*.nim, t2_*, t3_*             # unit/golden/invariant tests
   golden/                          # byte-exact goldens; changed only on

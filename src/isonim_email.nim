@@ -28,6 +28,7 @@ import isonim_email/patterns
 import isonim_email/primitives
 import isonim_email/navigation
 import isonim_email/content
+import isonim_email/layouts
 import isonim_email/crop
 import isonim_email/raw
 import isonim_email/passes/layout
@@ -87,6 +88,7 @@ export patterns
 export primitives
 export navigation
 export content
+export layouts
 export crop
 export raw
 export layout

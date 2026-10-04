@@ -1,0 +1,17 @@
+Maintenance on Sunday
+=====================
+
+INFO: Sunday, 02:00–03:00 UTC
+The dashboard will be read-only for up to an hour.
+
+During the window:
+
+- deploys are queued, not lost;
+- the API answers reads as usual.
+
+Nothing to do on your side.
+
+Status page: https://status.example.com/
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -227,6 +227,13 @@ proc samples(): OrderedTable[string, Sample] =
   result["mailCoupon"] = proc(r: EmailRenderer; s: EmailNode) =
     discard r.el(s, "mailCoupon", [("code", "SPRING-20"),
       ("title", "20% off"), ("hint", "At checkout.")])
+  result["mailMarkdown"] = proc(r: EmailRenderer; s: EmailNode) =
+    # Every construct: its table is a `mailTable`'s, the rest leaves and
+    # patterns.
+    discard r.el(s, "mailMarkdown", [("src", "## Body\n\nText with " &
+      "**strong** and `code`.\n\n- one\n\n```\nx\n```\n\n> Quote\n\n" &
+      "---\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n:::note\nA note.\n" &
+      ":::\n\n:::button href=\"https://example.com/b\"\nGo\n:::")])
   result["mailRatingScale"] = proc(r: EmailRenderer; s: EmailNode) =
     for kind in ["stars", "nps"]:
       discard r.el(s, "mailRatingScale", [("kind", kind),

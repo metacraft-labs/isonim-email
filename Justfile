@@ -22,7 +22,7 @@ alias fmt := format
 # Path lookups - mirrors what `config.nims` exports (kept here so a
 # developer running `just <recipe>` outside direnv still resolves
 # sibling-repo sources).
-src-paths := "--path:src --path:tests --path:../isonim/src --path:../nim-everywhere/src --path:../nim-faststreams --path:../nim-stew --path:../isonim-docs/src"
+src-paths := "--path:src --path:tests --path:examples --path:../isonim/src --path:../nim-everywhere/src --path:../nim-faststreams --path:../nim-stew --path:../isonim-docs/src"
 
 # Style checks - applied to every nim invocation in this file.
 nim-flags := "--styleCheck:usages --styleCheck:error"
@@ -36,7 +36,7 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_reference_set.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
@@ -62,7 +62,7 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # to node for the findings.ts rating and writes its baseline to
 # tmp), and e2e_dom_assertions (two gated CLI runs plus run-dir
 # reads).)
-tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim"
+tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim"
 
 # --- Default targets ---
 
@@ -168,7 +168,7 @@ test-serial: build-tailwind test-c test-js test-ts test-webmail test-desktop tes
 # do not run them; run `just email-capture-ci` directly to see the
 # numbers anyway.
 test-capture-ci:
-    @if [ "$(uname -sm)" = "Linux x86_64" ]; then       just email-capture-ci;     else       echo "test-capture-ci: NOT RUN on $(uname -sm): the capture baselines are pinned to x86_64-linux";     fi
+    @if [ "$(uname -sm)" = "Linux x86_64" ]; then       just email-capture-ci --assert;     else       echo "test-capture-ci: NOT RUN on $(uname -sm): the capture baselines are pinned to x86_64-linux";     fi
 
 # Test on the C backend (the default target). Each file is its own
 # `nim c -r` with its own binary and nimcache, as `test-file` builds it;
@@ -265,8 +265,8 @@ email-credentials-template *providers:
 
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
-# when a Nim source or a story fixture image (compiled in) is newer
-# than its binary, so plain iterations
+# when a Nim source or a story fixture or reference-email image (compiled
+# in, under tests/stories/ and examples/) is newer than its binary, so plain iterations
 # stay fast; `just email-shots` and the e2e tests depend on this.
 #
 # ISONIM_EMAIL_PREBUILT_DRIVERS names a directory holding both drivers
@@ -281,13 +281,13 @@ email-shots-build: build-tailwind
       echo "build/capture/build-stories, build/review/brief-driver: prebuilt, from $ISONIM_EMAIL_PREBUILT_DRIVERS"; \
     fi
     @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then :; \
-    elif [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/capture/build-stories 2>/dev/null)" ]; then \
+    elif [ -x build/capture/build-stories ] && [ -z "$(find src tools/capture tests/stories examples \( -name '*.nim' -o -name '*.png' -o -name '*.gif' \) -newer build/capture/build-stories 2>/dev/null)" ]; then \
       echo "build/capture/build-stories up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/capture/build-stories --nimcache:build/nimcache-build-stories tools/capture/build_stories.nim 2>&1 | tee test-logs/email-shots-build.log; \
     fi
     @if [ -n "${ISONIM_EMAIL_PREBUILT_DRIVERS:-}" ]; then :; \
-    elif [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories \( -name '*.nim' -o -name '*.png' \) -newer build/review/brief-driver 2>/dev/null)" ]; then \
+    elif [ -x build/review/brief-driver ] && [ -z "$(find src tools/review tests/stories examples \( -name '*.nim' -o -name '*.png' -o -name '*.gif' \) -newer build/review/brief-driver 2>/dev/null)" ]; then \
       echo "build/review/brief-driver up to date"; \
     else \
       nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/review/brief-driver --nimcache:build/nimcache-brief-driver tools/review/brief_driver.nim 2>&1 | tee test-logs/brief-driver-build.log; \
@@ -316,30 +316,31 @@ email-review-broken-check run:
     node tools/review/broken_story.ts check {{run}}
 
 # Capture regression checks (Tier-1 + Tier-2, Tier-3 record/gate),
-# run locally as part of `just test` (test-capture-ci) or on their own.
-# Captures the full story set on the pinned CI matrix (backend a only:
-# the real clients other providers serve under the same families are not
-# part of these baselines; core families ×
-# mobile,desktop × light, --full so MIME-diff selection cannot empty
-# it, --no-cache so every PNG is a real capture) into
-# build/email-capture-ci/<utc-date>, then checks it: Tier-1 exact
-# sha256 of each canary PNG vs
-# tests/baselines/canary/<variant>.sha256, Tier-2 diffPng of every
-# capture vs tests/baselines/<story>/<variant>.png (fail over a
-# 0.001 diff ratio). Tier-3 DOM assertions (overflow, touch,
-# bodyfont, contrast, unsubscribe, clipped) are recorded in every
-# provenance + per-story assertions.json either way; `just
+# run locally as part of `just test` (test-capture-ci, gated with
+# --assert) or on their own.
+# Captures the regression matrix's stories (capture-ci-stories: the
+# canary and the reference emails; the seed receipt and alert stay
+# registered as the capture tooling's own fixtures, outside the matrix)
+# on the pinned CI matrix (backend a only: the real clients other
+# providers serve under the same families are not part of these
+# baselines; core families × mobile,desktop × light, --full so
+# MIME-diff selection cannot empty it, --no-cache so every PNG is a
+# real capture) into build/email-capture-ci/<utc-date>, then checks it:
+# Tier-1 exact sha256 of every PNG of the Tier-1 stories (the canary,
+# receiptTypical, alertArabic and securityCodeJapanese:
+# TIER1_STORIES in tools/capture/email-capture-ci.ts) vs
+# tests/baselines/<story>/<variant>.sha256, Tier-2 diffPng of every
+# capture vs tests/baselines/<story>/<variant>.png (fail over a 0.001
+# diff ratio). Tier-3 DOM assertions (overflow, touch as WCAG 2.5.8,
+# bodyfont, contrast, unsubscribe, clipped, and axe-core) are recorded
+# in every provenance + per-story assertions.json either way; `just
 # email-capture-ci --assert` additionally gates the captures on them
 # (passed through to email-shots below) and runs the checker's Tier-3
-# over the assertions.json files. Gating is opt-in because the seed
-# stories (canary/receipt/alert) carry no visible unsubscribe link, so
-# a gated matrix fails Tier-3 until the reference template set lands
-# with real footers. axe-core, the seventh Tier-3 item, is not pinned in
-# the dev shell or isonim's node_modules, so it is recorded as
-# pass:null, never faked — owner action: pin axe-core (a flake.nix
-# package or isonim/node_modules via yarn) and inject + axe.run it
-# in-page in email-shots.ts captureOne. Any mismatch exits 1 naming
-# the variants.
+# over the assertions.json files. A check that does not apply to a
+# story by design is recorded as not applicable (pass:null), never a
+# failure: the canary's unsubscribe (it has no footer;
+# NOT_APPLICABLE in tools/capture/dom_assertions.ts). Any mismatch
+# exits 1 naming the variants.
 # `just email-capture-ci --update-baselines` regenerates the
 # baselines from the fresh run — the ONLY way baselines change, at
 # end-of-session approval (see tests/baselines/README.md). Stories
@@ -347,8 +348,9 @@ email-review-broken-check run:
 # reported on every run but not compared; `--approve <story>` (with
 # --update-baselines) re-approves one after a real review, and
 # `--require-approved` fails while any story is pending.
+capture-ci-stories := "canary receiptTypical receiptHebrew securityCodeJapanese alertCritical alertArabic digestGrid digestZigZag digestNearBudget notificationMarkdown shippingChinese surveyRequest darkPalette eventInvitation newsletterColumns"
 email-capture-ci *args: email-shots-build
-    out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; node tools/capture/email-shots.ts --backends a --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" && node tools/capture/email-capture-ci.ts "$out" {{args}}
+    out="build/email-capture-ci/$(date -u +%Y%m%dT%H%M%SZ)"; gate=""; echo " {{args}} " | grep -q " --assert " && gate="--assert" || true; ISONIM_CAPTURE_LAYOUT=1 node tools/capture/email-shots.ts --backends a --families apple,thunderbird,chromium-baseline --viewports mobile,desktop --schemes light --images on --full --no-cache $gate --out "$out" {{capture-ci-stories}} && node tools/capture/email-capture-ci.ts "$out" {{args}}
 
 # The hermetic capture check: the capture providers in a NixOS VM
 # (nix/capture-vm.nix). The story drivers are built in the Nix sandbox

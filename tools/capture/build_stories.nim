@@ -30,6 +30,8 @@ import stories/seed_media
 import stories/seed_containers
 import stories/seed_data
 import stories/seed_actions
+import stories/seed_markdown
+import stories/seed_reference
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -111,6 +113,11 @@ proc main(): int =
     registerContainerStories()
     registerDataStories()
     registerActionStories()
+    # The Markdown bodies' story set (tests/stories/seed_markdown.nim)
+    # and the reference emails (examples/reference_set.nim, through
+    # tests/stories/seed_reference.nim).
+    registerMarkdownStories()
+    registerReferenceStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

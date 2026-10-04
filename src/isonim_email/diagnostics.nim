@@ -236,6 +236,15 @@ const
     ## Two adjacent bands that differ in the light palette become
     ## indistinguishable after partial inversion, or in their designed
     ## dark colours. Collected from `passes/lint.lintBandsMerge`.
+  codeMarkdownUnsupportedText* = "W-MARKDOWN-UNSUPPORTED"
+    ## `mailMarkdown` source that is not read as Markdown and is written
+    ## as the text the author typed (raw HTML, footnotes, an image where
+    ## only text goes). Collected from `content/markdown.nim`'s expansion.
+  codeMarkdownUnsupported* = "E-MARKDOWN-UNSUPPORTED"
+    ## A `mailMarkdown` block the docs dialect parses but email has no
+    ## form for (tabs, card grids, heroes, FAQs, videos, forms, component
+    ## tags): left out of the message. Collected from
+    ## `content/markdown.nim`'s expansion.
   codePatternGridOrphan* = "E-PATTERN-GRID-ORPHAN"
     ## `mailGrid(columns = 3, mobile_columns = 2)`: two per row on a
     ## phone leaves an orphan item in every second row. Collected from

@@ -57,7 +57,8 @@
 ## the page below the message: the document's dark background on the
 ## `body` element, which carries no class (R-DOC-14). With `dark_src`
 ## images (`swaps`) it holds R-IMG-06's fixed swap rules,
-## `.e-dk-hide{display:none}` and `.e-dk-show{display:block}`, with
+## `.e-dk-hide{display:none}`, `.e-dk-show{display:block}` and
+## `.e-dk-show-inline{display:inline}` (an inline-form image's), with
 ## their `[data-ogsc]` copies; the light image of each pair gets
 ## `e-dk-hide` only when the dark block survives, and the image
 ## lowering writes the dark copy only then.
@@ -343,6 +344,11 @@ const
   darkShowClass* = "e-dk-show"
     ## The dark image of a pair: inline `display:none`, shown by the dark
     ## block.
+  darkShowInlineClass* = "e-dk-show-inline"
+    ## The dark image of a pair in the inline form (R-IMG-03: a small
+    ## image in a line, a social icon): shown inline, as its light image
+    ## is, so its alt with images off is laid out as text, never clipped
+    ## in its box.
 
 proc swapRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
   ## R-IMG-06's swap: in the dark scheme the light image goes and the
@@ -350,7 +356,9 @@ proc swapRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
   @[("." & darkHideClass, @[Declaration(prop: "display", value: "none",
       important: true)]),
     ("." & darkShowClass, @[Declaration(prop: "display", value: "block",
-      important: true)])]
+      important: true)]),
+    ("." & darkShowInlineClass, @[Declaration(prop: "display",
+      value: "inline", important: true)])]
 
 proc documentDarkBackground(groups: seq[HeadGroup]):
     tuple[decls: seq[Declaration]; lights: seq[string]] =

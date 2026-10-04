@@ -134,6 +134,12 @@ suite "e2e Tier-3 DOM assertions catch overflow":
       checks.add(a["check"].getStr())
       check a["pass"].kind == JBool and a["pass"].getBool() == true
     check checks.len == 7 and "axe" in checks
+    # rule: R-A11Y-11
+    # The touch check the run gates on is WCAG 2.5.8's (24px, the
+    # spacing exception, the inline exception), not a 44px minimum.
+    for a in assertionsOf(outFluid, "overflowFluid")[0]["assertions"]:
+      if a["check"].getStr() == "touch":
+        check "WCAG 2.5.8" in a["detail"].getStr()
 
     let reason = fixedMeta["fail_reason"].getStr()
     echo "overflowFixed fails naming overflow + table (" &

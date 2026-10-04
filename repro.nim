@@ -165,6 +165,9 @@ const emailTestSpecs = @[
   "t7_content_patterns",
   "t7_container_data_patterns",
   "t7_action_patterns",
+  "t7_markdown",
+  "t7_layouts",
+  "t7_reference_set",
   "t7_pattern_story_sets",
   "t7_text_part_goldens",
   # WAIVER (2026-09-28): `repro test` is 76/80 — the 4 e2e EXECUTE actions

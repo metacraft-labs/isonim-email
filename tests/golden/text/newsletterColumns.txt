@@ -1,0 +1,89 @@
+View in browser: https://example.com/view/2041
+
+Acme
+
+Orders (https://example.com/orders)
+Help (https://example.com/help)
+
+Prints (https://example.com/prints)
+Frames (https://example.com/frames)
+Journal (https://example.com/journal)
+Sale (https://example.com/sale)
+
+The October newsletter
+======================
+
+One column: the news of the month, in a single block of text across the 
+whole message.
+
+[A coastline at dusk]
+
+Coast
+-----
+
+Two columns: each half the width, side by side, stacked on a phone.
+
+[A city at night]
+
+City
+----
+
+The second of two columns, an image above its text like the first.
+
+Prints
+------
+
+Archival inks on cotton paper.
+
+Frames
+------
+
+Solid oak, made to order.
+
+Gifts
+-----
+
+Cards for the prints you love.
+
+12
+new prints
+
+4
+frames
+
+2
+shops
+
+1
+sale
+
+In the shop
+-----------
+
+Rich text in a wrapper: bold, italic and a link to the shop 
+(https://example.com/shop).
+
+Mon–Fri: 9:00–18:00
+Sat: 10:00–16:00
+
+Opening hours of our shops
+Shop | Mon–Fri | Sat
+Springfield | 9–18 | 10–16
+Shelbyville | 10–19 | Closed
+
+----
+
+Printed and framed in Springfield.
+
+GitHub: https://github.com/
+LinkedIn: https://www.linkedin.com/
+X: https://x.com/
+
+You're receiving this because you have an Acme account.
+
+Acme Inc., 1 Example Street, Springfield, IL 62701, USA
+
+Unsubscribe (https://example.com/unsubscribe?u=4f2a)
+Preferences (https://example.com/preferences?u=4f2a)
+
+© 2026 Acme Inc. All rights reserved.

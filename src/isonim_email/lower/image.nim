@@ -108,7 +108,8 @@ import ../style/metrics
 import ../target
 import ../mso/cond
 import ../style/colors
-from ../passes/head import darkHideClass, darkShowClass
+from ../passes/head import darkHideClass, darkShowClass,
+  darkShowInlineClass
 from ../passes/lint import contrastRatio
 from ./document import contentCellAlign
 from ./section import zeroFontSize
@@ -475,7 +476,9 @@ proc lowerImage*(node: EmailNode; theme: EmailTheme;
       if dark:
         var parts: seq[string] = @[]
         for c in node.attrs["class"].splitWhitespace():
-          parts.add(if c == darkHideClass: darkShowClass else: c)
+          parts.add(if c != darkHideClass: c
+            elif display == "inline": darkShowInlineClass
+            else: darkShowClass)
         r.setAttribute(img, "class", parts.join(" "))
       else:
         r.setAttribute(img, "class", node.attrs["class"])

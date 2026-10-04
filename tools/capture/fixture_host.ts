@@ -24,6 +24,13 @@ import type { BrowserContext } from "playwright-core";
 
 export const FIXTURE_HOST = "https://x.test";
 
+// The hash prefix of an image a story means to be missing (the
+// reference set's 404 edge case): no file's sha256 starts with it in
+// practice, the host answers it 404 like any unknown name, and the
+// real-client providers do not count it among the images a capture
+// must load (`storyImagePaths`).
+export const DELIBERATELY_MISSING_PREFIX = "/0404040404040404/";
+
 // Images a story's render makes rather than reads (a crop the asset
 // pass cut from a fixture, catalogue R-IMG-13): the story driver writes
 // each one here, under its published name, when the capture CLI runs it
@@ -95,6 +102,63 @@ export function resolveFixture(
   };
 }
 
+// An animated GIF reduced to its first frame: the header, the logical
+// screen and its global colour table, the extensions that precede the
+// first image (its graphic control, so a transparent colour stays
+// transparent), that image, and the trailer. Application extensions
+// (the NETSCAPE looping block) are dropped. A GIF with one frame comes
+// back unchanged; bytes that do not parse as a GIF come back as they
+// are. Backend A serves the fixture host's GIFs this way: an engine
+// advances an animation on wall-clock time, so the frame a screenshot
+// shows would depend on how long the capture took, and the first frame
+// is also what a client that does not animate (Outlook on Windows)
+// shows.
+export function firstFrameGif(body: Buffer): Buffer {
+  const sig = body.subarray(0, 6).toString("latin1");
+  if (body.length < 13 || (sig !== "GIF87a" && sig !== "GIF89a")) return body;
+  const subBlocksEnd = (at: number): number => {
+    let i = at;
+    while (i < body.length && body[i] !== 0) i += body[i]! + 1;
+    return i + 1;
+  };
+  let i = 13;
+  const packed = body[10]!;
+  if (packed & 0x80) i += 3 * (1 << ((packed & 7) + 1));
+  const parts: Buffer[] = [body.subarray(0, i)];
+  let frames = 0;
+  let firstEnd = -1;
+  while (i < body.length) {
+    const b = body[i];
+    if (b === 0x21) {
+      const end = subBlocksEnd(i + 2);
+      if (end > body.length) return body;
+      if (frames === 0 && body[i + 1] !== 0xff)
+        parts.push(body.subarray(i, end));
+      i = end;
+    } else if (b === 0x2c) {
+      let j = i + 10;
+      if (j > body.length) return body;
+      const lct = body[i + 9]!;
+      if (lct & 0x80) j += 3 * (1 << ((lct & 7) + 1));
+      const end = subBlocksEnd(j + 1);
+      if (end > body.length) return body;
+      frames += 1;
+      if (frames === 1) {
+        parts.push(body.subarray(i, end));
+        firstEnd = end;
+      }
+      i = end;
+    } else if (b === 0x3b) {
+      break;
+    } else {
+      return body;
+    }
+  }
+  if (frames <= 1 || firstEnd < 0) return body;
+  parts.push(Buffer.from([0x3b]));
+  return Buffer.concat(parts);
+}
+
 // The network policy of a capture: nothing leaves the machine. The
 // fixture host is answered from disk and data: URIs stay inline;
 // every other request is aborted and recorded, so a message that
@@ -102,6 +166,7 @@ export function resolveFixture(
 // says so in the provenance, instead of depending on (and leaking to)
 // the network. With images off, image requests to the fixture host
 // are aborted too — that is what an images-off client does.
+// An animated GIF is served as its first frame (firstFrameGif).
 export type RouteDecision =
   | { action: "fixture" }
   | { action: "allow" }
@@ -152,7 +217,10 @@ export async function installCapturePolicy(
     await route.fulfill({
       status: res.status,
       contentType: res.contentType,
-      body: res.body,
+      body:
+        res.status === 200 && res.contentType === "image/gif"
+          ? firstFrameGif(res.body)
+          : res.body,
     });
   });
   return blocked;

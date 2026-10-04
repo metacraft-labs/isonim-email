@@ -12,6 +12,10 @@
 # Local sources (so `import isonim_email/...` resolves from src/, tests/, …).
 switch("path", "$config/src")
 
+# The reference emails (`examples/`), which the story drivers and the
+# reference-set tests import.
+switch("path", "$config/examples")
+
 # Sibling isonim — the framework this library targets.
 switch("path", "$config/../isonim/src")
 

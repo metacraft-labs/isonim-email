@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, BrowserType } from "playwright-core";
 import { applyChain, transformChain, transformVersion } from "../transforms.ts";
-import { domAssertionsScript } from "../dom_assertions.ts";
+import { applyNotApplicable, domAssertionsScript } from "../dom_assertions.ts";
 import { AXE_ENV, axeAssertion, loadAxeSource, runAxe } from "../axe.ts";
 import { readPng } from "../contact_sheet.ts";
 import {
@@ -64,10 +64,12 @@ export const BROWSER_EMULATION_ID = "browser-emulation";
 // 3: the provenance records axe-core's result (it recorded none).
 // 4: the pixel contrast check measures a line's words only (a line of
 // nothing but white space measured as unreadable).
-export const BROWSER_EMULATION_VERSION = "4";
+export const BROWSER_EMULATION_VERSION = "5";
 // Bump by hand when crop/mask/wait changes. 2: story images are served
-// from the local fixture host instead of failing to load.
-export const BROWSER_EMULATION_ADAPTER_VERSION = 2;
+// from the local fixture host instead of failing to load. 3: an
+// animated GIF is served as its first frame (the frame a capture showed
+// depended on how long it took).
+export const BROWSER_EMULATION_ADAPTER_VERSION = 3;
 
 const FIXED_CLOCK = "2026-01-01T12:00:00Z";
 const IMAGE_TIMEOUT_MS = 5000;
@@ -214,21 +216,58 @@ function emulationOf(req: CaptureRequest): Emulation {
   };
 }
 
-async function imagesComplete(
+export async function imagesComplete(
   page: import("playwright-core").Page,
   timeoutMs: number,
 ): Promise<boolean> {
   // Node-side polling: the page clock is fixed, so in-page timers and
   // Date.now() are frozen and the wait must live here.
   const start = Date.now();
+  // Images drawn by CSS (a band's or a hero's `background-image`) are
+  // not in document.images, and `load` does not reliably wait for them:
+  // each is loaded once more through an Image object (served from the
+  // cache the page filled), and the page is settled when they are done
+  // too. Without it a slower host screenshots a hero before its image.
+  const settled =
+    "(() => {" +
+    " if (!window.__isonimBg) {" +
+    "  const urls = new Set();" +
+    "  for (const el of document.querySelectorAll('*')) {" +
+    "   const bg = getComputedStyle(el).backgroundImage || '';" +
+    "   for (const m of bg.matchAll(/url\\(\\s*['\"]?([^'\")]+)['\"]?\\s*\\)/g)) urls.add(m[1]);" +
+    "  }" +
+    "  window.__isonimBg = Array.from(urls).map((u) => { const i = new Image(); i.src = u; return i; });" +
+    " }" +
+    " return Array.from(document.images).every((i) => i.complete) &&" +
+    "  window.__isonimBg.every((i) => i.complete);" +
+    "})()";
   for (;;) {
-    const done = await page.evaluate(
-      "Array.from(document.images).every((i) => i.complete)",
-    );
-    if (done) return true;
+    const done = await page.evaluate(settled);
+    if (done) break;
     if (Date.now() - start >= timeoutMs) return false;
     await new Promise((r) => setTimeout(r, 50));
   }
+  // Loaded is not painted: an engine may decode a large image after it
+  // arrives, and a slow host screenshots the fallback colour in the
+  // meantime. Every image, those CSS draws included, is decoded first
+  // (a decode that fails, a broken image, is not waited on), then two
+  // frames pass.
+  const decoded = await Promise.race([
+    page
+      .evaluate(
+        "Promise.all(Array.from(document.images).concat(window.__isonimBg || [])" +
+          ".map((i) => (i.decode ? i.decode().catch(() => null) : null)))" +
+          ".then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))))",
+      )
+      .then(() => true),
+    new Promise<boolean>((r) =>
+      setTimeout(
+        () => r(false),
+        Math.max(timeoutMs - (Date.now() - start), 1000),
+      ),
+    ),
+  ]);
+  return decoded;
 }
 
 async function captureOne(
@@ -298,9 +337,10 @@ async function captureOne(
     // screenshot, recorded in every provenance either way; --assert
     // fails the capture on any failure (no PNG, like every other
     // capture failure).
-    const assertions = (await page.evaluate(
-      domAssertionsScript(),
-    )) as AssertionResult[];
+    const assertions = applyNotApplicable(
+      req.story,
+      (await page.evaluate(domAssertionsScript())) as AssertionResult[],
+    );
     // axe-core, the seventh Tier-3 item, runs after the screenshot (its
     // script tag and any scrolling must not reach the pixels): see below.
     // Forced dark recolours what Blink paints, not the computed styles,

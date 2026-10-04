@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 
 import {
   DOM_ASSERTION_CHECKS,
+  applyNotApplicable,
   domAssertionsScript,
   type DomAssertion,
 } from "./dom_assertions.ts";
@@ -19,6 +20,8 @@ interface FakeRect {
   width: number;
   height: number;
   right: number;
+  left?: number;
+  top?: number;
 }
 
 interface FakeStyle {
@@ -223,26 +226,40 @@ describe("Tier-3 DOM assertions snippet", () => {
         assert.equal(a.pass, true, `${check}: ${a.detail}`);
   });
 
-  it("a 20px-tall link fails touch; hidden targets are skipped", () => {
+  it("touch is WCAG 2.5.8: a spaced 20px link passes, two cramped ones fail; hidden targets are skipped", () => {
+    // Undersized (under 24px) but alone: the spacing exception.
     const { doc, innerWidth } = passingPage();
     const small = mkEl("a", {
       parent: doc.body,
       text: "tiny",
       href: "https://x.test/t",
-      rect: { width: 100, height: 20, right: 100 },
+      rect: { width: 100, height: 20, right: 100, left: 0, top: 200 },
     });
     const hidden = mkEl("button", {
       parent: doc.body,
       hidden: true,
       text: "x",
-      rect: { width: 1, height: 1, right: 1 },
+      rect: { width: 1, height: 1, right: 1, left: 0, top: 200 },
     });
     doc.taps.push(small, hidden);
     doc.all.push(small, hidden);
+    const spaced = resultOf(run(doc, innerWidth), "touch");
+    assert.equal(spaced.pass, true, spaced.detail);
+    assert.match(spaced.detail, /1 under 24px but spaced/);
+    // A second 20px link 2px below: their centres 22px apart, the
+    // circles meet.
+    const near = mkEl("a", {
+      parent: doc.body,
+      text: "near",
+      href: "https://x.test/n",
+      rect: { width: 100, height: 20, right: 100, left: 0, top: 222 },
+    });
+    doc.taps.push(near);
+    doc.all.push(near);
     const r = resultOf(run(doc, innerWidth), "touch");
     assert.equal(r.pass, false);
     assert.match(r.detail, /100x20/);
-    assert.match(r.detail, /44px/);
+    assert.match(r.detail, /WCAG 2\.5\.8/);
   });
 
   it("12px body text fails bodyfont", () => {
@@ -400,5 +417,20 @@ describe("Tier-3 DOM assertions snippet", () => {
     const r = resultOf(run(doc, innerWidth), "clipped");
     assert.equal(r.pass, false);
     assert.match(r.detail, /Message clipped/);
+  });
+});
+
+describe("checks that do not apply to a story", () => {
+  it("records the canary's unsubscribe as not applicable, and nothing else", () => {
+    const results: { check: string; pass: boolean | null; detail: string }[] = [
+      { check: "touch", pass: true, detail: "ok" },
+      { check: "unsubscribe", pass: false, detail: "no visible link" },
+    ];
+    const canary = applyNotApplicable("canary", results);
+    assert.equal(canary[0]!.pass, true);
+    assert.equal(canary[1]!.pass, null);
+    assert.match(canary[1]!.detail, /^not applicable: the canary/);
+    // Any other story keeps its failure.
+    assert.deepEqual(applyNotApplicable("receiptTypical", results), results);
   });
 });

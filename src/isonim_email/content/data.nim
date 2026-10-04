@@ -53,6 +53,7 @@ import ../target
 import ../patterns
 import ../style/tokens
 import ../style/metrics
+from ../vocabulary import restrictPatternParents
 import ./kit
 
 ## The client families an edit to this module can change: read by
@@ -1116,6 +1117,10 @@ defineMailPattern(mailStepper, StepperProps, stepperExpand, stepperExpected,
   stepperDegradations)
 defineMailPattern(mailStep, StepProps, stepExpand, noLines[StepProps],
   noLines[StepProps])
+# An item: only a stepper holds a step (the vocabulary's parents, checked
+# at compile time), and its stories are the stepper's (the registry's).
+static:
+  restrictPatternParents("mailStep", ["mailStepper"])
 declareItemOf("mailStep", "mailStepper")
 defineMailPattern(mailTimeline, TimelineProps, timelineExpand,
   timelineExpected, timelineDegradations)

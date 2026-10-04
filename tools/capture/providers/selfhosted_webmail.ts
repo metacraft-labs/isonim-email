@@ -31,7 +31,7 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
-import { FIXTURE_HOST } from "../fixture_host.ts";
+import { DELIBERATELY_MISSING_PREFIX, FIXTURE_HOST } from "../fixture_host.ts";
 import { launchOptions } from "../launch.ts";
 import { assetsHandle, splitCaptureToken } from "./assets_service.ts";
 import { resolveDriver } from "./browser_emulation.ts";
@@ -185,6 +185,8 @@ export function storyImagePaths(html: string): string[] {
     const url = decodeEntities((m[1] ?? m[2] ?? m[3] ?? "").trim());
     if (url.toLowerCase().startsWith(origin)) {
       const path = `/${url.slice(origin.length)}`.split(/[?#]/)[0]!;
+      // A story's deliberately missing image is not one it must load.
+      if (path.startsWith(DELIBERATELY_MISSING_PREFIX)) continue;
       if (!out.includes(path)) out.push(path);
     }
   }
