@@ -255,12 +255,17 @@ proc pairFor*(t: EmailTheme; key: string): ThemePair =
 
 proc lightFor*(t: EmailTheme; key: string): string =
   ## The inline literal for `key` (R-CSS-01): what P5 emits in `style=""`.
-  t.pairFor(key).light
+  ## (`pairFor`'s answer and error, read in place.)
+  t.values.withValue(key, p):
+    return p.light
+  discard t.pairFor(key)
 
 proc darkFor*(t: EmailTheme; key: string): string =
   ## The dark literal for `key` (R-CSS-02): what P6 emits in the dark head
   ## block. Equal to the light value when the token has no dark mode.
-  t.pairFor(key).dark
+  t.values.withValue(key, p):
+    return p.dark
+  discard t.pairFor(key)
 
 proc lightFor*(t: EmailTheme; r: TokenRef): string =
   ## Resolves a `tok"…"` reference to its inline literal.

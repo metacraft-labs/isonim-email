@@ -14,9 +14,10 @@
 ##
 ## Pure `std` string work: identical on the C and JS targets.
 
-import std/strutils
+import std/[strutils, tables]
 import ./units
 import ./colors
+import ./memo
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -41,10 +42,8 @@ type
     lineHeight*: string
     weight*: string
 
-proc expandBox*(value: string): array[4, string] =
-  ## Expands 1–4 `Len` values in CSS shorthand order to
-  ## `[top, right, bottom, left]`, each normalised px (`Box`
-  ## canonicalises to 4 px ints; `%` is rejected).
+proc computeExpandBox(value: string): array[4, string] =
+  ## `expandBox`, parsed every time.
   let parts = value.strip().splitWhitespace()
   if parts.len < 1 or parts.len > 4:
     raise newException(StyleError,
@@ -73,6 +72,18 @@ proc expandBox*(value: string): array[4, string] =
     raise newException(StyleError,
       "E-VOCAB-BAD-VALUE: '" & value & "' is not a Box: " & e.msg)
   sides
+
+var expandBoxMemo {.threadvar.}: Table[string, array[4, string]]
+  ## `expandBox` per value, as parsed once on this thread (`memo.nim`).
+
+const shorthandMemoCap = 1024
+  ## Answers each table of this module keeps before it is emptied.
+
+proc expandBox*(value: string): array[4, string] =
+  ## Expands 1–4 `Len` values in CSS shorthand order to
+  ## `[top, right, bottom, left]`, each normalised px (`Box`
+  ## canonicalises to 4 px ints; `%` is rejected).
+  memoised(expandBoxMemo, shorthandMemoCap, value, computeExpandBox(value))
 
 proc parseBorder*(value: string): Border =
   ## Parses `"1px solid #e5e7eb"` (tokens in any order) to width, style
@@ -180,11 +191,8 @@ proc parseMargin*(value: string): array[4, string] =
         "' uses a negative margin, which Word does not support (R-OL-04)")
   sides
 
-proc parseTypeSpec*(value: string): TypeSpec =
-  ## Parses a packed `type.*`/`button.font` literal:
-  ## `"size/line"` or `"size/line/weight"`. Size is px (unitless means
-  ## px); line is px or a unitless multiplier of the size; weight is
-  ## 100–900 or `normal`/`bold`.
+proc computeParseTypeSpec(value: string): TypeSpec =
+  ## `parseTypeSpec`, parsed every time.
   let parts = value.strip().split("/")
   if parts.len < 2 or parts.len > 3:
     raise newException(StyleError,
@@ -222,6 +230,16 @@ proc parseTypeSpec*(value: string): TypeSpec =
           "E-VOCAB-BAD-VALUE: bad font weight in '" & value &
           "' (100-900, or normal/bold)")
   TypeSpec(fontSize: fontSize, lineHeight: lineHeight, weight: weight)
+
+var typeSpecMemo {.threadvar.}: Table[string, TypeSpec]
+  ## `parseTypeSpec` per value, as parsed once on this thread.
+
+proc parseTypeSpec*(value: string): TypeSpec =
+  ## Parses a packed `type.*`/`button.font` literal:
+  ## `"size/line"` or `"size/line/weight"`. Size is px (unitless means
+  ## px); line is px or a unitless multiplier of the size; weight is
+  ## 100–900 or `normal`/`bold`.
+  memoised(typeSpecMemo, shorthandMemoCap, value, computeParseTypeSpec(value))
 
 proc expandTypeSpec*(value: string): seq[tuple[prop, value: string]] =
   ## The declarations for a packed type literal: `font-size` and

@@ -24,75 +24,130 @@ const
     ## RFC 2047 §2: an encoded-word is at most 75 chars.
   crlf* = "\r\n"
 
-proc isQpLiteral(b: byte): bool =
-  ## RFC 2045 §6.7 rule 2: octets 33–60 and 62–126 may be literal.
-  ## 61 (`=`) is excluded, so `=` is always `=3D`.
-  (b >= 33 and b <= 60) or (b >= 62 and b <= 126)
+const qpVerbatim = {'!' .. '<', '>' .. '~', ' ', '\t'}
+  ## The bytes written as they are where they are literal: RFC 2045
+  ## §6.7 rule 2's octets 33–60 and 62–126 (61, `=`, is excluded, so
+  ## `=` is always `=3D`), and space and tab mid-line.
 
 proc hexByte(b: byte): string =
   ## `=XX` with uppercase hex (RFC 2045 §6.7 rule 1 mandates uppercase).
   const digits = "0123456789ABCDEF"
   "=" & digits[b shr 4] & digits[b and 0x0F]
 
+proc qpLineBound*(n: int): int =
+  ## The longest quoted-printable encoding of one source line of `n`
+  ## bytes, its CRLF included: every byte as `=XX`, and a soft break
+  ## (`=` CRLF) only once an output line holds at least 73 characters,
+  ## so at most one per 73 written.
+  3 * n + 3 * (3 * n div 73) + 2
+
 proc encodeQuotedPrintable*(s: string): string =
   ## Encodes text as quoted-printable (RFC 2045 §6.7; R-MIME-05,
-  ## R-MIME-07). Input lines are split on LF (a trailing CR per line is
-  ## stripped); every output line ends with CRLF, including the last.
+  ## R-MIME-07). Input lines are split on LF, CRLF or a lone CR;
+  ## every output line ends with CRLF, including the last.
   ## Output lines are ≤ 76 chars with `=` soft breaks; `=` is always
   ## `=3D`; trailing whitespace is `=20`/`=09`; a line never starts
   ## with `.` (emitted as `=2E`, the dot-stuffing guard).
+  ##
+  ## One pass writing into one buffer: each source line is a slice of
+  ## `s` (the line breaks `splitLines` recognises), and each byte is
+  ## written as itself or as `=XX` straight into the result, which is
+  ## grown before each line to hold the longest encoding the line can
+  ## have (`qpLineBound`) and cut to what was written at the end.
+  const digits = "0123456789ABCDEF"
   if s.len == 0:
     return ""
-  result = newStringOfCap(s.len + s.len div 40 + 16)
-  var lineBuf = newStringOfCap(qpLineLimit + 4)
-
-  proc flushLine(res: var string; buf: var string; soft: bool) =
-    if soft:
-      buf.add('=')
-    res.add(buf)
-    res.add(crlf)
-    buf.setLen(0)
-
-  for rawLine in s.splitLines():
-    var line = rawLine
-    # splitLines keeps \r on CRLF input; canonical form is CRLF out.
-    if line.endsWith('\r'):
-      line.setLen(line.len - 1)
+  result = newStringUninit(s.len + s.len div 4 + 16)
+  var o = 0
+  template put(ch: char) =
+    result[o] = ch
+    inc o
+  var first = 0
+  while true:
+    var last = first
+    while last < s.len and s[last] notin {'\c', '\l'}:
+      inc last
+    let eol = last
+    if last < s.len:
+      if s[last] == '\l':
+        inc last
+      else:
+        inc last
+        if last < s.len and s[last] == '\l':
+          inc last
     # Trailing SP/TAB must be encoded (rule 3); find the run so the
     # packer below only sees literal whitespace mid-line (where a soft
     # `=` may legally follow it).
-    var trailStart = line.len
-    while trailStart > 0 and line[trailStart - 1] in {' ', '\t'}:
+    var trailStart = eol
+    while trailStart > first and s[trailStart - 1] in {' ', '\t'}:
       dec trailStart
-    var i = 0
-    while i < line.len:
-      let b = line[i].byte
-      var atom: string
-      if i >= trailStart:
-        atom = hexByte(b) # trailing whitespace: =20/=09
-      elif b == '.'.byte and lineBuf.len == 0:
-        atom = "=2E" # leading-dot guard (R-MIME-07)
-      elif isQpLiteral(b):
-        atom = $line[i]
-      elif b == ' '.byte or b == '\t'.byte:
-        atom = $line[i] # mid-line whitespace stays literal
-      else:
-        atom = hexByte(b) # `=` and bytes outside 33–60/62–126
+    let need = o + qpLineBound(eol - first)
+    if need > result.len:
+      result.setLen(max(need, 2 * result.len))
+    var lineLen = 0
+    var i = first
+    while i < eol:
+      # A run of bytes that are written as they are, with room left on
+      # the line: a literal byte (rule 2, or whitespace mid-line) before
+      # the trailing whitespace and before the line's final byte, not a
+      # dot opening an output line, while the line stays within 75.
+      # Copied in one go; every other byte takes the full rule below.
+      var j = i
+      if not (s[i] == '.' and lineLen == 0):
+        let stop = min(min(trailStart, eol - 1), i + (qpLineLimit - 1 - lineLen))
+        while j < stop and s[j] in qpVerbatim:
+          inc j
+      if j > i:
+        let n = j - i
+        when defined(js):
+          for k in 0 ..< n:
+            result[o + k] = s[i + k]
+        else:
+          copyMem(addr result[o], unsafeAddr s[i], n)
+        o += n
+        lineLen += n
+        i = j
+        continue
+      let c = s[i]
+      let b = c.byte
+      # Literal: rule 2's octets and mid-line whitespace. Encoded:
+      # trailing whitespace (=20/=09), a leading dot (R-MIME-07), `=`
+      # and every other byte.
+      var hex =
+        if i >= trailStart: true
+        elif c == '.' and lineLen == 0: true
+        elif c in qpVerbatim: false
+        else: true
       # A soft `=` counts toward the 76 (rule 5), so a line that
-      # will break reserves one column; only the final line of a
+      # will break reserves one column; only the final byte of a
       # source line may use all 76.
       let limit =
-        if i == line.len - 1: qpLineLimit
+        if i == eol - 1: qpLineLimit
         else: qpLineLimit - 1
-      if lineBuf.len + atom.len > limit:
-        flushLine(result, lineBuf, soft = true)
+      if lineLen + (if hex: 3 else: 1) > limit:
+        put('=')
+        put('\r')
+        put('\n')
+        lineLen = 0
         # A fresh line re-arms the dot guard: a literal `.` that lands
         # at a wrap point must still be `=2E`.
-        if atom == ".":
-          atom = "=2E"
-      lineBuf.add(atom)
+        if c == '.':
+          hex = true
+      if hex:
+        put('=')
+        put(digits[b shr 4])
+        put(digits[b and 0x0F])
+        lineLen += 3
+      else:
+        put(c)
+        inc lineLen
       inc i
-    flushLine(result, lineBuf, soft = false)
+    put('\r')
+    put('\n')
+    if eol == last:
+      break
+    first = last
+  result.setLen(o)
 
 proc encodeBase64*(data: string): string =
   ## Base64 with 76-char CRLF-terminated lines (RFC 2045 §6.8;

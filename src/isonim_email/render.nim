@@ -142,6 +142,7 @@ proc cloneTree*(node: EmailNode; parent: EmailNode = nil): EmailNode =
     expanded: node.expanded,
     markup: node.markup,
   )
+  result.children = newSeqOfCap[EmailNode](node.children.len)
   for c in node.children:
     result.children.add(cloneTree(c, result))
 

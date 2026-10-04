@@ -51,6 +51,8 @@ import ../style/units
 import ../style/colors
 import ../style/shorthand
 import ./lint
+import ../style/ascii
+import ../style/memo
 import ../target
 import ../lower/text
 import ../lower/button_style
@@ -106,17 +108,6 @@ const
     ## Elements whose `align` mirrors `text-align`. `table` is excluded:
     ## `align` on a table centers the box, not the text — P4 owns that.
 
-  lengthProps = ["margin-top", "margin-right", "margin-bottom",
-    "margin-left", "padding-top", "padding-right", "padding-bottom",
-    "padding-left", "width", "min-width", "max-width", "height",
-    "min-height", "max-height", "font-size", "border-width",
-    "border-top-width", "border-right-width", "border-bottom-width",
-    "border-left-width", "letter-spacing", "text-indent", "border-spacing",
-    "border-radius", "border-top-left-radius", "border-top-right-radius",
-    "border-bottom-right-radius", "border-bottom-left-radius"]
-    ## The box/font set normalised to px (`%` survives on widths via
-    ## `normaliseLength`); every other property keeps its value verbatim.
-
 proc splitTokenKey(value: string): string =
   ## The theme key when `value` is a `tok"…"` sentinel, else "".
   if value.startsWith("tok:"):
@@ -125,14 +116,43 @@ proc splitTokenKey(value: string): string =
     ""
 
 proc containsVarRef(value: string): bool =
-  ## Case-insensitive `var(` scan, tolerating space before the paren.
-  "var(" in value.toLowerAscii().replace(" ", "").replace("\t", "")
+  ## Case-insensitive `var(` scan that skips spaces and tabs anywhere
+  ## (so `VAR (` and `v a r(` count): the value with its spaces and tabs
+  ## removed, lower-cased, contains `var(`. One pass, no copies.
+  const pattern = "var("
+  var matched = 0
+  for c in value:
+    if c == ' ' or c == '\t':
+      continue
+    let lc = toLowerAscii(c)
+    if lc == pattern[matched]:
+      inc matched
+      if matched == pattern.len:
+        return true
+    elif lc == pattern[0]:
+      # `var(` has no proper prefix that is also a suffix, so a mismatch
+      # restarts the match at this character.
+      matched = 1
+    else:
+      matched = 0
+  false
 
 proc isColorProp(prop: string): bool =
   prop == "color" or prop.endsWith("-color")
 
 proc isLengthProp(prop: string): bool =
-  prop in lengthProps
+  ## The box/font set normalised to px (`%` survives on widths via
+  ## `normaliseLength`); every other property keeps its value verbatim.
+  case prop
+  of "margin-top", "margin-right", "margin-bottom",
+      "margin-left", "padding-top", "padding-right", "padding-bottom",
+      "padding-left", "width", "min-width", "max-width", "height",
+      "min-height", "max-height", "font-size", "border-width",
+      "border-top-width", "border-right-width", "border-bottom-width",
+      "border-left-width", "letter-spacing", "text-indent", "border-spacing",
+      "border-radius", "border-top-left-radius", "border-top-right-radius",
+      "border-bottom-right-radius", "border-bottom-left-radius": true
+  else: false
 
 const genericFamilies* = ["serif", "sans-serif", "monospace", "cursive",
   "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
@@ -148,9 +168,8 @@ proc familiesOf*(stack: string): seq[string] =
     if f.len > 0:
       result.add(f)
 
-proc endsGeneric*(stack: string): bool =
-  ## True when a `font-family` value ends in a generic family
-  ## (R-TXT-05); a CSS-wide keyword (`inherit`, …) has no stack.
+proc computeEndsGeneric(stack: string): bool =
+  ## `endsGeneric`, read every time.
   let fams = familiesOf(stack)
   if fams.len == 0:
     return true
@@ -158,6 +177,15 @@ proc endsGeneric*(stack: string): bool =
       "unset", "revert"]:
     return true
   fams[^1].toLowerAscii() in genericFamilies
+
+var endsGenericMemo {.threadvar.}: Table[string, bool]
+  ## `endsGeneric` per stack, as read once on this thread (`memo.nim`):
+  ## a document repeats its few stacks on every text element.
+
+proc endsGeneric*(stack: string): bool =
+  ## True when a `font-family` value ends in a generic family
+  ## (R-TXT-05); a CSS-wide keyword (`inherit`, …) has no stack.
+  memoised(endsGenericMemo, 1024, stack, computeEndsGeneric(stack))
 
 proc isWebFamily*(family: string; target: EmailTarget): bool =
   for f in target.webFonts:
@@ -209,9 +237,15 @@ proc attrSizeToCss(attr: string): string =
       "E-VOCAB-BAD-VALUE: '" & attr & "' is not a mirrorable size")
 
 proc isSideProp(prop, suffix: string): bool =
-  ## `border-color` or `border-<side>-color` (and the width/style twins).
-  prop == "border-" & suffix or
-    (prop.startsWith("border-") and prop.endsWith("-" & suffix))
+  ## `border-color` or `border-<side>-color` (and the width/style twins):
+  ## `prop` is `border-` + `suffix`, or starts with `border-` and ends
+  ## with `-` + `suffix`.
+  const head = "border-"
+  if not prop.startsWith(head) or not prop.endsWith(suffix):
+    return false
+  # `border-<suffix>` exactly, or a `-` before the suffix.
+  prop.len == head.len + suffix.len or
+    (prop.len > suffix.len and prop[prop.len - suffix.len - 1] == '-')
 
 proc compressBox*(sides: array[4, string]): string =
   ## Minimal CSS shorthand for 4 sides (top, right, bottom, left).
@@ -371,9 +405,10 @@ proc resolveToken(node: EmailNode; raw: string; theme: EmailTheme;
 proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
                    tkey: string; theme: EmailTheme; target: EmailTarget;
                    fontSizePx: float; convertMargin: bool;
-                   diags: var seq[EmailDiagnostic]): seq[
-                     tuple[prop, value: string]] =
-  ## The replacement declarations for one token-resolved declaration.
+                   diags: var seq[EmailDiagnostic];
+                   acc: var seq[tuple[prop, value: string]]) =
+  ## The replacement declarations for one token-resolved declaration,
+  ## written to `acc` (which the caller empties and reuses).
   ## Shared by the inline and head paths: variant declarations normalise
   ## identically, except margins never convert (head rules are invisible
   ## to Word, so there is nothing to convert for) and MSO/mirroring stay
@@ -385,7 +420,7 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
         "' is never emitted in email (R-CSS-11)",
       origin: node.origin, families: {}, weight: 0.0, rules: @["R-CSS-11"],
     ))
-    return @[]
+    return
   if containsVarRef(val):
     diags.add(EmailDiagnostic(
       severity: sevError, code: codeVocabBadValue,
@@ -394,50 +429,60 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
         "every token to a literal at render time (R-CSS-11)",
       origin: node.origin, families: {}, weight: 0.0, rules: @["R-CSS-11"],
     ))
-    return @[]
+    return
   if fromToken and (tkey.startsWith("type.") or tkey == "button.font"):
     # A packed type literal: the carrier property is dropped and
     # replaced by its longhands — an expansion, not a drop. (Which
     # property authors write the token under is P2's spelling to settle.)
     try:
-      return expandTypeSpec(val)
+      acc.add(expandTypeSpec(val))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if prop == "margin":
     var sides: array[4, string]
     try:
       sides = parseMargin(val)
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-OL-04"]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
     if sides == ["0", "0", "0", "0"]:
-      return @[(prop, "0")]
+      acc.add((prop, "0"))
+      return
     if not convertMargin or isBlockTextElement(tag):
-      return @[(prop, compressBox(sides))]
+      acc.add((prop, compressBox(sides)))
+      return
     let cell = enclosingCell(node)
     if cell == nil:
       # No cell above (an unlowered authoring tree): kept for P10's
       # data-driven css-margin check — the conversion warning fires only
       # when a move actually happened.
-      return @[(prop, compressBox(sides))]
+      acc.add((prop, compressBox(sides)))
+      return
     if convertMarginToCell(cell, sides, tag, node.origin, diags):
-      return @[]
-    return @[(prop, compressBox(sides))]
+      return
+    acc.add((prop, compressBox(sides)))
+    return
   if prop in ["margin-top", "margin-right", "margin-bottom", "margin-left"]:
     var side: string
     try:
       side = normaliseLength(prop, val)
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-OL-04"]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
     if side.startsWith("-"):
       diags.add(toDiagnostic("E-VOCAB-BAD-VALUE: '" & val &
         "' uses a negative margin, which Word does not support (R-OL-04)",
         node.origin, {}, 0.0, @["R-OL-04"]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
     if side == "0" or not convertMargin or isBlockTextElement(tag):
-      return @[(prop, side)]
+      acc.add((prop, side))
+      return
     var sides = ["0", "0", "0", "0"]
     let idx = case prop
       of "margin-top": 0
@@ -448,21 +493,25 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
     let cell = enclosingCell(node)
     if cell != nil and convertMarginToCell(cell, sides, tag, node.origin,
         diags):
-      return @[]
-    return @[(prop, side)]
+      return
+    acc.add((prop, side))
+    return
   if prop == "padding":
     try:
-      return @[(prop, compressBox(expandBox(val)))]
+      acc.add((prop, compressBox(expandBox(val))))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if prop == "background":
     try:
       let decls = colourDecls(node, tag, "background-color", val, theme,
         target, convertMargin)
       if target.darkMode == dmDesigned and not fromToken:
         warnDarkRaw(diags, "background-color", val, node.origin)
-      return decls
+      acc.add(decls)
+      return
     except StyleError:
       discard
     try:
@@ -470,23 +519,29 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
       if target.darkMode == dmDesigned and color != "" and not fromToken:
         warnDarkRaw(diags, "background-color", val, node.origin)
       if rest == "":
-        return @[("background-color", color)]
+        acc.add(("background-color", color))
+        return
       # `background` first: the shorthand resets the colour, so the
       # colour must follow it. The rest stays `background` for the
       # background-image lowering, which owns it (not built yet).
       if color == "":
-        return @[("background", rest)]
-      return @[("background", rest), ("background-color", color)]
+        acc.add(("background", rest))
+        return
+      acc.add(("background", rest))
+      acc.add(("background-color", color))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if prop == "border":
     var b: Border
     try:
       b = parseBorder(val)
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
     let ch = if b.color.a < 1.0:
       blendOver(b.color, resolveBg(node, theme)).toHex()
     else:
@@ -499,43 +554,55 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
       warnDarkRaw(diags, "border-color", val, node.origin)
     let width = formatPx(b.widthPx)
     if tag == "td":
-      return @[(prop, width & " " & b.style & " " & ch)]
-    return @[("border-width", width), ("border-style", b.style),
-      ("border-color", ch)]
+      acc.add((prop, width & " " & b.style & " " & ch))
+      return
+    acc.add(("border-width", width))
+    acc.add(("border-style", b.style))
+    acc.add(("border-color", ch))
+    return
   if isColorProp(prop):
     try:
       let decls = colourDecls(node, tag, prop, val, theme, target,
         convertMargin)
       if target.darkMode == dmDesigned and not fromToken:
         warnDarkRaw(diags, prop, val, node.origin)
-      return decls
+      acc.add(decls)
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if isSideProp(prop, "width"):
     try:
-      return @[(prop, normaliseLength(prop, val))]
+      acc.add((prop, normaliseLength(prop, val)))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if isSideProp(prop, "style"):
-    return @[(prop, val.strip().toLowerAscii())]
+    acc.add((prop, val.strip().toLowerAscii()))
+    return
   if prop == "line-height":
     try:
-      return @[(prop, normaliseLineHeight(val, fontSizePx))]
+      acc.add((prop, normaliseLineHeight(val, fontSizePx)))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   if isLengthProp(prop):
     try:
-      return @[(prop, normaliseLength(prop, val))]
+      acc.add((prop, normaliseLength(prop, val)))
+      return
     except StyleError as e:
       diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @[]))
-      return @[(prop, val)]
+      acc.add((prop, val))
+      return
   # Unknown or unsupported: kept verbatim for P10 (never-drop). The `font`
   # shorthand passes through here too — its expansion is unowned (this
   # pass covers background/border/margin plus the packed type specs).
-  @[(prop, val.strip())]
+  acc.add((prop, val.strip()))
 
 proc holdsText(node: EmailNode): bool =
   ## True when `node` has a non-blank text child of its own, or text in
@@ -775,32 +842,26 @@ proc lightTwin(res: OrderedTable[string, string]; prop: string): string =
       return borderShorthandColour(res["border"])
   ""
 
-proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
-                  profile: AudienceProfile; head: var seq[HeadDecl];
-                  diags: var seq[EmailDiagnostic]) =
+proc styleElementFor(node: EmailNode; theme: EmailTheme; target: EmailTarget;
+                     profile: AudienceProfile; head: var seq[HeadDecl];
+                     diags: var seq[EmailDiagnostic]) =
+  ## `styleElement` under the target it applies to the element.
   let tag = node.tag.toLowerAscii()
-  var target = target
-  if target.darkMode == dmDesigned and overBackgroundImage(node):
-    # R-DRK-02, R-VML-01: a band with a background image, and what lies
-    # over the image, keep one colour in both schemes: the image does
-    # not change with the scheme, so neither its fallback colour nor the
-    # text on it pairs a token's dark value (an element's own `@dark:`
-    # still applies), and a raw colour there is not a defect.
-    target.darkMode = dmAccommodate
   let headStart = head.len
   var entries: seq[(string, string)] = @[]
+  template addAll(defaults: seq[tuple[prop, value: string]]) =
+    # Each default moved into `entries`, in order.
+    var fresh = defaults
+    for d in fresh.mitems:
+      entries.add((move(d.prop), move(d.value)))
   # The text leaves' defaults (`lower/text.nim`, R-TXT-02, R-TXT-09)
   # come first, so every declaration of the element's own follows and
   # wins; they normalise like any other declaration.
   try:
-    for (k, v) in textDefaults(node, theme):
-      entries.add((k, v))
-    for (k, v) in leafDefaults(node, target):
-      entries.add((k, v))
-    for (k, v) in buttonDefaults(node, theme, target):
-      entries.add((k, v))
-    for (k, v) in tableDefaults(node, theme, target):
-      entries.add((k, v))
+    addAll(textDefaults(node, theme))
+    addAll(leafDefaults(node, target))
+    addAll(buttonDefaults(node, theme, target))
+    addAll(tableDefaults(node, theme, target))
   except ThemeError as e:
     diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TXT-02"]))
   except StyleError as e:
@@ -816,8 +877,8 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     # The skeleton's surface under `designed` is a token, so it has a
     # dark value like every other colour of a designed message (R-DRK-02).
     entries.add(("background-color", "tok:" & designedDocumentSurface))
-  for k, v in node.styles.pairs:
-    entries.add((k, v))
+  for k in node.styles.keys:
+    entries.add((k, node.styles[k]))
   if target.darkMode == dmDesigned:
     for e in tokenDarkPairs(entries, theme):
       entries.add(e)
@@ -831,7 +892,7 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
   # or unparseable sizes fall back to the 16px root.
   var fontSizePx = cssRootPx
   for (k, v) in entries:
-    if k.toLowerAscii() != "font-size":
+    if not eqLowerAscii(k, "font-size"):
       continue
     if splitVariantKey(k).variant != "":
       continue
@@ -846,16 +907,22 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       fontSizePx = toPx(lit)
     except StyleError:
       discard
-  var res = initOrderedTable[string, string]()
-  var fallbacks = initOrderedTable[string, string]()
-  for (key, raw) in entries:
-    let (variant, base) = splitVariantKey(key)
-    if variant != "":
+  var res = initOrderedTable[string, string](entries.len)
+  # Usually stays empty: allocated by its first pair only.
+  var fallbacks: OrderedTable[string, string]
+  # One buffer for every declaration's replacements (`normaliseDecl`).
+  var decls: seq[tuple[prop, value: string]] = @[]
+  for i in 0 ..< entries.len:
+    template key: untyped = entries[i][0]
+    template given: untyped = entries[i][1]
+    if key.startsWith("@") and key.find(':') > 1:
+      # A variant key (`splitVariantKey` gives a non-empty variant).
+      let (variant, base) = splitVariantKey(key)
       var val, tkey: string
       var fromToken = false
-      if not resolveToken(node, raw, theme, diags, val, fromToken, tkey,
+      if not resolveToken(node, given, theme, diags, val, fromToken, tkey,
           dark = variant == "dark"):
-        res[key] = raw
+        res[key] = given
         continue
       if variant notin headVariants:
         if variant == "md":
@@ -874,21 +941,34 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
           ))
         # The raw @-key stays inline (never-drop) — the error blocks
         # `toMessage`, so the unsplittable key never reaches output.
-        res[key] = raw
+        res[key] = given
         continue
       # No harmful check here: a head-bound flex cannot collapse Word,
       # which ignores head rules entirely (the lint precedent).
-      for (p, v) in normaliseDecl(node, tag, base.toLowerAscii(), val,
-          fromToken, tkey, theme, target, fontSizePx, false, diags):
+      decls.setLen(0)
+      normaliseDecl(node, tag, base.toLowerAscii(), val, fromToken, tkey,
+        theme, target, fontSizePx, false, diags, decls)
+      for (p, v) in decls:
         head.add(HeadDecl(variant: variant, prop: p, value: v, node: node,
           origin: node.origin))
       continue
-    let prop = key.toLowerAscii()
-    var val, tkey: string
+    if hasUpperAscii(key):
+      # Read below as the lower-cased property; the key itself is not
+      # read again.
+      key = key.toLowerAscii()
+    template prop: untyped = key
+    # The value, token-resolved, is read in the entry's own slot: a
+    # literal stays where it is; a token's literal is swapped in, and its
+    # sentinel kept in `tokenRaw`.
+    var tokenRaw, tkey: string
     var fromToken = false
-    if not resolveToken(node, raw, theme, diags, val, fromToken, tkey):
-      res[prop] = raw
-      continue
+    if given.startsWith("tok:"):
+      if not resolveToken(node, given, theme, diags, tokenRaw, fromToken,
+          tkey):
+        res[prop] = given
+        continue
+      swap(given, tokenRaw)
+    template val: untyped = given
     if tag == "mailtable" and prop == "border":
       # A data table's `border` is its cells' (R-TBL-18): `none` is a
       # value here, and the table's lowering, not CSS, places it.
@@ -896,7 +976,7 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
         discard tableBorder(node)
       except StyleError as e:
         diags.add(toDiagnostic(e.msg, node.origin, {}, 0.0, @["R-TBL-18"]))
-      res[prop] = raw
+      res[prop] = if fromToken: tokenRaw else: given
       continue
     if prop == "font-family" and not fromToken and not endsGeneric(val):
       diags.add(EmailDiagnostic(severity: sevError,
@@ -920,17 +1000,23 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
       diags.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(val),
         profile, node.origin, removed = true))
       continue
-    var seen: seq[string] = @[]
-    for (p, v) in normaliseDecl(node, tag, prop, val, fromToken, tkey,
-        theme, target, fontSizePx, true, diags):
-      if p in seen:
+    decls.setLen(0)
+    normaliseDecl(node, tag, prop, val, fromToken, tkey, theme, target,
+      fontSizePx, true, diags, decls)
+    for j in 0 ..< decls.len:
+      template p: untyped = decls[j].prop
+      var seen = false
+      for k in 0 ..< j:
+        if decls[k].prop == p:
+          seen = true
+          break
+      if seen:
         # The second of a pair (R-CSS-14): the first becomes its
         # fallback (R-CSS-19).
         fallbacks[p] = res[p]
-      else:
+      elif p in fallbacks:
         fallbacks.del(p)
-        seen.add(p)
-      res[p] = v
+      res[p] = move(decls[j].value)
   if tag == "a":
     linkDefaults(node, theme, target, head, res)
   elif "color" notin res and (tag in textColorCarriers or
@@ -1058,19 +1144,21 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     let alt = msoFontAlt(res["font-family"], target)
     if alt.len > 0 and "mso-font-alt" notin res:
       res["mso-font-alt"] = alt
-  node.styles = res
-  node.fallbacks = initOrderedTable[string, string]()
+  node.styles = move(res)
+  # The resolved table now lives on the node; it is read there below.
+  node.fallbacks = default(OrderedTable[string, string])
   for k, v in fallbacks.pairs:
-    if k in res:
+    if k in node.styles:
       node.fallbacks[k] = v
-  if res.getOrDefault("color", "").startsWith("rgba(") and
+  if node.styles.getOrDefault("color", "").startsWith("rgba(") and
       "color" notin node.fallbacks:
     # A colour inherited from an ancestor's translucent pair keeps the
     # ancestor's blend as its fallback.
     var a = node.parent
     while a != nil:
       if a.kind == enElement and "color" in a.styles:
-        if a.styles["color"] == res["color"] and "color" in a.fallbacks:
+        if a.styles["color"] == node.styles["color"] and
+            "color" in a.fallbacks:
           node.fallbacks["color"] = a.fallbacks["color"]
         break
       a = a.parent
@@ -1079,7 +1167,22 @@ proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     # rule (R-DRK-08).
     if head[i].node == node and head[i].variant == "dark" and
         head[i].light.len == 0:
-      head[i].light = lightTwin(res, head[i].prop)
+      head[i].light = lightTwin(node.styles, head[i].prop)
+
+proc styleElement(node: EmailNode; theme: EmailTheme; target: EmailTarget;
+                  profile: AudienceProfile; head: var seq[HeadDecl];
+                  diags: var seq[EmailDiagnostic]) =
+  if target.darkMode == dmDesigned and overBackgroundImage(node):
+    # R-DRK-02, R-VML-01: a band with a background image, and what lies
+    # over the image, keep one colour in both schemes: the image does
+    # not change with the scheme, so neither its fallback colour nor the
+    # text on it pairs a token's dark value (an element's own `@dark:`
+    # still applies), and a raw colour there is not a defect.
+    var t = target
+    t.darkMode = dmAccommodate
+    styleElementFor(node, theme, t, profile, head, diags)
+  else:
+    styleElementFor(node, theme, target, profile, head, diags)
 
 proc applyStylesImpl(node: EmailNode; theme: EmailTheme;
                      target: EmailTarget; profile: AudienceProfile;

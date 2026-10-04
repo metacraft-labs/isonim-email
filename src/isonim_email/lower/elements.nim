@@ -91,21 +91,26 @@ const loweredElsewhere* = ["mailDocument"]
 var vocabElementsCache: HashSet[string]
 var vocabElementsReady = false
 
-proc vocabularyElements*(): HashSet[string] =
-  ## The non-leaf tags of the static vocabulary: every tag that is not
-  ## an HTML leaf (leaves accept any style keyword).
+proc ensureVocabElements() =
   if not vocabElementsReady:
     vocabElementsCache = initHashSet[string]()
     for t in buildEmailVocabulary().tags:
       if not t.allowAnyStyle:
         vocabElementsCache.incl(t.name)
     vocabElementsReady = true
+
+proc vocabularyElements*(): HashSet[string] =
+  ## The non-leaf tags of the static vocabulary: every tag that is not
+  ## an HTML leaf (leaves accept any style keyword).
+  ensureVocabElements()
   vocabElementsCache
 
 proc needsLowering*(tag: string): bool =
   ## True for a vocabulary element (see the module comment); false for
-  ## HTML leaves and for the lowered HTML itself.
-  tag in vocabularyElements() or
+  ## HTML leaves and for the lowered HTML itself. Reads the vocabulary's
+  ## set in place (not a copy of it).
+  ensureVocabElements()
+  tag in vocabElementsCache or
     (tag.len > 4 and tag.startsWith("mail") and tag[4] in {'A' .. 'Z'})
 
 proc replaceChild(parent, old: EmailNode; repl: seq[EmailNode]) =
@@ -282,9 +287,11 @@ proc dropRefusedRaw(node: EmailNode) =
   ## blocks sending anyway. Warnings (R-RAW-03) do not remove it. Runs before any lowering,
   ## while the authoring ancestors that decide a payload's place are
   ## still there.
+  # `kept` is built only once a payload is dropped (the children before
+  # it, then every one kept after it).
   var kept: seq[EmailNode] = @[]
   var changed = false
-  for k in node.children:
+  for i, k in node.children:
     if k.kind == enRaw:
       var inRaw = false
       var p = node
@@ -294,9 +301,12 @@ proc dropRefusedRaw(node: EmailNode) =
           break
         p = p.parent
       if inRaw and readRaw(k.text, rawContextOf(k)).refused:
-        changed = true
+        if not changed:
+          kept = node.children[0 ..< i]
+          changed = true
         continue
-    kept.add(k)
+    if changed:
+      kept.add(k)
   if changed:
     node.children = kept
   for k in node.children:

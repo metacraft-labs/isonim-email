@@ -14,8 +14,9 @@
 ##
 ## Pure `std` string work: identical on the C and JS targets.
 
-import std/[math, strutils]
+import std/[math, strutils, tables]
 import ./units
+import ./memo
 import ../target
 
 ## The client families an edit to this module can change: read by
@@ -290,12 +291,8 @@ proc parseOklch(inner, value: string): Rgba =
   let (r, g, b) = oklchToRgb(l, c, h)
   Rgba(r: r, g: g, b: b, a: alpha)
 
-proc parseColor*(value: string): Rgba =
-  ## Parses any accepted colour (`Color`): `#rgb`, `#rgba`,
-  ## `#rrggbb`, `#rrggbbaa`, comma-form `rgb()`/`rgba()`/`hsl()`/`hsla()`,
-  ## `oklch()`, named colours and `transparent`. Anything else —
-  ## including whitespace-separated `rgb()` (R-CSS-06) and `var()` —
-  ## is `E-VOCAB-BAD-VALUE`.
+proc computeParseColor(value: string): Rgba =
+  ## `parseColor`, parsed every time.
   let s = value.strip()
   if s.len == 0:
     raise badColor(value, "empty value")
@@ -335,6 +332,22 @@ proc parseColor*(value: string): Rgba =
   raise badColor(value, "expected #hex, rgb()/rgba(), hsl()/hsla(), " &
     "oklch() or a named colour")
 
+var parseColorMemo {.threadvar.}: Table[string, Rgba]
+  ## `parseColor` per value, as parsed once on this thread (`memo.nim`).
+var normaliseColorMemo {.threadvar.}: Table[string, string]
+  ## `normaliseColor` per value, likewise.
+
+const colorMemoCap = 1024
+  ## Answers each colour table keeps before it is emptied.
+
+proc parseColor*(value: string): Rgba =
+  ## Parses any accepted colour (`Color`): `#rgb`, `#rgba`,
+  ## `#rrggbb`, `#rrggbbaa`, comma-form `rgb()`/`rgba()`/`hsl()`/`hsla()`,
+  ## `oklch()`, named colours and `transparent`. Anything else —
+  ## including whitespace-separated `rgb()` (R-CSS-06) and `var()` —
+  ## is `E-VOCAB-BAD-VALUE`.
+  memoised(parseColorMemo, colorMemoCap, value, computeParseColor(value))
+
 proc toHex*(c: Rgba): string =
   ## 6-digit lowercase hex (R-CSS-12). Translucent colours have no hex
   ## form — blend them over the background first (R-CSS-14).
@@ -349,7 +362,7 @@ proc toHex*(c: Rgba): string =
 proc normaliseColor*(value: string): string =
   ## Opaque colours become 6-digit lowercase hex (R-CSS-12).
   ## Translucent ones raise — see `emitColorDecls`.
-  parseColor(value).toHex()
+  memoised(normaliseColorMemo, colorMemoCap, value, parseColor(value).toHex())
 
 proc blendOver*(fg, bg: Rgba): Rgba =
   ## Alpha-composites `fg` over an opaque `bg`. Channels truncate, which
@@ -436,10 +449,30 @@ proc shadowBorderColour*(background: string): string =
   ## when it has none).
   darkerStep(if background.len > 0: background else: shadowSurface)
 
+proc computeInvertLightness(c: Rgba): Rgba =
+  ## `invertLightness`, converted every time.
+  let (l, ch, h) = rgbToOklch(c)
+  let (r, g, b) = oklchToRgb(clamp(1.0 - l, 0.0, 1.0), ch, h)
+  Rgba(r: r, g: g, b: b, a: 1.0)
+
+var invertMemo {.threadvar.}: Table[int, Rgba]
+  ## `invertLightness` per colour (its three channels; alpha is not
+  ## read), as converted once on this thread.
+
 proc invertLightness*(c: Rgba): Rgba =
   ## `c` with its OKLCH lightness inverted (L → 1 − L), chroma and hue
   ## kept, opaque: R-DRK-04's model of how a client that recolours a
   ## message turns a colour around.
-  let (l, ch, h) = rgbToOklch(c)
-  let (r, g, b) = oklchToRgb(clamp(1.0 - l, 0.0, 1.0), ch, h)
-  Rgba(r: r, g: g, b: b, a: 1.0)
+  when nimvm:
+    computeInvertLightness(c)
+  else:
+    if c.r notin 0 .. 255 or c.g notin 0 .. 255 or c.b notin 0 .. 255:
+      # Outside a channel's range: no key packs it; converted as it is.
+      return computeInvertLightness(c)
+    let key = (c.r shl 16) or (c.g shl 8) or c.b
+    invertMemo.withValue(key, kept):
+      return kept[]
+    result = computeInvertLightness(c)
+    if invertMemo.len >= colorMemoCap:
+      invertMemo.clear()
+    invertMemo[key] = result

@@ -239,13 +239,8 @@ proc resetRules(): seq[tuple[selector: string; decls: seq[Declaration]]] =
       Declaration(prop: "display", value: "none", important: true)]),
   ]
 
-proc resetBlockText*(): string =
-  ## Validates the catalogue §2 reset (every selector through `validSelector`,
-  ## every declaration through `checkDeclaration` — a failure is
-  ## `E-CSS-INVALID`, never silent) and emits the exact bytes:
-  ## catalogue declaration order, lower-case ` !important`, trailing
-  ## `;` per rule. `serializeDecls` cannot serve here: it re-sorts
-  ## declarations and drops the trailing semicolon.
+proc computeResetBlockText(): string =
+  ## `resetBlockText`, validated and written every time.
   var parts: seq[string] = @[]
   for r in resetRules():
     let sel = r.selector.strip()
@@ -264,6 +259,25 @@ proc resetBlockText*(): string =
         (if d.important: " !important" else: ""))
     parts.add(sel & "{" & ds.join(";") & ";}")
   parts.join("")
+
+var resetBlockMemo {.threadvar.}: string
+  ## `resetBlockText` as written once on this thread ("" until then: the
+  ## reset is never empty). It has no input, so it never changes.
+
+proc resetBlockText*(): string =
+  ## Validates the catalogue §2 reset (every selector through `validSelector`,
+  ## every declaration through `checkDeclaration` — a failure is
+  ## `E-CSS-INVALID`, never silent) and emits the exact bytes:
+  ## catalogue declaration order, lower-case ` !important`, trailing
+  ## `;` per rule. `serializeDecls` cannot serve here: it re-sorts
+  ## declarations and drops the trailing semicolon. The reset is
+  ## constant: it is validated and written once per thread.
+  when nimvm:
+    computeResetBlockText()
+  else:
+    if resetBlockMemo.len == 0:
+      resetBlockMemo = computeResetBlockText()
+    resetBlockMemo
 
 proc groupDecls(decls: seq[HeadDecl]; variant: string): seq[HeadGroup] =
   ## One variant's declarations grouped by element, groups in first-seen

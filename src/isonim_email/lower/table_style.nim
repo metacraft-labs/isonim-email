@@ -162,9 +162,16 @@ proc hasLongWord*(node: EmailNode): bool =
   ## True when some text under `node` holds a word longer than
   ## `longWordChars` characters.
   if node.kind == enText:
-    for w in node.text.splitWhitespace():
-      if w.len > longWordChars:
-        return true
+    # A run of bytes outside `Whitespace` is a word (`splitWhitespace`'s),
+    # measured where it stands.
+    var run = 0
+    for c in node.text:
+      if c in Whitespace:
+        run = 0
+      else:
+        inc run
+        if run > longWordChars:
+          return true
     return false
   for c in node.children:
     if hasLongWord(c):

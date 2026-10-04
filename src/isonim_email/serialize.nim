@@ -8,9 +8,9 @@
 ## conditionals or VML.
 
 import std/[strutils, tables]
-import isonim/ssr/escape
 import ./ir
 import ./target
+import ./style/ascii
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -24,20 +24,33 @@ const emailVoidElements = [
 ]
 
 proc isVoidTag(tag: string): bool =
-  tag.toLowerAscii() in emailVoidElements
+  tag.inLowerAscii(emailVoidElements)
+
+proc addEscapedEmailAttr(dest: var string; s: string) =
+  ## Appends `escapeEmailAttr(s)` to `dest`.
+  for c in s:
+    case c
+    of '"': dest.add "&quot;"
+    of '&': dest.add "&amp;"
+    of '\'': dest.add "&#x27;"
+    of '<': dest.add "&lt;"
+    else: dest.add c
 
 proc escapeEmailAttr*(s: string): string =
   ## Email attribute escaping: the `escapeAttr` behaviour (`"`
   ## and `&`) plus `'` and `<`, which the Word engine and webmail sanitisers
   ## mistreat inside attribute values. Non-ASCII passes through as UTF-8.
   result = newStringOfCap(s.len)
+  result.addEscapedEmailAttr(s)
+
+proc addEscapedHtml(dest: var string; s: string) =
+  ## Appends `escapeHtml(s)` (`<`, `>` and `&`) to `dest`.
   for c in s:
     case c
-    of '"': result.add "&quot;"
-    of '&': result.add "&amp;"
-    of '\'': result.add "&#x27;"
-    of '<': result.add "&lt;"
-    else: result.add c
+    of '<': dest.add "&lt;"
+    of '>': dest.add "&gt;"
+    of '&': dest.add "&amp;"
+    else: dest.add c
 
 proc isWhitespaceOnly(s: string): bool =
   for c in s:
@@ -85,6 +98,15 @@ proc put(sink: var SerialSink; s: string; cat: SizeCategory;
   let c = if context == scMsoVml: scMsoVml else: cat
   sink.counts[c] += s.len
 
+template writing(sink: var SerialSink; cat, context: SizeCategory;
+    body: untyped) =
+  ## Runs `body`, which appends to `sink.res` directly, and attributes
+  ## every byte it appended as `put` would have.
+  let writingStart = sink.res.len
+  body
+  sink.counts[if context == scMsoVml: scMsoVml else: cat] +=
+    sink.res.len - writingStart
+
 proc isPreheaderPadding(node: EmailNode): bool =
   ## The hidden padding div the document shell emits after the
   ## preheader: `aria-hidden` plus the `display:none` hiding stack.
@@ -95,35 +117,47 @@ proc isPreheaderPadding(node: EmailNode): bool =
 
 proc writeOpenTag(sink: var SerialSink; tag: string; node: EmailNode;
                   context: SizeCategory) =
-  sink.put("<", scMarkup, context)
-  sink.put(tag, scMarkup, context)
+  ## The open tag without its `>`, written straight into the sink.
+  template attrHead(k: string) =
+    sink.res.add ' '
+    sink.res.add k
+    sink.res.add "=\""
+  sink.writing(scMarkup, context):
+    sink.res.add '<'
+    sink.res.add tag
   for k, v in node.attrs.pairs:
     if k == "style":
-      sink.put(" " & k & "=\"" & escapeEmailAttr(v) & "\"",
-        scInlineStyles, context)
-    elif k.toLowerAscii() in urlAttributes:
-      sink.put(" " & k & "=\"", scMarkup, context)
-      sink.put(escapeEmailAttr(v), scUrls, context)
+      sink.writing(scInlineStyles, context):
+        attrHead(k)
+        sink.res.addEscapedEmailAttr(v)
+        sink.res.add '"'
+    elif k.inLowerAscii(urlAttributes):
+      sink.writing(scMarkup, context):
+        attrHead(k)
+      sink.writing(scUrls, context):
+        sink.res.addEscapedEmailAttr(v)
       sink.put("\"", scMarkup, context)
     else:
-      sink.put(" " & k & "=\"" & escapeEmailAttr(v) & "\"", scMarkup,
-        context)
+      sink.writing(scMarkup, context):
+        attrHead(k)
+        sink.res.addEscapedEmailAttr(v)
+        sink.res.add '"'
   if node.styles.len > 0:
-    var style = " style=\""
-    for k, v in node.styles.pairs:
-      if k in node.fallbacks:
-        # A fallback pair (R-CSS-19): the fallback first, so a client
-        # that rejects the later value still has one.
-        style.add k
-        style.add ":"
-        style.add escapeEmailAttr(node.fallbacks[k])
-        style.add ";"
-      style.add k
-      style.add ":"
-      style.add escapeEmailAttr(v)
-      style.add ";"
-    style.add "\""
-    sink.put(style, scInlineStyles, context)
+    sink.writing(scInlineStyles, context):
+      sink.res.add " style=\""
+      for k, v in node.styles.pairs:
+        if node.fallbacks.len > 0 and k in node.fallbacks:
+          # A fallback pair (R-CSS-19): the fallback first, so a client
+          # that rejects the later value still has one.
+          sink.res.add k
+          sink.res.add ':'
+          sink.res.addEscapedEmailAttr(node.fallbacks[k])
+          sink.res.add ';'
+        sink.res.add k
+        sink.res.add ':'
+        sink.res.addEscapedEmailAttr(v)
+        sink.res.add ';'
+      sink.res.add '"'
 
 proc serializeNode(sink: var SerialSink; node: EmailNode; minify: bool;
                    preDepth: int; context: SizeCategory;
@@ -135,7 +169,8 @@ proc serializeNode(sink: var SerialSink; node: EmailNode; minify: bool;
     if minify and preDepth == 0 and isWhitespaceOnly(node.text):
       discard
     else:
-      sink.put(escapeHtml(node.text), scMarkup, context)
+      sink.writing(scMarkup, context):
+        sink.res.addEscapedHtml(node.text)
   of enRaw:
     sink.put(node.text,
       if padding: scPreheaderPadding else: scMarkup, context)
@@ -184,7 +219,7 @@ proc serializeNode(sink: var SerialSink; node: EmailNode; minify: bool;
         "</script>", scGmailMarkup, context)
       return
     let childPre =
-      if node.tag.toLowerAscii() in ["pre", "textarea"]: preDepth + 1
+      if node.tag.inLowerAscii(["pre", "textarea"]): preDepth + 1
       else: preDepth
     writeOpenTag(sink, node.tag, node, context)
     if isVoidTag(node.tag):
@@ -204,33 +239,43 @@ proc serializeNode(sink: var SerialSink; node: EmailNode; minify: bool;
       let pad = isPreheaderPadding(node)
       for c in node.children:
         serializeNode(sink, c, minify, childPre, context, pad)
-      sink.put("</" & node.tag & ">", scMarkup, context)
-
-proc countOccurrences(haystack, needle: string): int =
-  var i = 0
-  while true:
-    let j = haystack.find(needle, i)
-    if j < 0:
-      break
-    inc result
-    i = j + needle.len
+      sink.writing(scMarkup, context):
+        sink.res.add "</"
+        sink.res.add node.tag
+        sink.res.add '>'
 
 proc assertConditionalsBalanced(html: string) =
   ## The serialiser asserts balanced conditionals: every
   ## `<!--[if` opener needs its `<![endif]-->`. Both MsoIf and NotMso
   ## closers contain `<![endif]-->`; a stray closer smuggled in through a
   ## raw node trips this.
-  let opens = countOccurrences(html, "<!--[if")
-  let closes = countOccurrences(html, "<![endif]-->")
+  ##
+  ## Both are counted in one pass over the `<`s. Neither marker can
+  ## overlap another copy of itself (no proper prefix of either is also
+  ## its suffix), so counting at every `<` counts what a left-to-right
+  ## search for each would.
+  const opener = "<!--[if"
+  const closer = "<![endif]-->"
+  var opens, closes = 0
+  var i = html.find('<')
+  while i >= 0:
+    if html.continuesWith(opener, i):
+      inc opens
+    elif html.continuesWith(closer, i):
+      inc closes
+    i = html.find('<', i + 1)
   if opens != closes:
     raise newException(EmailRenderError,
       "unbalanced conditional comments: " & $opens & " opener(s), " &
       $closes & " closer(s)")
 
-proc serializeSink(node: EmailNode; minify: bool): SerialSink =
+proc serializeSink(node: EmailNode; minify: bool;
+    prefix = ""): SerialSink =
+  ## The serialised bytes after `prefix` (written first, not counted).
   if node == nil:
     raise newException(EmailRenderError, "cannot serialize a nil node")
   validateIr(node)
+  result.res = prefix
   serializeNode(result, node, minify, 0, scMarkup)
   assertConditionalsBalanced(result.res)
 
@@ -253,8 +298,8 @@ proc serializeDocumentMeasured*(node: EmailNode; minify = false): tuple[
   ## bytes each `SizeCategory` wrote, in enum order, zero entries
   ## included. The counts are taken while the bytes are written, so
   ## they sum to `html.len` exactly (the doctype is markup).
-  let sink = serializeSink(node, minify)
-  result.html = doctype & sink.res
+  var sink = serializeSink(node, minify, prefix = doctype)
+  result.html = move(sink.res)
   for cat in SizeCategory:
     var n = sink.counts[cat]
     if cat == scMarkup:

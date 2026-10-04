@@ -19,6 +19,7 @@
 ##
 ## Pure tree building: identical on the C and JS targets.
 
+import std/tables
 import ../ir
 import ../serialize
 import ../target
@@ -91,17 +92,33 @@ proc fullWidthTableOpen*(background: string): EmailNode =
   newMsoIf("mso", @[raw(table & "<tr>" &
     cellTag(GhostCell(background: background)))])
 
-proc spacerRow*(height: int): EmailNode =
-  ## The vertical gap Word sees between stacked children (R-TBL-04,
-  ## R-TBL-05): a one-cell table whose sized cell is never empty, with
-  ## exact line height so the gap is exactly `height` px.
+proc spacerRowText(height: int): string =
+  ## `spacerRow`'s payload, written every time.
   let table = tagText("table", [("role", "presentation"),
     ("width", "100%"), ("border", "0"), ("cellpadding", "0"),
     ("cellspacing", "0")])
   let td = tagText("td", [("height", $height), ("aria-hidden", "true"),
     ("style", "height:" & $height & "px;font-size:0;line-height:0;" &
       "mso-line-height-rule:exactly;")])
-  newMsoIf("mso", @[raw(table & "<tr>" & td & "&nbsp;</td></tr></table>")])
+  table & "<tr>" & td & "&nbsp;</td></tr></table>"
+
+var spacerRowMemo {.threadvar.}: Table[int, string]
+  ## `spacerRow`'s payload per height, as written once on this thread: a
+  ## stack writes one between every two children, at a few heights.
+
+proc spacerRow*(height: int): EmailNode =
+  ## The vertical gap Word sees between stacked children (R-TBL-04,
+  ## R-TBL-05): a one-cell table whose sized cell is never empty, with
+  ## exact line height so the gap is exactly `height` px.
+  var text: string
+  spacerRowMemo.withValue(height, kept):
+    text = kept[]
+  do:
+    text = spacerRowText(height)
+    if spacerRowMemo.len >= 1024:
+      spacerRowMemo.clear()
+    spacerRowMemo[height] = text
+  newMsoIf("mso", @[raw(text)])
 
 proc notMsoOpen*(tagText: string): EmailNode =
   ## `<!--[if !mso]><!-->{tagText}<!--<![endif]-->`: the opening tag of

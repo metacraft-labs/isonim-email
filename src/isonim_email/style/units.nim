@@ -13,8 +13,9 @@
 ## Kept framework-free (no renderer import) like `ThemeError`, so the
 ## theme generator and the JS target never import the renderer.
 
-import std/[math, strutils]
+import std/[math, strutils, tables]
 import ../target
+import ./memo
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -68,11 +69,8 @@ proc splitNumberUnit(s: string): tuple[num: string; unit: string] =
       "box properties, font-size and line-height; % for widths only)")
   result = (s[0 ..< i], s[i .. ^1].toLowerAscii())
 
-proc toPx*(value: string; fontSizePx = cssRootPx; unit = ""): float =
-  ## Converts a length literal to px: `px` as-is, `rem`/`em` against the
-  ## 16px root (`em` against `fontSizePx` when given), unitless via the
-  ## Tailwind extractor's unit record (`unit`, empty meaning px). `%` is rejected — percents
-  ## are widths, handled by `normaliseLength`, never converted here.
+proc computeToPx(value: string; fontSizePx: float; unit: string): float =
+  ## `toPx`, parsed every time.
   let s = value.strip()
   let (numText, rawUnit) = splitNumberUnit(s)
   let effUnit = if rawUnit == "": unit.toLowerAscii() else: rawUnit
@@ -98,6 +96,29 @@ proc toPx*(value: string; fontSizePx = cssRootPx; unit = ""): float =
       "E-VOCAB-BAD-VALUE: unknown length unit '" & effUnit & "' in '" &
       value & "' (R-CSS-13: px, rem, em)")
 
+var toPxMemo {.threadvar.}: Table[string, float]
+  ## `toPx` per value with the default font size and unit, as parsed
+  ## once on this thread (`memo.nim`).
+var widthLengthMemo {.threadvar.}: Table[string, string]
+  ## `normaliseLength` per value with the default font size and unit,
+  ## for a width property.
+var lengthMemo {.threadvar.}: Table[string, string]
+  ## The same for any other property.
+
+const unitsMemoCap = 1024
+  ## Answers each table of this module keeps before it is emptied.
+
+proc toPx*(value: string; fontSizePx = cssRootPx; unit = ""): float =
+  ## Converts a length literal to px: `px` as-is, `rem`/`em` against the
+  ## 16px root (`em` against `fontSizePx` when given), unitless via the
+  ## Tailwind extractor's unit record (`unit`, empty meaning px). `%` is rejected — percents
+  ## are widths, handled by `normaliseLength`, never converted here.
+  if fontSizePx == cssRootPx and unit.len == 0:
+    memoised(toPxMemo, unitsMemoCap, value,
+      computeToPx(value, fontSizePx, unit))
+  else:
+    computeToPx(value, fontSizePx, unit)
+
 proc normalisePercent(value: string): string =
   ## Canonical percent: `"50%"`, `"12.5%"`.
   let s = value.strip()
@@ -113,12 +134,9 @@ proc normalisePercent(value: string): string =
       "E-VOCAB-BAD-VALUE: '" & value & "' is not a percentage")
   formatNum(num) & "%"
 
-proc normaliseLength*(prop, value: string; fontSizePx = cssRootPx;
-                      unit = ""): string =
-  ## Normalises one declaration value for `prop`: px lengths become
-  ## canonical px, `%` survives only on width props, unitless numbers get
-  ## px restored (the extractor's unit record arrives via `unit`). Units are
-  ## case-insensitive on input, lowercase on output.
+proc computeNormaliseLength(prop, value: string; fontSizePx: float;
+                            unit: string): string =
+  ## `normaliseLength`, parsed every time.
   let s = value.strip()
   if s.endsWith("%"):
     if not isWidthProp(prop):
@@ -128,9 +146,27 @@ proc normaliseLength*(prop, value: string; fontSizePx = cssRootPx;
     return normalisePercent(s)
   formatPx(toPx(s, fontSizePx, unit))
 
-proc normaliseLineHeight*(value: string; fontSizePx: float): string =
-  ## Unitless `line-height` becomes px against `fontSizePx` (Word needs
-  ## px); px/`em`/`rem`/`%` values convert; `normal` passes through.
+proc normaliseLength*(prop, value: string; fontSizePx = cssRootPx;
+                      unit = ""): string =
+  ## Normalises one declaration value for `prop`: px lengths become
+  ## canonical px, `%` survives only on width props, unitless numbers get
+  ## px restored (the extractor's unit record arrives via `unit`). Units are
+  ## case-insensitive on input, lowercase on output.
+  ##
+  ## The answer depends on `prop` only through `isWidthProp` (an error's
+  ## message names `prop`, and an error is never kept).
+  if fontSizePx == cssRootPx and unit.len == 0:
+    if isWidthProp(prop):
+      memoised(widthLengthMemo, unitsMemoCap, value,
+        computeNormaliseLength(prop, value, fontSizePx, unit))
+    else:
+      memoised(lengthMemo, unitsMemoCap, value,
+        computeNormaliseLength(prop, value, fontSizePx, unit))
+  else:
+    computeNormaliseLength(prop, value, fontSizePx, unit)
+
+proc computeNormaliseLineHeight(value: string; fontSizePx: float): string =
+  ## `normaliseLineHeight`, parsed every time.
   let s = value.strip().toLowerAscii()
   if s == "normal":
     return "normal"
@@ -155,3 +191,23 @@ proc normaliseLineHeight*(value: string; fontSizePx: float): string =
       return "0"
     return formatPx(mult * fontSizePx)
   formatPx(toPx(value.strip(), fontSizePx))
+
+var lineHeightMemo {.threadvar.}: Table[float, Table[string, string]]
+  ## `normaliseLineHeight` per font size, then per value, as parsed once
+  ## on this thread (`memo.nim`).
+
+proc normaliseLineHeight*(value: string; fontSizePx: float): string =
+  ## Unitless `line-height` becomes px against `fontSizePx` (Word needs
+  ## px); px/`em`/`rem`/`%` values convert; `normal` passes through.
+  when nimvm:
+    computeNormaliseLineHeight(value, fontSizePx)
+  else:
+    if fontSizePx != fontSizePx:
+      # A NaN size never equals itself as a key: not kept.
+      return computeNormaliseLineHeight(value, fontSizePx)
+    if fontSizePx notin lineHeightMemo:
+      if lineHeightMemo.len >= unitsMemoCap:
+        lineHeightMemo.clear()
+      lineHeightMemo[fontSizePx] = initTable[string, string]()
+    memoised(lineHeightMemo[fontSizePx], unitsMemoCap, value,
+      computeNormaliseLineHeight(value, fontSizePx))

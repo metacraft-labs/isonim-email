@@ -66,6 +66,8 @@ import ../renderer
 import ../style/colors
 import ../style/units
 import ../style/shorthand
+import ../style/ascii
+import ../style/memo
 import ../support/families
 import ../raw
 import ../target
@@ -111,9 +113,9 @@ proc expectDegradation*(kind: LintKind; name: string;
 # Feature mappings: lint input → caniemail slug ("" = unmapped, skipped)
 # ----------------------------------------------------------------------------
 
-proc propertySlug*(prop: string): string =
-  ## CSS property → caniemail slug.
-  case prop.toLowerAscii()
+proc propertySlugOf(prop: string): string =
+  ## `propertySlug` of a lower-case property.
+  case prop
   of "border-radius": "css-border-radius"
   of "margin", "margin-top", "margin-right", "margin-bottom", "margin-left":
     "css-margin"
@@ -162,8 +164,16 @@ proc propertySlug*(prop: string): string =
   of "list-style-position": "css-list-style-position"
   else: ""
 
+proc propertySlug*(prop: string): string =
+  ## CSS property → caniemail slug.
+  if hasUpperAscii(prop): propertySlugOf(prop.toLowerAscii())
+  else: propertySlugOf(prop)
+
 proc valueSlug*(prop, value: string): string =
   ## `(property, value keyword)` → caniemail slug.
+  if not eqLowerAscii(prop, "display"):
+    # Every keyword below is a `display` value.
+    return ""
   case prop.toLowerAscii() & "=" & value.toLowerAscii().strip()
   of "display=flex", "display=inline-flex": "css-display-flex"
   of "display=grid", "display=inline-grid": "css-display-grid"
@@ -190,18 +200,21 @@ proc selectorSlug*(kind: SelectorKind): string =
   of skAttribute: "css-selector-attribute"
   else: ""
 
-proc atRuleSlug*(name: string): string =
-  ## At-rule name (without `@`) → caniemail slug.
-  case name.toLowerAscii()
+proc atRuleSlugOf(name: string): string =
+  case name
   of "font-face": "css-at-font-face"
   of "import": "css-at-import"
   of "supports": "css-at-supports"
   of "keyframes": "css-at-keyframes"
   else: ""
 
-proc elementSlug*(tag: string): string =
-  ## HTML element → caniemail slug.
-  case tag.toLowerAscii()
+proc atRuleSlug*(name: string): string =
+  ## At-rule name (without `@`) → caniemail slug.
+  if hasUpperAscii(name): atRuleSlugOf(name.toLowerAscii())
+  else: atRuleSlugOf(name)
+
+proc elementSlugOf(tag: string): string =
+  case tag
   of "video": "html-video"
   of "audio": "html-audio"
   of "picture": "html-picture"
@@ -214,14 +227,23 @@ proc elementSlug*(tag: string): string =
   of "img": "html-img"
   else: ""
 
-proc attributeSlug*(attr: string): string =
-  ## HTML attribute → caniemail slug.
-  case attr.toLowerAscii()
+proc elementSlug*(tag: string): string =
+  ## HTML element → caniemail slug.
+  if hasUpperAscii(tag): elementSlugOf(tag.toLowerAscii())
+  else: elementSlugOf(tag)
+
+proc attributeSlugOf(attr: string): string =
+  case attr
   of "align": "html-align"
   of "valign": "html-valign"
   of "cellspacing": "html-cellspacing"
   of "cellpadding": "html-cellpadding"
   else: ""
+
+proc attributeSlug*(attr: string): string =
+  ## HTML attribute → caniemail slug.
+  if hasUpperAscii(attr): attributeSlugOf(attr.toLowerAscii())
+  else: attributeSlugOf(attr)
 
 # ----------------------------------------------------------------------------
 # Harmful values (R-OL-10)
@@ -232,7 +254,7 @@ proc isLayoutContainer*(tag: string): bool =
   ## the document root, and the lowered structural elements. `display:flex`
   ## /`grid` on one of these collapses the layout in Word-engine Outlook
   ## (error); anywhere else it is removed with a warning (R-OL-10).
-  tag.toLowerAscii() in [
+  tag.inLowerAscii [
     "maildocument", "mailwrapper", "mailsection", "mailcolumn", "mailgroup",
     "mailstack", "mailbox", "mailcolumns", "mailgrid", "mailcluster",
     "mailsidebar", "div", "table", "thead", "tbody", "tr", "td", "th",
@@ -251,7 +273,7 @@ proc harmfulDisplayValue*(value: string): string =
     ""
 
 proc isHarmfulDeclaration*(prop, value: string): bool =
-  prop.toLowerAscii() == "display" and harmfulDisplayValue(value) != ""
+  eqLowerAscii(prop, "display") and harmfulDisplayValue(value) != ""
 
 # ----------------------------------------------------------------------------
 # Severity core
@@ -320,7 +342,7 @@ proc checkFeature*(slug, what: string; kind: LintKind; name: string;
   var declared: set[ClientFamily] = {}
   var note = ""
   for e in expected:
-    if e.kind == kind and e.name.toLowerAscii() == name.toLowerAscii():
+    if e.kind == kind and cmpIgnoreCase(e.name, name) == 0:
       declared.incl(e.families)
       if note.len == 0:
         note = e.note
@@ -635,6 +657,49 @@ proc splitVariantKey*(key: string): tuple[variant, base: string] =
       return (key[1 ..< sep], key[sep + 1 .. ^1])
   ("", key)
 
+proc lintDeclBase(tag, variant, base, value: string;
+                  profile: AudienceProfile;
+                  expected: openArray[ExpectedDegradation];
+                  origin: SourceSpan; acc: var seq[EmailDiagnostic]) =
+  ## `lintStyles` over one declaration, its property split from its
+  ## variant and lower-cased (`base`).
+  # Harmful values apply to inline declarations only: Word ignores head
+  # rules entirely, so a variant (head-bound) flex cannot collapse it.
+  if variant.len == 0 and isHarmfulDeclaration(base, value):
+    acc.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(value),
+      profile, origin, removed = false))
+    return
+  let vs = valueSlug(base, value)
+  if vs.len > 0:
+    acc.add(checkFeature(vs, base & ":" & value.strip().toLowerAscii(),
+      lkValue, base & "=" & value.strip().toLowerAscii(), profile,
+      expected, origin))
+  let ps = propertySlug(base)
+  # `checkFeature` finds nothing for a feature every family supports;
+  # the description is built only for one that some family lacks.
+  if ps.len > 0 and unsupportedFamilies(ps) != {}:
+    var what = base
+    if variant.len > 0:
+      what.add(" (@" & variant & " variant)")
+    acc.add(checkFeature(ps, what, lkProperty, base, profile,
+      expected, origin))
+
+proc lintDecl(tag, rawProp, value: string; profile: AudienceProfile;
+              expected: openArray[ExpectedDegradation];
+              origin: SourceSpan; acc: var seq[EmailDiagnostic]) =
+  ## `lintStyles` over one declaration as the node keeps it: the
+  ## variant split off (`splitVariantKey`) and the property lower-cased,
+  ## copying only a key that has a variant or a capital.
+  if rawProp.startsWith("@") and rawProp.find(':') > 0:
+    let (variant, prop) = splitVariantKey(rawProp)
+    lintDeclBase(tag, variant, prop.toLowerAscii(), value, profile,
+      expected, origin, acc)
+  elif hasUpperAscii(rawProp):
+    lintDeclBase(tag, "", rawProp.toLowerAscii(), value, profile,
+      expected, origin, acc)
+  else:
+    lintDeclBase(tag, "", rawProp, value, profile, expected, origin, acc)
+
 proc lintStyles*(tag: string;
                  styles: openArray[(string, string)];
                  profile: AudienceProfile;
@@ -642,26 +707,7 @@ proc lintStyles*(tag: string;
                  origin: SourceSpan): seq[EmailDiagnostic] =
   ## Property and value checks over one node's declarations.
   for (rawProp, value) in styles:
-    let (variant, prop) = splitVariantKey(rawProp)
-    let base = prop.toLowerAscii()
-    # Harmful values apply to inline declarations only: Word ignores head
-    # rules entirely, so a variant (head-bound) flex cannot collapse it.
-    if variant.len == 0 and isHarmfulDeclaration(base, value):
-      result.add(harmfulDisplayDiagnostic(tag, harmfulDisplayValue(value),
-        profile, origin, removed = false))
-      continue
-    let vs = valueSlug(base, value)
-    if vs.len > 0:
-      result.add(checkFeature(vs, base & ":" & value.strip().toLowerAscii(),
-        lkValue, base & "=" & value.strip().toLowerAscii(), profile,
-        expected, origin))
-    let ps = propertySlug(base)
-    if ps.len > 0:
-      var what = base
-      if variant.len > 0:
-        what.add(" (@" & variant & " variant)")
-      result.add(checkFeature(ps, what, lkProperty, base, profile,
-        expected, origin))
+    lintDecl(tag, rawProp, value, profile, expected, origin, result)
 
 # ----------------------------------------------------------------------------
 # Accessibility checks (R-A11Y-06, R-A11Y-07, R-IMG-04 length)
@@ -680,7 +726,7 @@ proc collectText(node: EmailNode): string =
 proc lintLinkText(node: EmailNode): seq[EmailDiagnostic] =
   ## R-A11Y-06: link text that is meaningless out of context —
   ## "click here", "here", "read more", or a bare URL — warns.
-  if node.kind != enElement or node.tag.toLowerAscii() != "a":
+  if node.kind != enElement or not eqLowerAscii(node.tag, "a"):
     return @[]
   let shown = collectText(node).strip()
   let text = shown.toLowerAscii()
@@ -713,9 +759,8 @@ proc contrastRatio*(a, b: Rgba): float =
   let lo = min(relativeLuminance(a), relativeLuminance(b))
   (hi + 0.05) / (lo + 0.05)
 
-proc fontSizePx(value: string): float =
-  ## Trailing-`px` sizes in pixels; anything else is 0, which is
-  ## never large (unknown sizes take the strict threshold).
+proc computeFontSizePx(value: string): float =
+  ## `fontSizePx`, parsed every time.
   let v = value.strip().toLowerAscii()
   if not v.endsWith("px"):
     return 0.0
@@ -723,6 +768,14 @@ proc fontSizePx(value: string): float =
     parseFloat(v[0 ..< ^2].strip())
   except ValueError:
     0.0
+
+var fontSizePxMemo {.threadvar.}: Table[string, float]
+  ## `fontSizePx` per value, as parsed once on this thread (`memo.nim`).
+
+proc fontSizePx(value: string): float =
+  ## Trailing-`px` sizes in pixels; anything else is 0, which is
+  ## never large (unknown sizes take the strict threshold).
+  memoised(fontSizePxMemo, 1024, value, computeFontSizePx(value))
 
 proc isBoldWeight(value: string): bool =
   ## `bold`, or a numeric weight of at least 700.
@@ -777,8 +830,8 @@ proc textPairOf(node: EmailNode; ancestors: seq[EmailNode]): TextPair =
   ## fill, a step marker, a date tile's month row), else the nearest
   ## ancestor's, else white. Unparseable colours are not ok: P2 owns bad
   ## values, not the contrast checks.
-  if node.kind != enElement or
-      node.tag.toLowerAscii() notin contrastTags or "color" notin node.styles:
+  if node.kind != enElement or "color" notin node.styles or
+      not node.tag.inLowerAscii(contrastTags):
     return
   if not holdsVisibleText(node):
     # A spacer or a painted cell: no text to read.
@@ -1520,15 +1573,19 @@ const specialLoweringTags* = ["mailStepper", "mailTimeline",
 proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
     seq[EmailDiagnostic] =
   ## R-TBL-01 and R-TBL-06 over one authoring element.
+  let isTable = eqLowerAscii(node.tag, "table")
+  let hasRowspan = "rowspan" in node.attrs
+  let hasColspan = "colspan" in node.attrs
+  if not (isTable or hasRowspan or hasColspan):
+    # Nothing below can fire.
+    return
   let tag = node.tag.toLowerAscii()
   var inDataTable, inHead, inSpecial = false
   for a in ancestors:
     if a.kind != enElement:
       continue
-    case a.tag.toLowerAscii()
-    of "mailtable": inDataTable = true
-    of "thead": inHead = true
-    else: discard
+    if eqLowerAscii(a.tag, "mailtable"): inDataTable = true
+    elif eqLowerAscii(a.tag, "thead"): inHead = true
     if a.tag in specialLoweringTags and a.expanded:
       inSpecial = true
   if tag == "table" and not inDataTable and not inSpecial:
@@ -1617,7 +1674,7 @@ proc lintRagged(node: EmailNode): seq[EmailDiagnostic] =
 const interactiveTags = ["a", "mailbutton", "mailnavlink", "mailsocialitem"]
 
 proc holdsInteractive(node: EmailNode): bool =
-  if node.kind == enElement and node.tag.toLowerAscii() in interactiveTags:
+  if node.kind == enElement and node.tag.inLowerAscii(interactiveTags):
     return true
   for c in node.children:
     if holdsInteractive(c):
@@ -1733,30 +1790,48 @@ proc msoDiag(name: string; origin: SourceSpan): EmailDiagnostic =
       "Word is unverified (R-OL-15)",
     origin: origin, families: {cfOutlookWord}, rules: @["R-OL-15"])
 
+proc isMsoKey(k: string): bool =
+  ## The property of style key `k` (its variant split off, as
+  ## `splitVariantKey` does), lower-cased, starts with `mso-`.
+  var at = 0
+  if k.startsWith("@"):
+    let sep = k.find(':')
+    if sep > 0:
+      at = sep + 1
+  k.len - at >= 4 and toLowerAscii(k[at]) == 'm' and
+    toLowerAscii(k[at + 1]) == 's' and toLowerAscii(k[at + 2]) == 'o' and
+    k[at + 3] == '-'
+
 proc lintMsoImpl(node: EmailNode; origin: SourceSpan;
     acc: var seq[EmailDiagnostic]) =
   if node == nil:
     return
-  let here = if node.origin.file.len > 0: node.origin else: origin
-  case node.kind
-  of enElement, enVml:
-    for k, _ in node.styles.pairs:
-      let (_, base) = splitVariantKey(k)
-      let name = base.toLowerAscii()
-      if name.startsWith("mso-") and name notin msoClosedList:
-        acc.add(msoDiag(name, here))
-    let styleAttr = node.attrs.getOrDefault("style", "")
-    for name in msoNamesIn(styleAttr):
-      if name notin msoClosedList:
-        acc.add(msoDiag(name, here))
-  of enRaw, enHeadStyle:
-    for name in msoNamesIn(node.text):
-      if name notin msoClosedList:
-        acc.add(msoDiag(name, here))
-  of enText, enMsoIf, enNotMso:
-    discard
-  for c in node.children:
-    lintMsoImpl(c, here, acc)
+  template walk(here: SourceSpan) =
+    case node.kind
+    of enElement, enVml:
+      for k in node.styles.keys:
+        if isMsoKey(k):
+          let (_, base) = splitVariantKey(k)
+          let name = base.toLowerAscii()
+          if name notin msoClosedList:
+            acc.add(msoDiag(name, here))
+      if "style" in node.attrs:
+        for name in msoNamesIn(node.attrs["style"]):
+          if name notin msoClosedList:
+            acc.add(msoDiag(name, here))
+    of enRaw, enHeadStyle:
+      for name in msoNamesIn(node.text):
+        if name notin msoClosedList:
+          acc.add(msoDiag(name, here))
+    of enText, enMsoIf, enNotMso:
+      discard
+    for c in node.children:
+      lintMsoImpl(c, here, acc)
+  # The nearest origin, read in place.
+  if node.origin.file.len > 0:
+    walk(node.origin)
+  else:
+    walk(origin)
 
 proc lintMsoProperties*(root: EmailNode): seq[EmailDiagnostic] =
   ## R-OL-15, lint side: every `mso-*` property anywhere in a tree (the
@@ -1911,51 +1986,67 @@ proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
         "text is at least 14px (R-TXT-03)",
       origin: node.origin, rules: @["R-TXT-03"]))
 
+const nonCssTags = ["mailstack", "mailcluster", "mailsidebar", "mailbox",
+  "mailsocial", "mailnavbar"]
+  ## The tags of `nonCssProps`.
+
+proc isNonCssProp(tag, prop: string): bool =
+  ## `(tag, prop)`, lower-cased, is in `nonCssProps`.
+  for (t, p) in nonCssProps:
+    if eqLowerAscii(tag, t) and eqLowerAscii(prop, p):
+      return true
+  false
+
 proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
                   expected: openArray[ExpectedDegradation];
-                  ancestors: seq[EmailNode]): seq[EmailDiagnostic] =
-  ## `lintTree` with the ancestor chain (for contrast backgrounds).
+                  ancestors: var seq[EmailNode];
+                  acc: var seq[EmailDiagnostic]) =
+  ## `lintTree` with the ancestor chain (for contrast backgrounds), kept
+  ## as one stack the walk pushes and pops, and the findings written to
+  ## `acc` in tree order.
   if node == nil:
-    return @[]
+    return
   if node.kind == enElement and node.tag == "textOnly":
     # Never written to the HTML: nothing in it is drawn.
-    return @[]
+    return
   case node.kind
   of enElement:
     let es = elementSlug(node.tag)
     if es.len > 0:
-      result.add(checkFeature(es, "<" & node.tag.toLowerAscii() & ">",
+      acc.add(checkFeature(es, "<" & node.tag.toLowerAscii() & ">",
         lkElement, node.tag, profile, expected, node.origin))
-    for attr, _ in node.attrs.pairs:
+    for attr in node.attrs.keys:
       let aus = attributeSlug(attr)
       if aus.len > 0:
-        result.add(checkFeature(aus, attr.toLowerAscii() & " attribute",
+        acc.add(checkFeature(aus, attr.toLowerAscii() & " attribute",
           lkAttribute, attr, profile, expected, node.origin))
-    var decls: seq[(string, string)] = @[]
-    let lowerTag = node.tag.toLowerAscii()
-    for prop, value in node.styles.pairs:
-      if (lowerTag, prop.toLowerAscii()) in nonCssProps or node.expanded:
-        # A prop lowered to other markup, or any style of an expanded
-        # pattern (its expansion is what is emitted, and is linted).
-        continue
-      decls.add((prop, value))
+    template lintOwnStyles(exp: openArray[ExpectedDegradation]) =
+      if not node.expanded:
+        # Every style of an expanded pattern is skipped (its expansion
+        # is what is emitted, and is linted), and so is a prop lowered
+        # to other markup.
+        let mayLower = node.tag.inLowerAscii(nonCssTags)
+        # Keys read in place, each value looked up (not a copy of either).
+        for prop in node.styles.keys:
+          if not (mayLower and isNonCssProp(node.tag, prop)):
+            lintDecl(node.tag, prop, node.styles[prop], profile, exp,
+              node.origin, acc)
     let own = backgroundDegradations(node) & hiddenTextDegradations(node)
     if own.len > 0:
-      result.add(lintStyles(node.tag, decls, profile, @expected & own,
-        node.origin))
+      lintOwnStyles(@expected & own)
     else:
-      result.add(lintStyles(node.tag, decls, profile, expected, node.origin))
-    result.add(lintTables(node, ancestors))
-    result.add(lintLinkText(node))
-    result.add(lintContrast(node, ancestors))
-    result.add(lintAltLength(node))
-    result.add(lintImageFormat(node, profile))
-    result.add(lintRagged(node))
-    result.add(lintTapSpacing(node))
-    result.add(lintButtonTap(node))
-    result.add(lintFontSize(node, ancestors))
+      lintOwnStyles(expected)
+    acc.add(lintTables(node, ancestors))
+    acc.add(lintLinkText(node))
+    acc.add(lintContrast(node, ancestors))
+    acc.add(lintAltLength(node))
+    acc.add(lintImageFormat(node, profile))
+    acc.add(lintRagged(node))
+    acc.add(lintTapSpacing(node))
+    acc.add(lintButtonTap(node))
+    acc.add(lintFontSize(node, ancestors))
   of enHeadStyle:
-    result.add(lintHeadCss(node.text, profile, expected, node.origin))
+    acc.add(lintHeadCss(node.text, profile, expected, node.origin))
   of enRaw:
     var inRaw = false
     var origin = node.origin
@@ -1968,17 +2059,18 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
     if inRaw:
       let read = readRaw(node.text)
       if not read.refused:
-        var next = ancestors
-        next.add(node)
+        ancestors.add(node)
         for n in read.nodes:
           stampOrigin(n, origin)
-          result.add(lintTreeImpl(n, profile, expected, next))
+          lintTreeImpl(n, profile, expected, ancestors, acc)
+        ancestors.setLen(ancestors.len - 1)
   of enText, enMsoIf, enNotMso, enVml:
     discard
-  var next = ancestors
-  next.add(node)
-  for child in node.children:
-    result.add(lintTreeImpl(child, profile, expected, next))
+  if node.children.len > 0:
+    ancestors.add(node)
+    for child in node.children:
+      lintTreeImpl(child, profile, expected, ancestors, acc)
+    ancestors.setLen(ancestors.len - 1)
 
 const sizeErrorLimit* = 100_000
   ## R-SIZE-01: decoded HTML above this errors — Gmail clips at about
@@ -2022,4 +2114,5 @@ proc lintTree*(node: EmailNode; profile: AudienceProfile;
   ## checks (link text, contrast, alt length), recursing through every
   ## node kind (conditional branches are emitted content). Findings keep
   ## tree order; nothing dedupes — each names its origin.
-  lintTreeImpl(node, profile, expected, @[])
+  var ancestors: seq[EmailNode] = @[]
+  lintTreeImpl(node, profile, expected, ancestors, result)

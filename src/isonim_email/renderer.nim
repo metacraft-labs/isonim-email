@@ -139,13 +139,20 @@ proc initEmailNode(kind: EmailNodeKind; origin = SourceSpan()): EmailNode =
   ## `createElement` needs no lineinfo of its own; hand-written builders
   ## pass real spans, and diagnostics print `unknown location` for the
   ## empty ones (text nodes, raw nodes, macro-synthesised wrappers).
-  EmailNode(
-    kind: kind,
-    attrs: initOrderedTable[string, string](),
-    styles: initOrderedTable[string, string](),
-    children: @[],
-    origin: origin,
-  )
+  ##
+  ## An element starts with small attribute and style tables; a text or
+  ## raw node, which carries neither, starts with empty ones that
+  ## allocate on a first insertion only.
+  if kind == enElement:
+    EmailNode(
+      kind: kind,
+      attrs: initOrderedTable[string, string](0),
+      styles: initOrderedTable[string, string](0),
+      children: @[],
+      origin: origin,
+    )
+  else:
+    EmailNode(kind: kind, children: @[], origin: origin)
 
 # ----------------------------------------------------------------------------
 # Required RendererBackend procs (the conformance surface)

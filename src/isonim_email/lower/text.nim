@@ -140,6 +140,13 @@ proc inherited(node: EmailNode; prop: string): string =
 
 proc pxOf(value: string; theme: EmailTheme): float =
   ## A length in px (a `tok:` sentinel resolved); 0 when unparseable.
+  if not value.startsWith("tok:") and (value.len == 0 or
+      (value[0] notin Whitespace and value[^1] notin Whitespace)):
+    # Nothing to strip and no sentinel: the value as it is.
+    try:
+      return toPx(value)
+    except StyleError:
+      return 0
   var v = value.strip()
   if v.startsWith("tok:"):
     try:
@@ -160,18 +167,28 @@ proc ratioLineHeight(size: float; specSize, specLine: string;
     return specLine
   formatPx(round(size * l / s))
 
+proc flooredLine(lineValue, sizeValue: string; theme: EmailTheme): string =
+  ## A default line height never falls below the font's content area
+  ## (`style/metrics.minLineHeight`): a tighter one lets the glyphs out
+  ## of the line box (R-TXT-02).
+  let l = pxOf(lineValue, theme)
+  let fs = pxOf(sizeValue, theme)
+  if l > 0 and fs > 0 and l < minLineHeight(fs):
+    formatPx(minLineHeight(fs))
+  else:
+    lineValue
+
 proc typeDecls(node: EmailNode; theme: EmailTheme; typeKey: string;
     bold, inherit: bool): seq[tuple[prop, value: string]] =
   ## font-size, line-height (and font-weight) for `node`: from the
   ## nearest ancestor when `inherit` and one sets them, else from the
   ## theme's `typeKey`.
-  var size, line, weight: string
-  for (p, v) in expandTypeSpec(theme.lightFor(typeKey)):
-    case p
-    of "font-size": size = v
-    of "line-height": line = v
-    of "font-weight": weight = v
-    else: discard
+  # The theme's packed literal, as `expandTypeSpec` reads it (a weight
+  # only when the literal carries one).
+  var spec = parseTypeSpec(theme.lightFor(typeKey))
+  var size = move(spec.fontSize)
+  var line = move(spec.lineHeight)
+  var weight = move(spec.weight)
   if bold and weight.len == 0:
     weight = "700"
   if inherit:
@@ -181,25 +198,17 @@ proc typeDecls(node: EmailNode; theme: EmailTheme; typeKey: string;
       line = if l.len > 0: l else: ratioLineHeight(pxOf(s, theme), size,
         line, theme)
       size = s
-  # A default line height never falls below the font's content area
-  # (`style/metrics.minLineHeight`): a tighter one lets the glyphs out
-  # of the line box (R-TXT-02).
-  proc floored(lineValue, sizeValue: string): string =
-    let l = pxOf(lineValue, theme)
-    let fs = pxOf(sizeValue, theme)
-    if l > 0 and fs > 0 and l < minLineHeight(fs):
-      formatPx(minLineHeight(fs))
-    else:
-      lineValue
-  line = floored(line, size)
-  let own = node.styles
+  line = flooredLine(line, size, theme)
+  # The node's own styles, read in place (not a copy of the table).
+  template own: untyped = node.styles
   if "font-size" notin own:
     result.add(("font-size", size))
     if "line-height" notin own:
       result.add(("line-height", line))
   elif "line-height" notin own:
-    result.add(("line-height", floored(ratioLineHeight(
-      pxOf(own["font-size"], theme), size, line, theme), own["font-size"])))
+    result.add(("line-height", flooredLine(ratioLineHeight(
+      pxOf(own["font-size"], theme), size, line, theme), own["font-size"],
+      theme)))
   if weight.len > 0 and "font-weight" notin own:
     result.add(("font-weight", weight))
 

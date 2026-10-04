@@ -92,19 +92,30 @@ const
 proc tagOf(node: EmailNode): string =
   if node == nil or node.kind != enElement: "" else: node.tag
 
+proc rawValueOf(node: EmailNode; hy, us: string): string =
+  ## `rawValue` under its two spellings: styles under the hyphenated one
+  ## first, attributes under the underscore one first.
+  if hy in node.styles: node.styles[hy].strip()
+  elif us in node.styles: node.styles[us].strip()
+  elif us in node.attrs: node.attrs[us].strip()
+  elif hy in node.attrs: node.attrs[hy].strip()
+  else: ""
+
 proc rawValue*(node: EmailNode; name: string): string =
   ## The authoring value of a layout prop: the style under its CSS
   ## (hyphenated) name, then under the vocabulary's underscore spelling,
   ## then a plain attribute under either. "" when absent.
-  let hy = name.replace("_", "-")
-  let us = name.replace("-", "_")
-  for key in [hy, us]:
-    if key in node.styles:
-      return node.styles[key].strip()
-  for key in [us, hy]:
-    if key in node.attrs:
-      return node.attrs[key].strip()
-  ""
+  # Each spelling is built only when it differs from `name`.
+  let hasUnderscore = '_' in name
+  let hasHyphen = '-' in name
+  if not hasUnderscore and not hasHyphen:
+    rawValueOf(node, name, name)
+  elif not hasUnderscore:
+    rawValueOf(node, name, name.replace("-", "_"))
+  elif not hasHyphen:
+    rawValueOf(node, name.replace("_", "-"), name)
+  else:
+    rawValueOf(node, name.replace("_", "-"), name.replace("-", "_"))
 
 proc resolveTok(value: string; theme: EmailTheme): string =
   ## `tok:<key>` (the `tok"…"` sentinel) → the theme's light literal.

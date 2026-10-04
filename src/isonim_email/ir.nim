@@ -34,8 +34,6 @@ proc newMsoIf*(cond: string; children: seq[EmailNode] = @[]): EmailNode =
       msoConditions.join(", ") & ")")
   result = EmailNode(
     kind: enMsoIf,
-    attrs: initOrderedTable[string, string](),
-    styles: initOrderedTable[string, string](),
     children: children,
     cond: cond,
   )
@@ -47,8 +45,6 @@ proc newNotMso*(children: seq[EmailNode] = @[]): EmailNode =
   ## `<!--[if !mso]><!--> … <!--<![endif]-->` (R-OL-01).
   result = EmailNode(
     kind: enNotMso,
-    attrs: initOrderedTable[string, string](),
-    styles: initOrderedTable[string, string](),
     children: children,
   )
   for c in children:
@@ -62,8 +58,8 @@ proc newVml*(shape: string; attrs: openArray[(string, string)] = [];
   result = EmailNode(
     kind: enVml,
     tag: shape,
-    attrs: initOrderedTable[string, string](),
-    styles: initOrderedTable[string, string](),
+    attrs: initOrderedTable[string, string](0),
+    styles: initOrderedTable[string, string](0),
     children: children,
   )
   for (k, v) in attrs:
@@ -77,8 +73,6 @@ proc newHeadStyle*(css: string; priority: int): EmailNode =
   EmailNode(
     kind: enHeadStyle,
     text: css,
-    attrs: initOrderedTable[string, string](),
-    styles: initOrderedTable[string, string](),
     children: @[],
     priority: priority,
   )
