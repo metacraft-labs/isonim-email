@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Email preview</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --text: #111827;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --accent: #2563eb;
+        --accent-text: #ffffff;
+        --error: #b91c1c;
+        --warning: #a16207;
+        --info: #4b5563;
+        --hit: #eff6ff;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #0b0f17;
+          --panel: #111827;
+          --text: #e5e7eb;
+          --muted: #9ca3af;
+          --line: #1f2937;
+          --accent: #60a5fa;
+          --accent-text: #0b0f17;
+          --error: #f87171;
+          --warning: #facc15;
+          --info: #9ca3af;
+          --hit: #172036;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      header h1 {
+        font-size: 15px;
+        margin: 0 8px 0 0;
+      }
+      .group {
+        display: inline-flex;
+        gap: 2px;
+        align-items: center;
+      }
+      .group > span {
+        color: var(--muted);
+        margin-right: 4px;
+      }
+      button,
+      select {
+        font: inherit;
+        color: inherit;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      #status {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #status[data-state="failed"] {
+        color: var(--error);
+        font-weight: 600;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr) 360px;
+        height: calc(100vh - 48px);
+      }
+      @media (max-width: 1100px) {
+        main {
+          grid-template-columns: 220px minmax(0, 1fr);
+        }
+        #side {
+          grid-column: 1 / -1;
+        }
+      }
+      nav {
+        border-right: 1px solid var(--line);
+        overflow: auto;
+        background: var(--panel);
+      }
+      nav input {
+        width: calc(100% - 16px);
+        margin: 8px;
+        font: inherit;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: inherit;
+      }
+      details {
+        border-top: 1px solid var(--line);
+      }
+      summary {
+        padding: 4px 10px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      nav ul {
+        list-style: none;
+        margin: 0;
+        padding: 0 0 4px;
+      }
+      nav li {
+        padding: 2px 10px 2px 20px;
+        cursor: pointer;
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+      }
+      nav li:hover,
+      nav li[aria-selected="true"] {
+        background: var(--hit);
+      }
+      nav li .n {
+        flex: 1;
+        overflow-wrap: anywhere;
+      }
+      .badge {
+        font-size: 11px;
+        border-radius: 8px;
+        padding: 0 5px;
+        border: 1px solid currentColor;
+      }
+      .badge.error {
+        color: var(--error);
+      }
+      .badge.warning {
+        color: var(--warning);
+      }
+      #stage {
+        overflow: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      #stage .meta {
+        color: var(--muted);
+        font-size: 12px;
+        max-width: 800px;
+        text-align: center;
+      }
+      #frame {
+        border: 1px solid var(--line);
+        background: #ffffff;
+        display: block;
+        min-height: 200px;
+      }
+      #shot {
+        border: 1px solid var(--line);
+        display: none;
+      }
+      #text {
+        display: none;
+        white-space: pre-wrap;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        padding: 12px;
+        font:
+          13px/1.5 ui-monospace,
+          Menlo,
+          monospace;
+        max-width: 800px;
+        width: 100%;
+      }
+      #side {
+        border-left: 1px solid var(--line);
+        overflow: auto;
+        background: var(--panel);
+        padding: 8px 12px;
+      }
+      #side h2 {
+        font-size: 13px;
+        margin: 8px 0;
+      }
+      #diagnostics {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #diagnostics li {
+        border-top: 1px solid var(--line);
+        padding: 6px 0;
+      }
+      #diagnostics code {
+        font-weight: 600;
+      }
+      #diagnostics li[data-severity="error"] code {
+        color: var(--error);
+      }
+      #diagnostics li[data-severity="warning"] code {
+        color: var(--warning);
+      }
+      #diagnostics li[data-severity="info"] code {
+        color: var(--info);
+      }
+      #diagnostics .where {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #diagnostics a {
+        color: var(--accent);
+      }
+      #refused {
+        color: var(--error);
+        white-space: pre-wrap;
+      }
+      #build-log {
+        display: none;
+        white-space: pre-wrap;
+        font:
+          12px/1.4 ui-monospace,
+          monospace;
+        background: var(--panel);
+        color: var(--error);
+        border-bottom: 1px solid var(--line);
+        padding: 8px 12px;
+        margin: 0;
+        max-height: 40vh;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body data-generation="0">
+    <header>
+      <h1>Email preview</h1>
+      <label class="group"
+        ><span>Client</span>
+        <select id="family" aria-label="Emulation transform"></select
+      ></label>
+      <label class="group"
+        ><input type="checkbox" id="images-off" /> Images off</label
+      >
+      <div class="group" role="group" aria-label="Viewport">
+        <span>Width</span> <button data-viewport="320">320</button
+        ><button data-viewport="mobile">Mobile</button
+        ><button data-viewport="desktop">Desktop</button>
+      </div>
+      <div class="group" role="group" aria-label="Scheme">
+        <span>Scheme</span> <button data-scheme="light">Light</button
+        ><button data-scheme="dark">Dark</button
+        ><button
+          data-scheme="forced-dark"
+          title="Blink's automatic dark mode, shot in the pinned Chromium"
+        >
+          Forced dark
+        </button>
+      </div>
+      <label class="group"
+        ><input type="checkbox" id="show-text" /> Text part</label
+      >
+      <span id="status" data-state="building" role="status">Building…</span>
+    </header>
+    <pre id="build-log"></pre>
+    <main>
+      <nav>
+        <input
+          id="filter"
+          type="search"
+          placeholder="Filter stories"
+          aria-label="Filter stories"
+        />
+        <div id="stories"></div>
+      </nav>
+      <section id="stage" aria-label="Preview">
+        <div class="meta" id="meta"></div>
+        <iframe
+          id="frame"
+          title="The message"
+          sandbox="allow-same-origin allow-popups"
+        ></iframe>
+        <img id="shot" alt="The message under forced dark" />
+        <pre id="text"></pre>
+      </section>
+      <aside id="side">
+        <h2>Diagnostics <span id="diag-count"></span></h2>
+        <p id="refused"></p>
+        <ul id="diagnostics"></ul>
+      </aside>
+    </main>
+    <script>
+      "use strict";
+      const $ = (s) => document.querySelector(s);
+      const WIDTHS = { 320: 320, mobile: 375, desktop: 800 };
+      const FAMILY_NAMES = { "": "As authored" };
+      let state = {
+        story: "",
+        family: "",
+        images: "on",
+        viewport: "desktop",
+        scheme: "light",
+        text: false,
+      };
+      let list = [];
+      let generation = 0;
+
+      function readHash() {
+        const p = new URLSearchParams(location.hash.slice(1));
+        for (const k of ["story", "family", "images", "viewport", "scheme"])
+          if (p.has(k)) state[k] = p.get(k);
+        state.text = p.get("text") === "1";
+      }
+      function writeHash() {
+        const p = new URLSearchParams({
+          story: state.story,
+          family: state.family,
+          images: state.images,
+          viewport: state.viewport,
+          scheme: state.scheme,
+          text: state.text ? "1" : "0",
+        });
+        if (location.hash.slice(1) !== p.toString())
+          history.replaceState(null, "", "#" + p.toString());
+      }
+      function el(tag, attrs, text) {
+        const e = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+        if (text !== undefined) e.textContent = text;
+        return e;
+      }
+      function q(extra) {
+        const p = new URLSearchParams({
+          story: state.story,
+          gen: String(generation),
+          ...extra,
+        });
+        return p.toString();
+      }
+
+      async function loadList() {
+        const r = await fetch("/api/stories", { cache: "no-store" });
+        const data = await r.json();
+        const fam = $("#family");
+        if (fam.options.length === 0)
+          for (const f of data.families)
+            fam.append(el("option", { value: f }, FAMILY_NAMES[f] || f));
+        list = data.stories;
+        if (!list.some((s) => s.story === state.story) && list.length > 0)
+          state.story = list[0].story;
+        renderList();
+      }
+
+      function renderList() {
+        const box = $("#stories");
+        const filter = $("#filter").value.trim().toLowerCase();
+        box.textContent = "";
+        const groups = new Map();
+        for (const s of list) {
+          if (
+            filter &&
+            !(s.story + " " + s.group + " " + s.description)
+              .toLowerCase()
+              .includes(filter)
+          )
+            continue;
+          if (!groups.has(s.group)) groups.set(s.group, []);
+          groups.get(s.group).push(s);
+        }
+        for (const [g, items] of groups) {
+          const d = el("details", { "data-group": g });
+          d.open =
+            filter !== "" ||
+            items.some((s) => s.story === state.story) ||
+            groups.size <= 3;
+          d.append(el("summary", {}, g + " (" + items.length + ")"));
+          const ul = el("ul", { role: "listbox", "aria-label": g });
+          for (const s of items) {
+            const li = el("li", {
+              role: "option",
+              "data-story": s.story,
+              title: s.description,
+              "aria-selected": String(s.story === state.story),
+            });
+            li.append(el("span", { class: "n" }, s.story));
+            if (s.refused)
+              li.append(el("span", { class: "badge error" }, "refused"));
+            else if (s.counts.error)
+              li.append(
+                el("span", { class: "badge error" }, s.counts.error + " E"),
+              );
+            if (s.counts.warning)
+              li.append(
+                el("span", { class: "badge warning" }, s.counts.warning + " W"),
+              );
+            li.addEventListener("click", () => {
+              state.story = s.story;
+              update();
+            });
+            ul.append(li);
+          }
+          d.append(ul);
+          box.append(d);
+        }
+      }
+
+      let diagnosticsRequest = 0;
+      async function loadDiagnostics() {
+        // Only the latest request's answer is shown: a quick second click
+        // must not add its story's diagnostics to the first one's.
+        const mine = ++diagnosticsRequest;
+        const ul = $("#diagnostics");
+        if (!state.story) {
+          ul.textContent = "";
+          return;
+        }
+        const r = await fetch("/api/story?" + q({}), { cache: "no-store" });
+        if (mine !== diagnosticsRequest || !r.ok) return;
+        const s = await r.json();
+        if (mine !== diagnosticsRequest) return;
+        ul.textContent = "";
+        $("#meta").textContent =
+          s.group +
+          " / " +
+          s.story +
+          (s.description ? " — " + s.description : "");
+        $("#refused").textContent = s.error ? "Refused: " + s.error : "";
+        $("#diag-count").textContent = "(" + s.diagnostics.length + ")";
+        for (const d of s.diagnostics) {
+          const li = el("li", {
+            "data-code": d.code,
+            "data-severity": d.severity,
+          });
+          li.append(
+            el("code", {}, d.code),
+            document.createTextNode(" " + d.message),
+          );
+          const where = el("div", { class: "where" });
+          if (d.rules.length)
+            where.append(document.createTextNode(d.rules.join(", ") + " "));
+          if (d.file) {
+            const label =
+              (d.source || d.file) + ":" + d.line + ":" + (d.col + 1);
+            if (d.source) {
+              const a = el(
+                "a",
+                {
+                  class: "span",
+                  target: "_blank",
+                  rel: "noopener",
+                  href:
+                    "/source?" +
+                    new URLSearchParams({
+                      file: d.source,
+                      line: String(d.line),
+                    }) +
+                    "#L" +
+                    d.line,
+                },
+                label,
+              );
+              where.append(a);
+            } else where.append(el("span", { class: "span" }, label));
+          }
+          li.append(where);
+          ul.append(li);
+        }
+      }
+
+      function sizeFrame() {
+        const f = $("#frame");
+        try {
+          const doc = f.contentDocument;
+          if (doc && doc.documentElement)
+            f.style.height =
+              Math.max(doc.documentElement.scrollHeight, 200) + "px";
+        } catch (e) {
+          /* not same origin */
+        }
+      }
+
+      function showPreview() {
+        const width = WIDTHS[state.viewport] || 800;
+        const frame = $("#frame"),
+          shot = $("#shot"),
+          text = $("#text");
+        frame.style.width = width + "px";
+        if (state.text) {
+          frame.style.display = "none";
+          shot.style.display = "none";
+          text.style.display = "block";
+          const url = "/text?" + q({});
+          text.dataset.src = url;
+          fetch(url, { cache: "no-store" })
+            .then((r) => r.text())
+            .then((t) => {
+              if (text.dataset.src === url) text.textContent = t;
+            });
+          return;
+        }
+        text.style.display = "none";
+        if (state.scheme === "forced-dark") {
+          frame.style.display = "none";
+          shot.style.display = "block";
+          shot.style.width = width + "px";
+          shot.src =
+            "/shot?" +
+            q({
+              family: state.family,
+              images: state.images,
+              width: String(width),
+            });
+        } else {
+          shot.style.display = "none";
+          shot.removeAttribute("src");
+          frame.style.display = "block";
+          frame.src =
+            "/render?" +
+            q({
+              family: state.family,
+              images: state.images,
+              scheme: state.scheme,
+            });
+        }
+      }
+
+      function syncControls() {
+        $("#family").value = state.family;
+        $("#images-off").checked = state.images === "off";
+        $("#show-text").checked = state.text;
+        for (const b of document.querySelectorAll("[data-viewport]"))
+          b.setAttribute(
+            "aria-pressed",
+            String(b.dataset.viewport === state.viewport),
+          );
+        for (const b of document.querySelectorAll("[data-scheme]"))
+          b.setAttribute(
+            "aria-pressed",
+            String(b.dataset.scheme === state.scheme),
+          );
+        for (const li of document.querySelectorAll("[data-story]")) {
+          const on = li.dataset.story === state.story;
+          li.setAttribute("aria-selected", String(on));
+          if (on && !li.closest("details").open) {
+            li.closest("details").open = true;
+          }
+        }
+      }
+
+      function revealSelected() {
+        const li = document.querySelector('[data-story][aria-selected="true"]');
+        if (li) li.scrollIntoView({ block: "nearest" });
+      }
+
+      async function update() {
+        writeHash();
+        syncControls();
+        showPreview();
+        await loadDiagnostics();
+      }
+
+      function onStatus(s) {
+        const st = $("#status");
+        st.dataset.state = s.state;
+        st.textContent =
+          s.state === "building"
+            ? "Building…"
+            : s.state === "failed"
+              ? "Build failed (showing generation " + s.generation + ")"
+              : "Generation " +
+                s.generation +
+                ", built " +
+                new Date(s.builtAt).toLocaleTimeString();
+        const log = $("#build-log");
+        log.textContent = s.log;
+        log.style.display = s.state === "failed" && s.log ? "block" : "none";
+        if (s.state === "ok" && s.generation !== generation) {
+          generation = s.generation;
+          document.body.dataset.generation = String(generation);
+          loadList().then(update).then(revealSelected);
+        }
+      }
+
+      $("#frame").addEventListener("load", sizeFrame);
+      $("#family").addEventListener("change", (e) => {
+        state.family = e.target.value;
+        update();
+      });
+      $("#images-off").addEventListener("change", (e) => {
+        state.images = e.target.checked ? "off" : "on";
+        update();
+      });
+      $("#show-text").addEventListener("change", (e) => {
+        state.text = e.target.checked;
+        update();
+      });
+      $("#filter").addEventListener("input", renderList);
+      for (const b of document.querySelectorAll("[data-viewport]"))
+        b.addEventListener("click", () => {
+          state.viewport = b.dataset.viewport;
+          update();
+        });
+      for (const b of document.querySelectorAll("[data-scheme]"))
+        b.addEventListener("click", () => {
+          state.scheme = b.dataset.scheme;
+          update();
+        });
+
+      window.addEventListener("hashchange", () => {
+        readHash();
+        if (list.length) update().then(revealSelected);
+      });
+      readHash();
+      syncControls();
+      const events = new EventSource("/events");
+      events.addEventListener("status", (e) => onStatus(JSON.parse(e.data)));
+    </script>
+  </body>
+</html>

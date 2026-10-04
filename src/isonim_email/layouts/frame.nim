@@ -66,12 +66,12 @@ type
   LayoutSlot* = proc(r: EmailRenderer; parent: EmailNode) {.closure.}
     ## Content the caller appends to `parent` (the content card's stack).
 
-proc node*(r: EmailRenderer; parent: EmailNode; tag: string;
-    attrs: openArray[(string, string)] = [];
-    styles: openArray[(string, string)] = []; text = ""): EmailNode =
-  ## An element appended to `parent` (when given); an empty value is not
-  ## set.
+proc nodeAt*(r: EmailRenderer; parent: EmailNode; tag: string;
+    attrs: openArray[(string, string)]; styles: openArray[(string, string)];
+    text: string; at: SourceSpan): EmailNode =
+  ## `node`, with the element's source span given (`at`).
   result = r.createElement(tag)
+  result.origin = at
   for (k, v) in attrs:
     if v.len > 0:
       r.setAttribute(result, k, v)
@@ -82,6 +82,16 @@ proc node*(r: EmailRenderer; parent: EmailNode; tag: string;
     r.appendChild(result, r.createTextNode(text))
   if parent != nil:
     r.appendChild(parent, result)
+
+template node*(r: EmailRenderer; parent: EmailNode; tag: string;
+    attrs: openArray[(string, string)] = [];
+    styles: openArray[(string, string)] = []; text = ""): EmailNode =
+  ## An element appended to `parent` (when given); an empty value is not
+  ## set. The element's source span is the line that calls `node`, so a
+  ## diagnostic about it points there, as one about an element of a
+  ## `ui(r)` template does.
+  nodeAt(r, parent, tag, attrs, styles, text,
+    callerSpan(instantiationInfo(-1, fullPaths = true)))
 
 proc layoutDocument*(r: EmailRenderer; f: LayoutFrame): EmailNode =
   ## The document on the canvas, its web-copy link after the preheader,

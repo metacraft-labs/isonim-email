@@ -347,6 +347,13 @@ proc parseSourceSpan*(loc: string): SourceSpan =
     return SourceSpan()
   SourceSpan(file: loc[0 ..< midSep], line: lineNum, col: colNum)
 
+proc callerSpan*(info: tuple[filename: string; line: int;
+    column: int]): SourceSpan =
+  ## A span from `instantiationInfo`: what a builder template records as
+  ## the source of the element it makes (the line calling it; the column
+  ## 0-based, as the `ui(r)` macro's).
+  SourceSpan(file: info.filename, line: info.line, col: info.column)
+
 proc noteElement*(el: EmailNode; id, tag, loc, parentId: string) =
   ## The `ui(r)` macro's per-element hook, typed on the email element
   ## handle: overload resolution prefers this over the macro's own untyped

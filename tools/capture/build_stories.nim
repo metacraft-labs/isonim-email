@@ -11,6 +11,17 @@
 ## tree always yields the same bytes.
 ##
 ## Usage: build-stories <outDir> [STORY…] (no stories = all).
+##
+## Two other modes serve the preview server (`just email-preview`):
+## - `build-stories --list` prints the registered stories as JSON
+##   (`{"stories": [{"story", "group", "description"}…]}`) and renders
+##   nothing;
+## - `build-stories --preview <outDir> [STORY…]` writes each story's
+##   `<story>.html` and `<story>.txt`, and a manifest whose entries also
+##   carry the story's group, description, every diagnostic its render
+##   collected (with its source span) and, for a story whose render
+##   refused it, the error instead of files. No MIME is assembled, and a
+##   refused story does not stop the others.
 import std/[os, json, times]
 import isonim_email
 import stories/email_stories
@@ -69,10 +80,40 @@ proc buildStory(outDir, name: string): JsonNode =
   %*{"story": name, "eml": name & ".eml", "html": name & ".html",
       "mime_sha256": sha256Hex(rfc5322)}
 
+proc diagnosticJson(d: EmailDiagnostic): JsonNode =
+  %*{"severity": $d.severity, "code": d.code, "message": d.message,
+     "file": d.origin.file, "line": d.origin.line, "col": d.origin.col,
+     "rules": d.rules}
+
+proc previewStory(outDir, name: string): JsonNode =
+  ## One story for the preview server: its files when it rendered, its
+  ## diagnostics either way.
+  let story = getStory(name)
+  let res = renderStoryDiagnosed(story)
+  var diags = newJArray()
+  for d in res.diagnostics:
+    diags.add(diagnosticJson(d))
+  result = %*{"story": name, "group": story.group,
+    "description": story.description, "diagnostics": diags}
+  if res.error.len > 0:
+    result["error"] = %res.error
+    return
+  let htmlPath = outDir / name & ".html"
+  createDir(parentDir(htmlPath))
+  writeFile(htmlPath, res.html)
+  writeFile(outDir / name & ".txt", res.text)
+  result["html"] = %(name & ".html")
+  result["text"] = %(name & ".txt")
+
 proc main(): int =
-  let args = commandLineParams()
-  if args.len < 1:
-    stderr.writeLine("usage: build-stories <outDir> [STORY…]")
+  var args = commandLineParams()
+  let listOnly = args.len > 0 and args[0] == "--list"
+  let preview = args.len > 0 and args[0] == "--preview"
+  if listOnly or preview:
+    args = args[1 .. ^1]
+  if args.len < 1 and not listOnly:
+    stderr.writeLine("usage: build-stories [--preview] <outDir> [STORY…]\n" &
+      "       build-stories --list")
     return 2
   registerSeedStories()
   if getEnv("ISONIM_CAPTURE_FIXTURES") == "1":
@@ -122,6 +163,13 @@ proc main(): int =
     # The domain view stories (tests/stories/seed_domain.nim: the
     # invoice email of examples/invoice_summary_email.nim).
     registerDomainStories()
+  if listOnly:
+    var list = newJArray()
+    for s in stories():
+      list.add(%*{"story": s.name, "group": s.group,
+        "description": s.description})
+    stdout.write($(%*{"stories": list}) & "\n")
+    return 0
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]
@@ -130,7 +178,8 @@ proc main(): int =
   var entries: seq[JsonNode] = @[]
   try:
     for name in wanted:
-      entries.add(buildStory(outDir, name))
+      entries.add(if preview: previewStory(outDir, name)
+        else: buildStory(outDir, name))
   except StoryError as e:
     stderr.writeLine("build-stories: " & e.msg)
     return 1

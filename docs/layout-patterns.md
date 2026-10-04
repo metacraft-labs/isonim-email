@@ -1058,10 +1058,11 @@ and the reference emails in `examples/` build every row.
   and reported once per kind and element, `W-MARKDOWN-UNSUPPORTED`:
   `mailRaw` is the one way to write markup. An image where only text
   goes (a heading, a list item, a table cell) is its alt text, reported
-  the same way. A link whose target is not an absolute URL (`https:`,
-  `http:`, `mailto:`, `tel:`) is `E-URL-SCHEME`: the docs dialect
-  resolves a relative target against the docs site, which a mail client
-  cannot follow. The docs site's blocks with no email form (`:::tabs`,
+  the same way. A link is checked like every link of a message
+  (R-TXT-13): a target that is not an absolute `https:`, `mailto:` or
+  `tel:` URL is `E-URL-SCHEME`, an empty one or `#` `E-URL-EMPTY`. The
+  docs dialect resolves a relative target against the docs site, which
+  a mail client cannot follow. The docs site's blocks with no email form (`:::tabs`,
   `:::cards`, `:::hero`, `:::faq`, `:::video`, `:::form`, a component tag
   `<Name …/>`) are left out, `E-MARKDOWN-UNSUPPORTED`. Not read as
   Markdown, because the AST has no node for them (written as text,

@@ -247,3 +247,75 @@ suite "P1 validate":
     check diags[0].origin.file == "nav.nim"
     check diags[0].rules == @["R-A11Y-10"]
     check "layout primitives" in diags[0].message
+
+  test "test_validate_link_destinations":
+    # rule: R-TXT-13
+    # Every `a` and every linked image goes somewhere a mail client can
+    # open, as a button must (R-BTN-07): the same codes, the link's span.
+    proc linkDoc(tag, href: string; hasHref = true): seq[EmailDiagnostic] =
+      let r = EmailRenderer()
+      let doc = validDoc(r)
+      let p = r.createElement("p")
+      r.appendChild(doc, p)
+      let link = r.createElement(tag)
+      link.origin = SourceSpan(file: "link.nim", line: 9, col: 4)
+      if hasHref:
+        r.setAttribute(link, "href", href)
+      if tag == "mailImage":
+        r.setAttribute(link, "src", "https://x.test/a.png")
+        r.setAttribute(link, "alt", "Logo")
+      else:
+        r.setTextContent(link, "The guide")
+      r.appendChild(p, link)
+      validate(doc)
+    for (href, code) in [("", codeUrlEmpty), ("  ", codeUrlEmpty),
+        ("#", codeUrlEmpty), ("#top", codeUrlEmpty),
+        ("/docs/guide", codeUrlScheme), ("docs/guide.md", codeUrlScheme),
+        ("//cdn.example.com/x", codeUrlScheme),
+        ("http://example.com/", codeUrlScheme),
+        ("javascript:alert(1)", codeUrlScheme),
+        ("data:text/html,x", codeUrlScheme), ("ftp://example.com/f", codeUrlScheme),
+        ("https://", codeUrlScheme), ("https:///path", codeUrlScheme),
+        ("https://example.com/a b", codeUrlScheme), ("mailto:", codeUrlScheme)]:
+      for tag in ["a", "mailImage"]:
+        let diags = linkDoc(tag, href)
+        checkpoint(tag & " href '" & href & "'")
+        check codesOf(diags) == @[code]
+        check diags.len == 1 and diags[0].severity == sevError
+        check diags.len == 1 and diags[0].origin.file == "link.nim"
+        check diags.len == 1 and diags[0].origin.line == 9
+        check diags.len == 1 and diags[0].rules == @["R-TXT-13"]
+    # A plain link with no href at all goes nowhere either.
+    check codesOf(linkDoc("a", "", hasHref = false)) == @[codeUrlEmpty]
+    # A mailImage that is not a link has nothing to check.
+    check linkDoc("mailImage", "", hasHref = false).len == 0
+    for href in ["https://example.com/docs/guide", "HTTPS://EXAMPLE.COM/",
+        "mailto:help@example.com", "tel:+15550100"]:
+      for tag in ["a", "mailImage"]:
+        checkpoint(tag & " href '" & href & "'")
+        check linkDoc(tag, href).len == 0
+
+  test "test_validate_link_destinations_template_and_raw":
+    # rule: R-TXT-13
+    # A template's link is checked where the template wrote it; markup
+    # inside mailRaw is not (it keeps R-RAW-03's warning, nothing more).
+    proc tpl(r: EmailRenderer; x: int): EmailNode =
+      ui(r):
+        mailDocument(lang = "en", title = "Links"):
+          h1: text "Links"
+          p:
+            a(href = "/account"): text "Your account"
+    let diags = validate(tpl(EmailRenderer(), 0))
+    check codesOf(diags) == @[codeUrlScheme]
+    check diags.len == 1 and diags[0].origin.file.endsWith("t5_validate.nim")
+    check diags.len == 1 and diags[0].origin.line > 0
+    let r = EmailRenderer()
+    let doc = validDoc(r)
+    let rawBlock = r.createElement("mailRaw")
+    r.appendChild(rawBlock, raw("<p><a href=\"/relative\">Relative</a> " &
+      "<a href=\"#\">Nowhere</a> <a href=\"javascript:void(0)\">Script</a></p>"))
+    r.appendChild(doc, rawBlock)
+    let rawDiags = validate(doc)
+    check not hasErrors(rawDiags)
+    check codeUrlScheme notin codesOf(rawDiags)
+    check codeUrlEmpty notin codesOf(rawDiags)

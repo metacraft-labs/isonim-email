@@ -104,19 +104,6 @@ proc warn(m: var MdCtx; kind, example: string) =
       "way into a message, mailRaw (layout-patterns.md §4.7)",
     origin: m.n.origin))
 
-proc checkLink(m: var MdCtx; url: string) =
-  ## A link goes somewhere from a mail client: an absolute URL. The
-  ## docs dialect resolves a relative target against the docs site
-  ## (`docs/x.md` becomes `/docs/x`), which no mail client can follow.
-  let lower = url.toLowerAscii()
-  for scheme in ["https://", "http://", "mailto:", "tel:"]:
-    if lower.startsWith(scheme) and url.len > scheme.len:
-      return
-  m.ctx.report(EmailDiagnostic(severity: sevError, code: codeUrlScheme,
-    message: "mailMarkdown link '" & url & "' is not an absolute URL " &
-      "(https:, mailto: or tel:): a mail client has no page to resolve " &
-      "it against (layout-patterns.md §4.7)", origin: m.n.origin))
-
 proc refuse(m: var MdCtx; what: string) =
   m.ctx.report(EmailDiagnostic(severity: sevError,
     code: codeMarkdownUnsupported,
@@ -576,8 +563,10 @@ proc inlineNodes(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
       let code = el(m.ctx, m.n, "codeInline", text = s.text)
       toks.add(Tok(node: code))
     of ikLink:
+      # The link's target is checked by P1 like every `a` (catalogue
+      # R-TXT-13): the docs dialect resolves a relative target against
+      # the docs site, which no mail client can follow.
       let (url, title) = splitTitle(s.href)
-      m.checkLink(url)
       let a = el(m.ctx, m.n, "a", attrs = [("href", url), ("title", title)])
       var inner: seq[Tok] = @[]
       m.textTokens(s.text, inner)

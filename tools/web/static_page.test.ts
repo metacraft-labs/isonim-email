@@ -3,8 +3,9 @@
 // `just example-page-build` builds from examples/invoice_summary_page.nim),
 // saved as static HTML, and compared with the invoice email the same
 // view renders into (the `invoiceSummary` story, built by the story
-// driver): the words a reader gets from the page's view are the email's,
-// in the same order. Real browser, real driver, real files.
+// driver): the words a reader gets from the page's view are exactly the
+// words of the email's content card, in the same order, neither side
+// holding a word the other lacks. Real browser, real driver, real files.
 // Run with:
 //   node --test tools/web/static_page.test.ts
 
@@ -26,6 +27,10 @@ import {
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
 const driver = join(repoRoot, "build", "capture", "build-stories");
+
+/** The invoice email's 600px bands: its content card, then its footer
+ *  (the div-first sections; Word's ghost tables are comments). */
+const EMAIL_BANDS = '[role="article"] div[style*="max-width:600px"]';
 
 let browser: Browser;
 let scratch: string;
@@ -85,21 +90,28 @@ describe("the billing page renders the invoice email's domain view", () => {
       );
 
       // The email, as Chromium shows it (its images not loaded: only
-      // the text is compared): the page's words appear in it, in order
-      // and unbroken, between the email's own card and footer.
+      // the text is compared). The view is the content card's only
+      // content: the first of the message's two 600px bands, the second
+      // being the footer. The words a reader gets from that card are
+      // exactly the page's view, from its first word to its last.
       await page.route("**/*", (route) =>
         route.request().url().startsWith("file:")
           ? route.continue()
           : route.abort(),
       );
       await page.setContent(invoiceEmailHtml());
-      const email = await wordsOf(page, "body");
-      const at = email.join(" ").indexOf(web.join(" "));
-      assert.ok(
-        at >= 0,
-        `the email holds the page's text:\n  page:  ${web.join(" ")}\n  email: ${email.join(" ")}`,
+      const bands = (await page.evaluate(
+        `document.querySelectorAll(${JSON.stringify(EMAIL_BANDS)}).length`,
+      )) as number;
+      assert.equal(bands, 2, "the email has its card and its footer");
+      const card = await wordsOf(page, EMAIL_BANDS);
+      assert.deepEqual(
+        card,
+        web,
+        `the email's card holds exactly the page's view:\n  page:  ${web.join(" ")}\n  email: ${card.join(" ")}`,
       );
-      assert.ok(email.length > web.length, "the email has its footer besides");
+      const email = await wordsOf(page, "body");
+      assert.ok(email.length > card.length, "the email has its footer besides");
     } finally {
       await page.close();
     }

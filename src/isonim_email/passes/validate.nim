@@ -17,7 +17,8 @@
 ## never in a right-to-left row. Other nesting and vocabulary rules
 ## belong to the static vocabulary check, contrast and sizes to P10.
 ## A `mailButton`, a `mailNavLink` and a `mailSocialItem` must have a
-## real destination (R-BTN-07). A `mailIf` names exactly one of `mso`
+## real destination (R-BTN-07), and so must every `a` and every linked
+## image (R-TXT-13). A `mailIf` names exactly one of `mso`
 ## (a boolean) and `family` (from the families with a selector; R-OL-02,
 ## R-RAW-05, R-RAW-06), and a `mailTable` holds exactly one `table`
 ## (R-TBL-18). The content patterns' own checks are here too: a
@@ -307,15 +308,22 @@ proc checkContentPatterns(node: EmailNode; diags: var seq[EmailDiagnostic]) =
     discard
 
 proc checkHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
-  ## R-BTN-07: a button, a navigation link or a social item goes
-  ## somewhere real: an absolute https URL, or a `mailto:` or `tel:`
-  ## one; never nothing or `#`.
+  ## R-BTN-07 and R-TXT-13: a button, a navigation link, a social item,
+  ## a plain link and a linked image go somewhere a mail client can
+  ## open: an absolute https URL, or a `mailto:` or `tel:` one; never
+  ## nothing or `#`. A plain `a` with no `href` at all is the empty
+  ## case. This is a correctness check (a relative URL has no page to
+  ## resolve against in a mail client), not a filter: markup inside
+  ## `mailRaw` is read by `raw.nim` and keeps its own rules.
+  let isLink = node.tag in ["a", "mailImage"]
+  let rule = if isLink: "R-TXT-13" else: "R-BTN-07"
+  let what = if node.tag == "a": "link" else: node.tag
   let href = node.attrs.getOrDefault("href", "").strip()
   if href.len == 0 or href.startsWith("#"):
     diags.add(EmailDiagnostic(severity: sevError, code: codeUrlEmpty,
-      message: node.tag & " without a destination (href '" & href &
+      message: what & " without a destination (href '" & href &
         "'): it must link to an absolute https URL, mailto: or " &
-        "tel: (R-BTN-07)", origin: node.origin, rules: @["R-BTN-07"]))
+        "tel: (" & rule & ")", origin: node.origin, rules: @[rule]))
     return
   let lower = href.toLowerAscii()
   let ok = (lower.startsWith("https://") and href.len > "https://".len and
@@ -324,9 +332,27 @@ proc checkHref(node: EmailNode; diags: var seq[EmailDiagnostic]) =
     (lower.startsWith("tel:") and href.len > "tel:".len)
   if not ok or href.contains({' ', '\t', '\r', '\n', '"', '<', '>'}):
     diags.add(EmailDiagnostic(severity: sevError, code: codeUrlScheme,
-      message: node.tag & " href '" & href & "' is not an absolute " &
-        "https URL, mailto: or tel: (R-BTN-07)", origin: node.origin,
-      rules: @["R-BTN-07"]))
+      message: what & " href '" & href & "' is not an absolute " &
+        "https URL, mailto: or tel: (" & rule & ")", origin: node.origin,
+      rules: @[rule]))
+
+const buttonHrefTags = ["mailButton", "mailNavLink", "mailSocialItem"]
+  ## The elements whose `href` R-BTN-07 checks on the element itself.
+
+proc hrefCheckedAbove(node: EmailNode): bool =
+  ## True when an ancestor is a button-style element (R-BTN-07) holding
+  ## the same `href` (compared stripped, as the expansion writes it):
+  ## the link is that element's own pattern expansion
+  ## (a `mailNavLink`'s `a`, a `mailSocialItem`'s linked image), whose
+  ## destination was checked, and reported, on the element.
+  let href = node.attrs.getOrDefault("href", "").strip()
+  var p = node.parent
+  while p != nil:
+    if p.kind == enElement and p.tag in buttonHrefTags and
+        p.attrs.getOrDefault("href", "").strip() == href:
+      return true
+    p = p.parent
+  false
 
 const ifFamilies* = ["outlookWord", "thunderbird"]
   ## The families `mailIf(family = …)` can target: Word through its
@@ -483,8 +509,11 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
       checkReversal(node, result)
     if node.kind == enElement and node.tag == "mailGrid":
       checkGrid(node, result)
-    if node.kind == enElement and node.tag in ["mailButton", "mailNavLink",
-        "mailSocialItem"]:
+    if node.kind == enElement and node.tag in buttonHrefTags:
+      checkHref(node, result)
+    if node.kind == enElement and (node.tag == "a" or
+        (node.tag == "mailImage" and "href" in node.attrs)) and
+        not hrefCheckedAbove(node):
       checkHref(node, result)
     if node.kind == enElement and node.tag in ["mailNavLinks",
         "mailCountdown", "mailStepper", "mailEvent"]:

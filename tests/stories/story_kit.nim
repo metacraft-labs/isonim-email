@@ -20,10 +20,11 @@ type
 const longWord* = "Supercalifragilisticexpialidociousnessless"
   ## A long unbroken word (the maximal stories' wrapping check).
 
-proc el*(r: EmailRenderer; parent: EmailNode; tag: string;
-    styles: openArray[(string, string)] = [];
-    attrs: openArray[(string, string)] = []; text = ""): EmailNode =
+proc elAt*(r: EmailRenderer; parent: EmailNode; tag: string;
+    styles: openArray[(string, string)]; attrs: openArray[(string, string)];
+    text: string; at: SourceSpan): EmailNode =
   result = r.createElement(tag)
+  result.origin = at
   for (k, v) in styles:
     r.setStyle(result, k, v)
   for (k, v) in attrs:
@@ -32,6 +33,14 @@ proc el*(r: EmailRenderer; parent: EmailNode; tag: string;
     r.setTextContent(result, text)
   if parent != nil:
     r.appendChild(parent, result)
+
+template el*(r: EmailRenderer; parent: EmailNode; tag: string;
+    styles: openArray[(string, string)] = [];
+    attrs: openArray[(string, string)] = []; text = ""): EmailNode =
+  ## An element appended to `parent` (when given), its source span the
+  ## line calling `el`: a diagnostic about it names the story's line.
+  elAt(r, parent, tag, styles, attrs, text,
+    callerSpan(instantiationInfo(-1, fullPaths = true)))
 
 proc txt*(r: EmailRenderer; parent: EmailNode; s: string) =
   r.appendChild(parent, r.createTextNode(s))

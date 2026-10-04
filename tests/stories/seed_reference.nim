@@ -19,9 +19,11 @@ proc renderReference*(e: ReferenceEmail;
 
 proc storyOf(e: ReferenceEmail): StoryRenderProc =
   ## The story's render closure: the HTML and text, or a `StoryError`
-  ## naming the first error.
+  ## naming the first error; its diagnostics are noted for the readers
+  ## of a story's diagnostics (the preview server, the editor).
   result = proc(): StoryHtml =
     let res = renderReference(e)
+    noteStoryDiagnostics(res.diagnostics)
     for d in res.diagnostics:
       if d.severity == sevError:
         raise newException(StoryError, "reference email '" & e.name &

@@ -13,7 +13,7 @@
 ##
 ## Backend-independent (tree building + pure passes + the in-memory
 ## asset store), so `just test` also runs it on JS. No test doubles.
-import std/[strutils, unittest]
+import std/[sequtils, strutils, unittest]
 import isonim_email
 import stories/seed_navigation
 
@@ -119,7 +119,9 @@ suite "mailSocial":
       let row = r.child(s, "mailSocial", attrs = attrs)
       discard r.child(row, "mailSocialItem", attrs = item)
       checkpoint($attrs & " " & $item)
-      check want in codesOf(renderTree(doc).diagnostics)
+      # Exactly once: the item's own check, not again on the linked
+      # image it expands into.
+      check codesOf(renderTree(doc).diagnostics).count(want) == 1
     let r = EmailRenderer()
     let (doc, s) = newDoc(r)
     let row = r.child(s, "mailSocial")
@@ -208,7 +210,9 @@ suite "mailNavbar":
       let (doc2, s2) = newDoc(r2)
       let n2 = r2.child(s2, "mailNavbar")
       discard r2.child(n2, "mailNavLink", attrs = link, text = "Home")
-      check want in codesOf(renderTree(doc2).diagnostics)
+      # Exactly once: the link's own check, not again on the `a` it
+      # expands into.
+      check codesOf(renderTree(doc2).diagnostics).count(want) == 1
     let r3 = EmailRenderer()
     let (doc3, s3) = newDoc(r3)
     let n3 = r3.child(s3, "mailNavbar")
@@ -253,3 +257,35 @@ suite "navigation stories":
       if st.name.startsWith("social"):
         # Published to the capture fixture host.
         check "src=\"https://x.test/" in html
+
+  test "test_button_style_bad_href_is_reported_once":
+    # rule: R-BTN-07
+    # rule: R-TXT-13
+    # A navigation link and a social item each expand into a link that
+    # carries their href; the bad destination is one finding, R-BTN-07's
+    # on the element, not a second R-TXT-13 one on its expansion.
+    proc errorsOf(diags: openArray[EmailDiagnostic]): seq[EmailDiagnostic] =
+      for d in diags:
+        if d.severity == sevError:
+          result.add(d)
+    # Padded and blank hrefs too: the expansion writes the href stripped.
+    for (href, want) in [("/relative", codeUrlScheme), ("#", codeUrlEmpty),
+        (" /rel ", codeUrlScheme), (" # ", codeUrlEmpty), ("   ", codeUrlEmpty)]:
+      let r = EmailRenderer()
+      let (doc, s) = newDoc(r)
+      let nav = r.child(s, "mailNavbar")
+      discard r.child(nav, "mailNavLink", attrs = [("href", href)],
+        text = "Home")
+      let row = r.child(s, "mailSocial")
+      discard r.child(row, "mailSocialItem", attrs = [("network", "x"),
+        ("href", href)])
+      let errors = errorsOf(renderTree(doc).diagnostics)
+      checkpoint(href)
+      check errors.len == 2
+      check codesOf(errors) == @[want, want]
+      var tags: seq[string] = @[]
+      for e in errors:
+        check e.rules == @["R-BTN-07"]
+        tags.add(e.message.split(' ')[0])
+      check "mailNavLink" in tags
+      check "mailSocialItem" in tags

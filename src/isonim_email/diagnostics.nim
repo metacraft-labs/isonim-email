@@ -160,7 +160,9 @@ const
     ## The plain-text pass wrote nothing but white space: an empty
     ## text part is never sent. Emitted by `text.renderText` (P12).
   codeUrlScheme* = "E-URL-SCHEME"
-    ## A forbidden URL scheme, e.g. a `data:` URI (R-IMG-08). Raised
+    ## A forbidden URL scheme, e.g. a `data:` URI (R-IMG-08), or a link
+    ## that is not an absolute https, `mailto:` or `tel:` URL (R-BTN-07,
+    ## R-TXT-13; collected from `passes/validate.nim`). Raised
     ## from `assets.nim` as `AssetError` (framework-free, same seam as
     ## `StyleError`); the `CODE: message` shape converts via
     ## `toDiagnostic`.
@@ -254,9 +256,9 @@ const
     ## `mailCluster` closer than 8px (R-TBL-12), or a button less than
     ## 44px tall (R-BTN-06). Collected from `passes/lint.nim`.
   codeUrlEmpty* = "E-URL-EMPTY"
-    ## A button, navigation link or social item with no destination: no
-    ## `href`, an empty one or `#` (R-BTN-07). Collected from
-    ## `passes/validate.nim`.
+    ## A button, navigation link or social item (R-BTN-07), or a plain
+    ## link or linked image (R-TXT-13), with no destination: no `href`,
+    ## an empty one or `#`. Collected from `passes/validate.nim`.
   codeLayoutVmlSize* = "E-LAYOUT-VML-SIZE"
     ## A VML button without a px width (R-BTN-04). Collected from
     ## `lower/button.nim`.

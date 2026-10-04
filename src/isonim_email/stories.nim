@@ -69,7 +69,33 @@ type
     ## Duplicate registration, unknown story, or a story whose tree
     ## fails validation (stories are fixed, so that is a bug).
 
+  StoryRender* = object
+    ## One story rendered for a reader of its diagnostics (the preview
+    ## server, the IsoNim editor): the document and its text part, every
+    ## diagnostic the render collected, and the error that refused it
+    ## (`error` empty when it rendered).
+    html*, text*: string
+    diagnostics*: seq[EmailDiagnostic]
+    error*: string
+
 var storyRegistry: OrderedTable[string, Story]
+
+var storyDiagnostics: seq[EmailDiagnostic]
+  ## What the story being rendered by `renderStoryDiagnosed` collected:
+  ## the render paths below add to it as they go, so a story refused
+  ## part-way still shows what was found before the refusal.
+var collectingStoryDiagnostics = false
+  ## True only inside `renderStoryDiagnosed`: a story rendered any other
+  ## way (the capture driver, a golden test) keeps nothing.
+
+proc noteStoryDiagnostics*(found: openArray[EmailDiagnostic]) =
+  ## Adds `found` to the diagnostics of the story being rendered. A
+  ## story whose render closure runs its own pipeline (a reference
+  ## email through `renderEmail`) calls this with that render's
+  ## diagnostics; `renderStoryPipeline` and the `story` template do it
+  ## themselves. Outside `renderStoryDiagnosed` they are not kept.
+  if collectingStoryDiagnostics:
+    storyDiagnostics.add(found)
 
 proc registerStory*(story: Story) =
   ## Registers `story`. A duplicate name raises `StoryError` — two
@@ -103,6 +129,7 @@ proc templateStory*[T](name: string; tpl: EmailTemplate[T]; data: T;
   ## `renderEmail` pipeline on the fixture data with the overrides.
   let render = proc(): StoryHtml {.closure.} =
     let res = renderEmail(tpl, data, target = target, profile = profile)
+    noteStoryDiagnostics(res.diagnostics)
     (res.html, res.text)
   Story(name: name, group: groupOf(name), description: "",
     render: render)
@@ -142,6 +169,27 @@ proc getStory*(name: string): Story =
       "' (registered: " & listStories().join(", ") & ")")
   storyRegistry[name]
 
+proc renderStoryDiagnosed*(story: Story): StoryRender =
+  ## Runs `story` and returns its HTML and text with every diagnostic
+  ## its render collected. A `StoryError` (a story refused for an error
+  ## its render found) is returned in `error`, not raised, with the
+  ## diagnostics found up to it: the preview server and the editor show
+  ## a broken story instead of stopping at it.
+  let outer = storyDiagnostics
+  let wasCollecting = collectingStoryDiagnostics
+  storyDiagnostics = @[]
+  collectingStoryDiagnostics = true
+  try:
+    let (html, text) = story.render()
+    result.html = html
+    result.text = text
+  except StoryError as e:
+    result.error = e.msg
+  finally:
+    result.diagnostics = storyDiagnostics
+    storyDiagnostics = outer
+    collectingStoryDiagnostics = wasCollecting
+
 proc renderStoryPipeline*(doc: EmailNode; target: EmailTarget;
     assets: AssetStore = nil): StoryHtml =
   ## The current render path (lower/document.nim over the passes):
@@ -154,42 +202,53 @@ proc renderStoryPipeline*(doc: EmailNode; target: EmailTarget;
   ## `StoryError` when the tree fails validation or holds an element
   ## with no lowering (`E-LOWER-MISSING`), or when its plain-text part
   ## would be empty (`E-TEXT-EMPTY`): stories are fixed, so any of
-  ## them is a bug in the story.
+  ## them is a bug in the story. Every pass's diagnostics are noted for
+  ## `renderStoryDiagnosed` (this path runs no P10 lint: a story's
+  ## warnings are what these passes report).
   var found = expandPatterns(doc, defaultTheme(), target)
   found.add(validate(doc))
+  noteStoryDiagnostics(found)
   if hasErrors(found):
     raise newException(StoryError,
       "story tree failed validation: " & $found.len &
         " diagnostic(s), first: " & found[0].message)
   let laid = solveLayout(doc, defaultTheme(), target)
+  noteStoryDiagnostics(laid)
   if hasErrors(laid):
     raise newException(StoryError,
       "story tree failed layout: " & laid[0].code & ": " & laid[0].message)
   let styled = applyStyles(doc, defaultTheme(), target)
+  noteStoryDiagnostics(styled.diagnostics)
   let fonts = webFontRules(target, defaultTheme())
+  noteStoryDiagnostics(fonts.diagnostics)
   if hasErrors(fonts.diagnostics):
     raise newException(StoryError,
       "story web fonts: " & fonts.diagnostics[0].message)
   let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
     msoRules = fonts.mso, columns = columnRules(doc),
     swaps = darkSwapImages(doc))
-  discard applyA11y(doc)
+  noteStoryDiagnostics(headRes.diagnostics)
+  noteStoryDiagnostics(applyA11y(doc))
   # With a store, every image is published first and its `src` is the
   # URL the store returned (a story's built-in icons, for one).
   let published = resolveAssets(doc, assets)
+  noteStoryDiagnostics(published.diagnostics)
   if hasErrors(published.diagnostics):
     raise newException(StoryError, "story assets: " &
       published.diagnostics[0].message)
   let urls = checkBackgroundUrls(doc)
+  noteStoryDiagnostics(urls)
   if hasErrors(urls):
     raise newException(StoryError, "story background: " & urls[0].message)
   # P12 reads the semantic tree, before lowering rewrites it in place.
   let plain = renderText(doc)
+  noteStoryDiagnostics(plain.diagnostics)
   if hasErrors(plain.diagnostics):
     raise newException(StoryError, "story text: " &
       plain.diagnostics[0].message)
   let lowered = lowerElements(doc, defaultTheme(), published.assets,
     target = target)
+  noteStoryDiagnostics(lowered)
   if hasErrors(lowered):
     var first = lowered[0]
     for d in lowered:

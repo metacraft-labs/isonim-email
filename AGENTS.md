@@ -36,6 +36,8 @@ just lint            # nim check, tsc, capture-CLI gate, nixfmt, markdownlint
 just format          # nimpretty + nixfmt (alias: just fmt)
 just example-page    # the billing page example rendered by IsoNim's web
                      # renderer, saved as static HTML with screenshots
+just email-preview   # every story on http://127.0.0.1:4610/: transforms,
+                     # widths, schemes, diagnostics, reload on change
 just bench           # benchmarks (none yet; they land later)
 just t               # alias for test
 ```
@@ -137,6 +139,7 @@ tools/test/                        # the concurrent test runners behind
                                    # `just test`, `test-c` and `test-js`
 tools/web/                         # renders an IsoNim web page in the
                                    # pinned Chromium, saved as static HTML
+tools/preview/                     # the preview server (`just email-preview`)
 ```
 
 ## Layer rules
@@ -155,6 +158,39 @@ tools/web/                         # renders an IsoNim web page in the
   header says why.
 - Every `nim c` names `--out:` and `--nimcache:` (never beside the
   source); keep the Justfile and `repro.nim` edges in step.
+
+## Preview server and the IsoNim editor
+
+`just email-preview` serves every registered story (the reference
+emails, the layout and element sets and the capture fixtures) on
+`http://127.0.0.1:4610/` (`--port N`, loopback only). The page lists the
+stories by group and shows the selected one in an iframe: as authored
+or through one of the capture's emulation transforms (gmailWeb, ganga,
+outlookWeb, imagesOff, wordApprox; images off on any of them), at 320px,
+mobile (375px) or desktop (800px) width, in the light or dark scheme
+(emulated in the HTML, so the viewer's own setting does not leak in;
+forced dark is a shot of the pinned Chromium under Blink's automatic dark
+mode), or as its plain-text part. Beside it are the render's
+diagnostics, each with a link to the line that built the element it is
+about (`/source?file=…&line=…`): the story kit's `el`, the layouts'
+`node` and `ui(r)` templates record their call site. The selection is in
+the URL's fragment, so a link to the page names a story and its view.
+
+The server compiles the story driver (`tools/capture/build_stories.nim`,
+its `--preview` mode) into `build/email-preview/`, apart from the
+captures' binary, and watches `src/`, `examples/` and `tests/stories/`:
+a change rebuilds it and the open page reloads the preview in place
+(server-sent events); a change that does not compile shows the
+compiler's output and keeps the last good build. `build-stories --list`
+prints the registered stories as JSON.
+
+The IsoNim editor lists and renders the same stories through its story
+contract: `isonim_email/editor_stories` turns the registry into the
+editor's `StoryGroup`s (one per story group, every story a page) and a
+`ProjectPreviewHook` whose preview is the message's HTML and text part
+on the Web platform (`emailStoryGroups()`, `emailPreviewHook()`,
+`emailEditorPlatforms`, for `newEditorWorkspace`). It imports only the
+editor's data types, so it builds on the C and JS targets.
 
 ## Visual iteration recipe (capture loop)
 

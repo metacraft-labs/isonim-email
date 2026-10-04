@@ -171,6 +171,7 @@ const emailTestSpecs = @[
   "t7_pattern_story_sets",
   "t7_text_part_goldens",
   "t7_domain_view",
+  "t7_editor_stories",
   # WAIVER (2026-09-28): `repro test` is 76/80 — the 4 e2e EXECUTE actions
   # below fail ONLY under engine-monitored execution (`node: pthread_create:
   # Invalid argument` + browser launch failure; the io-monitor interposer
