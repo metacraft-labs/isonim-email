@@ -1,0 +1,14 @@
+[Acme]
+
+Your week
+=========
+
+With images blocked, the logo shows its alt text above the tiles.
+
+Deploys: 42
+Uptime: 99.98%
+Incidents: 3
+Rollbacks: 0
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

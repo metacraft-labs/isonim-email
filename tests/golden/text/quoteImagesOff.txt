@@ -1,0 +1,12 @@
+Customer story
+==============
+
+With images blocked, the avatar (described for screen readers) shows its alt 
+text beside the name.
+
+“It just works, every time.”
+
+— Ada Lovelace, CTO, Example Co
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

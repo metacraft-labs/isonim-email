@@ -1,0 +1,11 @@
+New command
+===========
+
+With images blocked, the icon shows its alt text beside the sentence.
+
+[Tip]
+
+Try acme audit to check every key.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

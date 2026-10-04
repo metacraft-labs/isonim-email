@@ -1,0 +1,14 @@
+Your receipt
+============
+
+Order 1042, paid 3 October 2026.
+
+Subtotal: $1,204.00
+Shipping (express, signature required, insured up to $500): $32.50
+Discount code SUMMER-Supercalifragilisticexpialidociousnessless: −$120.00
+Payment: Visa ending 4242, charged on 3 October 2026
+Tax (VAT 20%): $223.30
+Total: $1,339.80
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

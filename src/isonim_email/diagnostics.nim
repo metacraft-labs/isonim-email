@@ -227,7 +227,11 @@ const
     ## menu is offered). Collected from `passes/validate.nim`.
   codePatternMissingText* = "E-PATTERN-MISSING-TEXT"
     ## A pattern's mandatory text alternative is missing (a countdown's
-    ## deadline text). Collected from `passes/validate.nim`.
+    ## deadline text, a stepper's status, an event's date line).
+    ## Collected from `passes/validate.nim`.
+  codePatternStepperLong* = "E-PATTERN-STEPPER-LONG"
+    ## A `mailStepper` with more than 5 steps: use `mailTimeline`.
+    ## Collected from `passes/validate.nim`.
   codeDarkBandsMerge* = "W-DARK-BANDS-MERGE"
     ## Two adjacent bands that differ in the light palette become
     ## indistinguishable after partial inversion, or in their designed

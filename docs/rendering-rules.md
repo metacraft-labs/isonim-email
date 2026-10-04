@@ -9,7 +9,7 @@
 > **Status:** Normative. This catalogue is the **exact behaviour** the
 > implementation must produce. The rule-traceability test
 > (`tests/t1_rule_traceability.nim`) reads it directly.
-> **Last Updated:** 2026-10-03
+> **Last Updated:** 2026-10-04
 
 This catalogue turns published HTML-email practice (RFCs, vendor
 documentation, caniemail data, framework sources and community write-ups)
@@ -261,7 +261,7 @@ scaffolding, table-layout semantics, and data.**
 
 | ID | Rule | Where | Source | Status |
 |---|---|---|---|---|
-| R-TBL-01 | Outside MSO comments, a layout table is emitted only by these constructs: `mailBox`; `mailColumns(cells\|cellsStacking)`; `mailSidebar(switch_below = 0)`; `mailHero` (its content cell: a height and a vertical alignment, which a `div` cannot have without `display:flex`, R-OL-10; R-VML-06); `mailKeyValue`; steppers, timelines and labelled dividers; `mailTable`; the button; the document wrapper. P10 flags any other non-MSO layout table (`W-TBL-UNEXPECTED`): in the authoring tree, every `table` outside a `mailTable` (the constructs emit theirs in lowering). | P10 | goodemailcode.com; Blocks Edit, "No more tables for email"; Litmus, "Email design with HTML tables" (read) | ✓ (decision) |
+| R-TBL-01 | Outside MSO comments, a layout table is emitted only by these constructs: `mailBox`; `mailColumns(cells\|cellsStacking)`; `mailSidebar(switch_below = 0)`; `mailHero` (its content cell: a height and a vertical alignment, which a `div` cannot have without `display:flex`, R-OL-10; R-VML-06); `mailKeyValue`; steppers, timelines and labelled dividers; `mailTable`; the button; the document wrapper. P10 flags any other non-MSO layout table (`W-TBL-UNEXPECTED`): in the authoring tree, every `table` outside a `mailTable` (the constructs emit theirs in lowering), except the tables a stepper or a timeline writes in its expansion (layout-patterns.md §4.4: their special lowering). | P10 | goodemailcode.com; Blocks Edit, "No more tables for email"; Litmus, "Email design with HTML tables" (read) | ✓ (decision) |
 | R-TBL-02 | **Mirroring.** Any padding, background colour, border or width that Word must honour on a div is repeated on the enclosing MSO ghost cell (`padding`, `bgcolor` + `background-color`, `border`, `width` attr + CSS). The div keeps its own copy for everyone else. | mso/ghost | Blocks Edit, "No more tables for email": Outlook ignores div padding and mis-paints div backgrounds (read) | ◐ (to be confirmed by a Word-engine Outlook capture) |
 | R-TBL-03 | **One padded cell per row.** Word equalises vertical padding across all cells of a row to the largest value. A row whose cells need different vertical padding gets a nested single-cell table per cell instead. | lower/*, mso/* | caniemail css-padding note (read) | ✓ |
 | R-TBL-04 | Gaps are padding on cells or divs, or ⟪mso⟫ spacer rows. Never `gap`, never negative margins, never `margin:auto` alone. | P5 | caniemail css-gap, css-margin (read) | ✓ |
@@ -783,3 +783,11 @@ unsized cells (R-TBL-01, R-TBL-05).
   the light and dark plate pair under `darkMode = designed`; R-TXT-03
   allows a footer's 12px legal text; R-A11Y-10 names the navigation
   table.
+- 2026-10-04: The container and data patterns. R-TBL-01 admits the
+  tables a stepper and a timeline write in their expansion. R-TXT-03's
+  footer exception is the footer's legal line only, never the author's
+  content in the footer. The contrast checks (R-A11Y-07, R-DRK-04) read
+  text on its own element's background first, and skip a cell or block
+  with no visible text (a painted spacer). Captures map Courier New and
+  `monospace` to the pinned Liberation Mono, as a desktop's fontconfig
+  does.

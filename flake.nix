@@ -321,7 +321,12 @@
               impureFontDirectories = [ ];
               # Arabic prefers Noto Sans Arabic UI; the calligraphic Noto
               # Nastaliq Urdu is removed (nix/fonts-arabic.conf says why).
-              includes = [ ./nix/fonts-arabic.conf ];
+              # Courier New and monospace are Liberation Mono
+              # (nix/fonts-mono.conf says why).
+              includes = [
+                ./nix/fonts-arabic.conf
+                ./nix/fonts-mono.conf
+              ];
             }}";
           };
 

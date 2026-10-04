@@ -229,8 +229,8 @@ proc gridDegradations(n: EmailNode; p: GridProps;
       not (view.headCss and view.mediaQueries):
     result.add("without media queries the grid's items shrink with " &
       "the row down to their minimum width and then wrap, as many per " &
-      "row as fit, so a narrow screen may show a short last row (layout " &
-      "patterns §3.4)")
+      "row as fit, so a narrow screen may show a short last row " &
+      "(layout-patterns.md §3.4)")
   var anyBoxed = false
   for it in itemsOf(n):
     if boxed(it):
@@ -380,8 +380,8 @@ proc sidebarDegradations(n: EmailNode; p: SidebarProps;
   if switching and not view.word and not (view.headCss and
       view.mediaQueries):
     result.add("where the two sides wrap without media queries, the " &
-      "second sits directly under the first, with no gap (layout " &
-      "patterns §3.6)")
+      "second sits directly under the first, with no gap " &
+      "(layout-patterns.md §3.6)")
   if switching and boxed(itemsOf(n)[min(1, itemsOf(n).high)]):
     result.add("a side with a background does not stretch to the " &
       "other side's height (R-TBL-10)")

@@ -74,10 +74,30 @@ export function textRunsScript(): string {
     if (!el) continue;
     const cs = getComputedStyle(el);
     if (cs.visibility !== "visible" || parseFloat(cs.opacity) === 0) continue;
+    // One rect per line, covering the line's words only: a line that
+    // holds nothing but white space (a code line's indentation, kept by
+    // pre-wrap) draws no glyph, and would measure as unreadable.
     const range = document.createRange();
-    range.selectNodeContents(n);
     const clip = clipOf(el);
-    const rects = range.getClientRects();
+    const rects = [];
+    const words = /\\S+/g;
+    for (let m = words.exec(text); m !== null; m = words.exec(text)) {
+      range.setStart(n, m.index);
+      range.setEnd(n, m.index + m[0].length);
+      const wr = range.getClientRects();
+      for (let j = 0; j < wr.length; j++) {
+        const w = wr[j];
+        let line = null;
+        for (const q of rects)
+          if (Math.abs(q.top - w.top) < 1 && Math.abs(q.bottom - w.bottom) < 1) line = q;
+        if (line === null)
+          rects.push({ left: w.left, top: w.top, right: w.right, bottom: w.bottom });
+        else {
+          line.left = Math.min(line.left, w.left);
+          line.right = Math.max(line.right, w.right);
+        }
+      }
+    }
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i];
       const l = Math.max(r.left, clip.l);

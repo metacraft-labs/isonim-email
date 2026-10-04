@@ -1,0 +1,16 @@
+Your receipt
+============
+
+Items
+Item | Qty | Amount
+Wireless keyboard (SKU KB-42) | 1 | $49.00
+USB-C cable (SKU CB-07) | 2 | $18.00
+
+Subtotal: $67.00
+Shipping: Free
+Total: $67.00
+
+View your order: https://example.com/orders/1042
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

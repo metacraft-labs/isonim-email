@@ -1,0 +1,11 @@
+Security notice
+===============
+
+With images blocked, the icon disappears (it is decorative) and the title 
+still names the tone.
+
+SUCCESS: Your account is protected
+Two-step sign-in is on for every device.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

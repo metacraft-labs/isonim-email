@@ -1,0 +1,8 @@
+Maintenance
+===========
+
+INFO
+The service is read-only on Sunday from 02:00 to 03:00 UTC.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

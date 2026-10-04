@@ -201,6 +201,23 @@ describe("pixel contrast: in the pinned Chromium", () => {
     );
   });
 
+  it("measures a wrapped line's words, never a line of white space", async () => {
+    // A pre-wrap code line ending in a newline and the next line's
+    // indentation: its second line holds no glyph, and is no run.
+    const { runs, result } = await measure(
+      browser,
+      page(
+        `<pre style="margin:8px;white-space:pre-wrap;color:#111111">` +
+          `one two\n\u00a0\u00a0\u00a0\u00a0<span>three</span></pre>`,
+      ),
+    );
+    assert.deepEqual(
+      runs.map((r) => r.label),
+      ["pre 'one two'", "span 'three'"],
+    );
+    assert.equal(result.pass, true, result.detail);
+  });
+
   it("measures dark text on white as legible and grey text as not", async () => {
     const good = await measure(
       browser,

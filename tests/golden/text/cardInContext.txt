@@ -1,0 +1,22 @@
+What's new
+==========
+
+Two changes this month.
+
+Changes
+-------
+
+Faster exports
+--------------
+
+Exports now finish in half the time.
+
+Shared folders
+--------------
+
+Invite a team to a folder.
+
+Read the changelog: https://example.com/changelog
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

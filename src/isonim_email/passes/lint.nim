@@ -755,18 +755,36 @@ const contrastTags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li",
   "span", "a", "td", "mailbutton"]
   ## The elements whose text the contrast checks read.
 
+proc holdsVisibleText(node: EmailNode): bool =
+  ## True when some text under `node` holds something a reader sees: not
+  ## only white space (a no-break space included) or zero-width
+  ## characters, which spacers and painted cells carry to keep a box
+  ## from collapsing.
+  if node.kind == enText:
+    for ch in node.text.runes:
+      if not ch.isWhiteSpace() and ch.int notin [0x200B, 0x200C, 0x200D,
+          0xFEFF, 0x034F]:
+        return true
+    return false
+  for c in node.children:
+    if holdsVisibleText(c):
+      return true
+  false
+
 proc textPairOf(node: EmailNode; ancestors: seq[EmailNode]): TextPair =
   ## Foreground from the element's own `color` (absent: not ok),
-  ## background from the nearest ancestor `background-color` (a
-  ## button's own fill first), else white. Unparseable colours are not
-  ## ok: P2 owns bad values, not the contrast checks.
+  ## background from the element's own `background-color` (a button's
+  ## fill, a step marker, a date tile's month row), else the nearest
+  ## ancestor's, else white. Unparseable colours are not ok: P2 owns bad
+  ## values, not the contrast checks.
   if node.kind != enElement or
       node.tag.toLowerAscii() notin contrastTags or "color" notin node.styles:
     return
-  var bgValue = ""
-  if node.tag == "mailButton":
-    # A button's label sits on its own fill, when it has one.
-    bgValue = node.styles.getOrDefault("background-color", "")
+  if not holdsVisibleText(node):
+    # A spacer or a painted cell: no text to read.
+    return
+  # Text sits on its own element's background, when it has one.
+  var bgValue = node.styles.getOrDefault("background-color", "")
   for i in countdown(ancestors.high, 0):
     if bgValue.len > 0:
       break
@@ -1192,7 +1210,7 @@ proc lintDarkContrastImpl(node: EmailNode; dark: openArray[DarkDecl];
     return
   if node.kind == enElement and node.tag.toLowerAscii() in ["h1", "h2",
       "h3", "h4", "h5", "h6", "p", "li", "span", "a", "td", "th"] and
-      "color" in node.styles:
+      "color" in node.styles and holdsVisibleText(node):
     var fgValue = darkValueOf(dark, node, "color")
     if fgValue == "":
       fgValue = node.styles["color"]
@@ -1242,7 +1260,7 @@ proc lintDarkContrast*(root: EmailNode;
   lintDarkContrastImpl(root, dark, result)
 
 # ----------------------------------------------------------------------------
-# Adjacent bands that merge in dark mode (patterns §4.1, mailBand)
+# Adjacent bands that merge in dark mode (layout-patterns.md §4.1, mailBand)
 # ----------------------------------------------------------------------------
 
 const bandStep* = 0.1
@@ -1428,6 +1446,19 @@ proc lintImageFormat(node: EmailNode;
 # Construction checks (R-TBL-01, R-TBL-06, R-TBL-15, R-OL-15)
 # ----------------------------------------------------------------------------
 
+proc hiddenTextDegradations(node: EmailNode): seq[ExpectedDegradation] =
+  ## Visually hidden text (R-A11Y-09's styles: a stepper's status line):
+  ## a client that drops `position` or `clip` keeps a 1px box with its
+  ## overflow hidden. Declared, so they report as degradations.
+  if node.kind != enElement or
+      node.styles.getOrDefault("position", "") != "absolute" or
+      "clip" notin node.styles:
+    return
+  for prop in ["position", "clip"]:
+    result.add(expectDegradation(lkProperty, prop, allFamilies,
+      "where it is dropped, the hidden line is a 1px box with its " &
+      "overflow hidden (R-A11Y-09)"))
+
 const msoClosedList* = ["mso-line-height-rule", "mso-table-lspace",
   "mso-table-rspace", "mso-padding-alt", "mso-hide", "mso-font-alt"]
   ## R-OL-15: the only `mso-*` properties the library may emit. A new
@@ -1459,11 +1490,15 @@ const nonCssProps = [("mailstack", "gap"), ("mailcluster", "gap"),
   ## Vocabulary props that arrive as style keywords but are lowered to
   ## other markup, never emitted as the CSS property of that name.
 
+const specialLoweringTags* = ["mailStepper", "mailTimeline"]
+  ## Patterns whose expansion writes its own layout table (their special
+  ## lowering, layout-patterns.md §4.4), which R-TBL-01 allows.
+
 proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
     seq[EmailDiagnostic] =
   ## R-TBL-01 and R-TBL-06 over one authoring element.
   let tag = node.tag.toLowerAscii()
-  var inDataTable, inHead = false
+  var inDataTable, inHead, inSpecial = false
   for a in ancestors:
     if a.kind != enElement:
       continue
@@ -1471,7 +1506,9 @@ proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
     of "mailtable": inDataTable = true
     of "thead": inHead = true
     else: discard
-  if tag == "table" and not inDataTable:
+    if a.tag in specialLoweringTags and a.expanded:
+      inSpecial = true
+  if tag == "table" and not inDataTable and not inSpecial:
     result.add(EmailDiagnostic(severity: sevWarning,
       code: codeTblUnexpected,
       message: "a layout <table> outside the constructs that emit one: " &
@@ -1782,6 +1819,25 @@ proc holdsDirectText(node: EmailNode): bool =
         return true
   false
 
+proc isFooterLegal*(node: EmailNode): bool =
+  ## True when `node` is the legal text of an expanded `mailFooter` (the
+  ## last line of the footer's stack, written from its `legal` prop):
+  ## that line only, never the author's content in the footer.
+  let stack = node.parent
+  if stack == nil or stack.kind != enElement or stack.tag != "mailStack":
+    return false
+  let footer = stack.parent
+  if footer == nil or footer.kind != enElement or
+      footer.tag != "mailFooter" or not footer.expanded:
+    return false
+  if rawValue(footer, "legal").strip().len == 0:
+    return false
+  var last: EmailNode = nil
+  for c in stack.children:
+    if c.kind == enElement:
+      last = c
+  last == node
+
 proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
     seq[EmailDiagnostic] =
   ## R-TXT-03: text a reader sees is at least 14px (a warning below,
@@ -1807,11 +1863,9 @@ proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
   let px = fontSizePx(size)
   if px <= 0:
     return
-  if px >= 12 and px < 14:
+  if px >= 12 and px < 14 and isFooterLegal(node):
     # R-TXT-03 allows 12px in one place: a footer's legal text.
-    for a in ancestors:
-      if a.kind == enElement and a.tag == "mailFooter" and a.expanded:
-        return
+    return
   if px < 12:
     result.add(EmailDiagnostic(severity: sevError, code: codeA11yFontTiny,
       message: "<" & node.tag & "> text is " & formatPx(px) & ": text " &
@@ -1852,7 +1906,7 @@ proc lintTreeImpl(node: EmailNode; profile: AudienceProfile;
         # pattern (its expansion is what is emitted, and is linted).
         continue
       decls.add((prop, value))
-    let own = backgroundDegradations(node)
+    let own = backgroundDegradations(node) & hiddenTextDegradations(node)
     if own.len > 0:
       result.add(lintStyles(node.tag, decls, profile, @expected & own,
         node.origin))

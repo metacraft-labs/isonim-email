@@ -96,12 +96,12 @@ const
     ## The narrowest text side a stacking media object keeps beside its
     ## image (a text column's 320px minimum, R-TBL-11).
   mediaColumnPadding* = 24
+    ## A section's column padding on each side, which the desktop width
+    ## a media object sits in loses.
   mediaSwitchSlack* = 24
     ## How much narrower than the container a reading pane may be and
     ## still show the pair side by side (a webmail's pane is often a
     ## few pixels under 600).
-    ## A section's column padding on each side, which the desktop width
-    ## a media object sits in loses.
   galleryMinItem* = "120px"
     ## A gallery tile's 320px minimum (an image-only cell, R-TBL-11).
 
@@ -244,7 +244,7 @@ proc mediaDegradations(n: EmailNode; p: MediaObjectProps;
       not (view.headCss and view.mediaQueries):
     result.add("without media queries the image and its text wrap " &
       "onto two lines only once the row is too narrow for both, and " &
-      "then sit with no gap between them (layout patterns §3.6)")
+      "then sit with no gap between them (layout-patterns.md §3.6)")
 
 # --- mailZigZag ---------------------------------------------------------------
 
@@ -337,7 +337,7 @@ proc galleryDegradations(n: EmailNode; p: GalleryProps;
       not (view.headCss and view.mediaQueries):
     result.add("without media queries the tiles shrink with the row down " &
       "to their minimum and then wrap, as many per row as fit, so a " &
-      "narrow screen may show a short last row (layout patterns §3.4)")
+      "narrow screen may show a short last row (layout-patterns.md §3.4)")
 
 # --- mailCountdown ------------------------------------------------------------
 
@@ -389,7 +389,7 @@ proc zigZagDegradations(n: EmailNode; p: ZigZagProps;
     result.add("without media queries a row wraps only once it is too " &
       "narrow for its image and text; then the image of an even row sits " &
       "at the far edge (its desktop reversal) and the text directly under " &
-      "it, with no gap (layout patterns §3.6)")
+      "it, with no gap (layout-patterns.md §3.6)")
 
 defineMailPattern(mailZigZag, ZigZagProps, zigZagExpand, zigZagExpected,
   zigZagDegradations)

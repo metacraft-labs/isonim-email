@@ -1,0 +1,12 @@
+Your order
+==========
+
+With images blocked, the thumbnails show their alt text beside each name.
+
+Order 1042
+Item | Qty | Amount
+[Coast] Coast print, A3 (Matte paper) | 1 | $24.00
+[Dunes] Desert print, A4 (Matte paper) | 1 | $24.00
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

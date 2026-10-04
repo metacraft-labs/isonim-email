@@ -1,0 +1,10 @@
+Configuration
+=============
+
+Set ACME_DEPLOY_TOKEN in your environment, then point 
+https://deploy.example.com/Supercalifragilisticexpialidociousnessless at the 
+release you want; --dry-run prints what would change without touching 
+production.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

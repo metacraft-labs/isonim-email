@@ -1,0 +1,13 @@
+Build failed
+============
+
+The step below failed on main. Long lines wrap inside the panel, from its 
+edge.
+
+    proc deploy(target: string) =
+      let url = "https://deploy.example.com/projects/acme/environments/production/releases/Supercalifragilisticexpialidociousnessless"
+      if not reachable(url):
+        raise newException(IOError, "unreachable: " & url)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

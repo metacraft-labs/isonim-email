@@ -491,7 +491,11 @@ proc normaliseDecl(node: EmailNode; tag, prop, val: string; fromToken: bool;
       blendOver(b.color, resolveBg(node, theme)).toHex()
     else:
       b.color.toHex()
-    if target.darkMode == dmDesigned and not fromToken:
+    if target.darkMode == dmDesigned and not fromToken and
+        "@dark:border-color" notin node.styles:
+      # A border whose colour has its own dark pair resolves in dark
+      # mode (a pattern's border: the theme's light value, then the
+      # token's dark one).
       warnDarkRaw(diags, "border-color", val, node.origin)
     let width = formatPx(b.widthPx)
     if tag == "td":

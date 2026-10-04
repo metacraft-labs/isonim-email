@@ -1,0 +1,8 @@
+Incident resolved, dark
+=======================
+
+09:12 UTC — Investigating.
+09:40 UTC — Fix deployed.
+10:05 UTC — Resolved.
+
+Acme Inc., 1 Example Street, Springfield

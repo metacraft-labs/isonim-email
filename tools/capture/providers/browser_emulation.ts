@@ -62,7 +62,9 @@ export const BROWSER_EMULATION_ID = "browser-emulation";
 // captures. 2: forced dark is Blink's automatic dark mode over the light
 // scheme (it was a switch headless Chromium ignores, under the dark one).
 // 3: the provenance records axe-core's result (it recorded none).
-export const BROWSER_EMULATION_VERSION = "3";
+// 4: the pixel contrast check measures a line's words only (a line of
+// nothing but white space measured as unreadable).
+export const BROWSER_EMULATION_VERSION = "4";
 // Bump by hand when crop/mask/wait changes. 2: story images are served
 // from the local fixture host instead of failing to load.
 export const BROWSER_EMULATION_ADAPTER_VERSION = 2;

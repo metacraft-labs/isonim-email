@@ -110,6 +110,8 @@ proc cropAsset*(a: AssetRef; c: CropSpec): CropResult =
     return CropResult(error: "its size is unknown")
   if hasRatio(a.width, a.height, c.rw, c.rh):
     return CropResult(ok: true, asset: a)
-  CropResult(error: "a " & a.mime & " is not re-encoded, so it must " &
+  let article = if a.mime.len > 0 and a.mime[0] in {'a', 'e', 'i', 'o', 'u'}:
+      "an " else: "a "
+  CropResult(error: article & a.mime & " is not re-encoded, so it must " &
     "already be " & $c.rw & ":" & $c.rh & ", and it is " & $a.width &
     "×" & $a.height & ": crop it before sending")

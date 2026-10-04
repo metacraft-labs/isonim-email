@@ -1,0 +1,14 @@
+Customer story
+==============
+
+“We moved forty services in a weekend and nobody noticed, which is the 
+highest praise an infrastructure change can get.
+
+Our on-call pages dropped by half in the first month. Ticket 
+Supercalifragilisticexpialidociousnessless was the last one.”
+
+— Grace Hopper-Okonkwo, Head of Platform Engineering, Example Logistics 
+Group
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

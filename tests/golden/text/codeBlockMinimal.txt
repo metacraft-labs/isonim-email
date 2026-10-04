@@ -1,0 +1,9 @@
+Your API key
+============
+
+Install the client:
+
+    npm install @acme/client
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

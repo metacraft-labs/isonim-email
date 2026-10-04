@@ -1,6 +1,6 @@
 ## The content patterns: what each expands into, its plain-text form,
 ## its accessibility obligations and its own diagnostics (layout
-## patterns §4: the structure patterns `mailHeader`, `mailViewInBrowser`,
+## layout-patterns.md §4: the structure patterns `mailHeader`, `mailViewInBrowser`,
 ## `mailBand`, `mailFooter`, `mailNavLinks`; the hero and media patterns
 ## `mailHero`, `mailMediaObject`, `mailZigZag`, `mailGallery`,
 ## `mailCountdown`), and the checks they brought: adjacent bands that
@@ -152,6 +152,60 @@ proc samples(): OrderedTable[string, Sample] =
   result["mailCountdown"] = proc(r: EmailRenderer; s: EmailNode) =
     discard r.el(s, "mailCountdown", [("src", photo), ("width", "280"),
       ("deadline_text", "Ends 30 September 2026, 23:59 UTC")])
+  result["mailCard"] = proc(r: EmailRenderer; s: EmailNode) =
+    discard r.el(s, "h2", text = "Cards")
+    let c = r.el(s, "mailCard", [("title", "A card"), ("image", photo),
+      ("image_alt", "A photo"), ("cta", "Open"),
+      ("cta_href", "https://example.com/"), ("variant", "elevated")])
+    discard r.el(c, "p", text = "Its body.")
+  result["mailCallout"] = proc(r: EmailRenderer; s: EmailNode) =
+    let c = r.el(s, "mailCallout", [("tone", "warning"), ("title", "Careful"),
+      ("icon", photo)])
+    discard r.el(c, "p", text = "Its body.")
+  result["mailCodeBlock"] = proc(r: EmailRenderer; s: EmailNode) =
+    let c = r.el(s, "mailCodeBlock")
+    r.appendChild(c, r.createTextNode("let x = 1\n  echo x"))
+  result["codeInline"] = proc(r: EmailRenderer; s: EmailNode) =
+    let p = r.el(s, "p", text = "Run ")
+    discard r.el(p, "codeInline", text = "just test")
+  result["mailQuote"] = proc(r: EmailRenderer; s: EmailNode) =
+    let q = r.el(s, "mailQuote", [("name", "Ada"), ("role", "CTO"),
+      ("avatar", photo), ("glyph", "true")])
+    r.appendChild(q, r.createTextNode("It works."))
+  result["mailKeyValue"] = proc(r: EmailRenderer; s: EmailNode) =
+    let k = r.el(s, "mailKeyValue", [("caption", "Summary"),
+      ("total_row", "true")])
+    discard r.el(k, "mailKeyValueRow", [("label", "Subtotal")],
+      text = "$10.00")
+    discard r.el(k, "mailKeyValueRow", [("label", "Total")], text = "$11.00")
+  result["mailLineItems"] = proc(r: EmailRenderer; s: EmailNode) =
+    let l = r.el(s, "mailLineItems", [("caption", "Order 1")])
+    discard r.el(l, "mailLineItem", [("description", "A thing"),
+      ("detail", "SKU 1"), ("qty", "1"), ("amount", "$10.00"),
+      ("thumb", photo)])
+    let cards = r.el(s, "mailLineItems", [("caption", "Order 2"),
+      ("mobile", "cards")])
+    discard r.el(cards, "mailLineItem", [("description", "A thing"),
+      ("qty", "1"), ("amount", "$10.00")])
+  result["mailStatTiles"] = proc(r: EmailRenderer; s: EmailNode) =
+    for n in [3, 4]:
+      let t = r.el(s, "mailStatTiles")
+      for i in 1 .. n:
+        discard r.el(t, "mailStat", [("value", $i), ("label", "Stat " & $i)])
+  result["mailStepper"] = proc(r: EmailRenderer; s: EmailNode) =
+    let st = r.el(s, "mailStepper", [("current", "2")])
+    for l in ["Ordered", "Shipped", "Delivered"]:
+      discard r.el(st, "mailStep", text = l)
+  result["mailStep"] = result["mailStepper"]
+  result["mailTimeline"] = proc(r: EmailRenderer; s: EmailNode) =
+    let t = r.el(s, "mailTimeline")
+    for (time, what) in [("09:00", "Opened."), ("10:00", "Closed.")]:
+      discard r.el(t, "mailTimelineEvent", [("time", time)], text = what)
+  result["mailEvent"] = proc(r: EmailRenderer; s: EmailNode) =
+    let e = r.el(s, "mailEvent", [("month", "Oct"), ("day", "14"),
+      ("date_text", "Tuesday, 14 October 2026, 18:00 CEST"),
+      ("google", "https://example.com/g")])
+    discard r.el(e, "h2", text = "Launch")
 
 const
   ownLowering = ["mailBox", "mailCluster", "mailSidebar", "mailHero"]
@@ -160,30 +214,46 @@ const
   partA = ["mailHeader", "mailViewInBrowser", "mailBand", "mailFooter",
     "mailNavLinks", "mailHero", "mailMediaObject", "mailZigZag",
     "mailGallery", "mailCountdown"]
-    ## The structure and media patterns (layout patterns §4.1, §4.2).
+    ## The structure and media patterns (layout-patterns.md §4.1, §4.2).
+  partB = ["mailCard", "mailCallout", "mailCodeBlock", "codeInline",
+    "mailQuote", "mailKeyValue", "mailLineItems", "mailStatTiles",
+    "mailStepper", "mailStep", "mailTimeline", "mailEvent"]
+    ## The containers and data patterns (layout-patterns.md §4.3, §4.4).
+  specialLowering = ["mailStepper", "mailTimeline"]
+    ## The patterns whose expansion writes its own layout table (their
+    ## special lowering, R-TBL-01); every other table in an expansion is
+    ## a data table's (`mailTable`).
 
 proc checkExpansion(n: EmailNode; vocab: seq[string];
-    bad: var seq[string]) =
+    bad: var seq[string]; special = false; inData = false) =
   ## Every node of an expansion: a vocabulary element, a registered
-  ## pattern, or text; never raw markup.
+  ## pattern, or text; never raw markup, and a `table` only in a data
+  ## table (`mailTable`) or in a special lowering's expansion.
+  var data = inData
   case n.kind
   of enElement:
     if n.tag == "mailRaw" or (n.tag notin vocab and not isPattern(n.tag)):
       bad.add(n.tag)
+    if n.tag == "mailTable":
+      data = true
+    if n.tag == "table" and not data and not special:
+      bad.add("table outside a mailTable")
   of enText:
     discard
   else:
     bad.add($n.kind)
   for c in n.children:
-    checkExpansion(c, vocab, bad)
+    checkExpansion(c, vocab, bad, special, data)
 
 suite "the patterns expand only into the vocabulary":
   test "test_patterns_expand_only_to_vocabulary":
     let names = patternNames()
     # Vacuity guard: the registry is not empty, every structure and
     # media pattern is in it, and every registered pattern has a sample.
-    check names.len >= 18
+    check names.len >= 30
     for p in partA:
+      check isPattern(p)
+    for p in partB:
       check isPattern(p)
     let table = samples()
     for name in names:
@@ -214,7 +284,7 @@ suite "the patterns expand only into the vocabulary":
       check node.expanded
       var bad: seq[string] = @[]
       for c in node.children:
-        checkExpansion(c, vocab, bad)
+        checkExpansion(c, vocab, bad, special = name in specialLowering)
       if bad.len > 0:
         checkpoint(name & " expands into " & bad.join(", "))
       check bad.len == 0
@@ -469,6 +539,28 @@ suite "mailFooter":
     discard r.el(r.section(doc), "p", styles = [("font-size", "12px")],
       text = "Legal.")
     check codeA11yFontSmall in codesOf(renderTree(doc).diagnostics)
+
+  test "test_footer_small_text_exemption_is_the_legal_line_only":
+    # rule: R-TXT-03
+    # The author's own 12px line in a footer is ordinary small text: the
+    # exemption is the legal line the footer writes, nothing else.
+    proc smallDiags(legal: string): seq[EmailDiagnostic] =
+      let r = EmailRenderer()
+      let doc = r.newDoc()
+      discard r.el(r.section(doc), "p", text = "Body.")
+      var a = @[("address", "1 Example Street"),
+        ("unsubscribe", "https://example.com/u")]
+      if legal.len > 0:
+        a.add(("legal", legal))
+      let foot = r.el(r.el(doc, "mailSection"), "mailFooter", a)
+      discard r.el(foot, "p", styles = [("font-size", "12px")],
+        text = "Author's small print.")
+      renderTree(doc).diagnostics
+    for legal in ["Legal.", ""]:
+      let small = smallDiags(legal).filterIt(it.code == codeA11yFontSmall)
+      check small.len == 1
+      if small.len == 1:
+        check "<p> text is 12px" in small[0].message
 
   test "test_footer_contrast_holds_in_every_palette":
     # Light, designed dark, and both inversion models (information

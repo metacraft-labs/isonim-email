@@ -120,7 +120,8 @@ suite "elements without a lowering are errors, never raw tags":
           inc expandedOnly
         elif t.name notin lowered:
           tags.add(t.name)
-    tags.add("mailCard")
+    # (`mailCard` was this tag until it became a pattern: an unknown one.)
+    tags.add("mailCarousel")
     check expandedOnly == 4
     check nonLeaf >= 27
     check tags.len == nonLeaf - lowered.len - expandedOnly + 1

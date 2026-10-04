@@ -231,8 +231,10 @@ suite "crops made by the asset pass":
       assets = s).diagnostics)
     let bad = renderTree(imageDoc("shot.jpg", "1:1"), assets = s)
     check codeAssetCrop in codesOf(bad.diagnostics)
-    check "400×300" in bad.diagnostics[codesOf(bad.diagnostics).find(
+    let badMessage = bad.diagnostics[codesOf(bad.diagnostics).find(
       codeAssetCrop)].message
+    check "400×300" in badMessage
+    check "an image/jpeg is not re-encoded" in badMessage
     check "https://" notin bad.html.split("<img")[1].split(">")[0]
     s.put("anim.gif", gifBytes)
     let gif = renderTree(imageDoc("anim.gif", "circle"), assets = s)

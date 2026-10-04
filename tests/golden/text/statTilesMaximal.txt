@@ -1,0 +1,16 @@
+Your month
+==========
+
+Three tiles share a phone's width; four go two to a row.
+
+Orders shipped this month: 1,204
+Delivered on time: 98.7%
+Revenue: $48k
+
+Open incidents needing attention: 12
+Warnings: 3
+Notes: 7
+Supercalifragilisticexpialidociousnessless: 214
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

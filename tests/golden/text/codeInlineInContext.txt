@@ -1,0 +1,12 @@
+Release notes
+=============
+
+- New --json output.
+- Faster sync.
+
+Upgrade with acme update.
+
+Questions? Reply to this message.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

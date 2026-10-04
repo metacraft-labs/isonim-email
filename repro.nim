@@ -162,6 +162,7 @@ const emailTestSpecs = @[
   "t7_brief",
   "t7_patterns",
   "t7_content_patterns",
+  "t7_container_data_patterns",
   "t7_text_part_goldens",
   # WAIVER (2026-09-28): `repro test` is 76/80 — the 4 e2e EXECUTE actions
   # below fail ONLY under engine-monitored execution (`node: pthread_create:
@@ -196,6 +197,10 @@ const emailTestSpecs = @[
   # pinned Chromium like the e2e actions above (same expected engine
   # defect; `repro test` was not re-run for it).
   "e2e_local_dark_modes_legible",
+  # Added with the data patterns: spawns node and the pinned Chromium
+  # like the e2e actions above (same expected engine defect; `repro
+  # test` was not re-run for it).
+  "e2e_local_line_items",
 ]
 
 package isonim_email:

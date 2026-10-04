@@ -1,0 +1,10 @@
+Your order
+==========
+
+Order 1042
+Item | Amount
+Wireless keyboard | $49.00
+USB-C cable | $18.00
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

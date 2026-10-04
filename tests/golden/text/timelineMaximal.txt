@@ -1,0 +1,15 @@
+Incident report
+===============
+
+Every update, newest last.
+
+14 Oct, 09:12 UTC — We are investigating elevated error rates on the API in 
+the EU region.
+14 Oct, 09:40 UTC — The cause is a failed configuration push; rolling it 
+back.
+14 Oct, 10:05 UTC — Error rates are back to normal. Reference 
+Supercalifragilisticexpialidociousnessless.
+15 Oct, 08:00 UTC — Post-incident review published.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

@@ -1,0 +1,12 @@
+Your week
+=========
+
+Deploys: 42
+Uptime: 99.98%
+Incidents: 3
+
+INFO: Weekly report
+Sent every Monday.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

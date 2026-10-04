@@ -1,0 +1,28 @@
+Account security
+================
+
+SUCCESS: Two-step sign-in is now on for every device you use
+
+Every new sign-in now asks for a code from your phone, including sign-ins 
+from a browser you have used before. Reference 
+Supercalifragilisticexpialidociousnessless.
+
+Manage your devices (https://example.com/devices)
+
+ERROR: Payment failed
+One line of body text.
+
+SUCCESS: Backup complete
+One line of body text.
+
+INFO: New region available
+One line of body text.
+
+NOTE: Scheduled maintenance
+One line of body text.
+
+NOTE: Beta feature
+One line of body text.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

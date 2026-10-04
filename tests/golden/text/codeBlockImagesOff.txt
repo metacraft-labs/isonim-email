@@ -1,0 +1,12 @@
+Deploy notes
+============
+
+With images blocked, the diagram shows its alt text above the commands.
+
+[Deploy diagram]
+
+    git push origin main
+    acme deploy --env production
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

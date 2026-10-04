@@ -1,0 +1,7 @@
+Run the tests
+=============
+
+Run just test before you push.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

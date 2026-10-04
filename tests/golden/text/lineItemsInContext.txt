@@ -1,0 +1,18 @@
+Your order
+==========
+
+Each item is a card on every screen.
+
+Item: Wireless keyboard (SKU KB-42 · $49.00 each)
+Qty: 1
+Amount: $49.00
+
+Item: USB-C cable (SKU CB-07 · $9.00 each)
+Qty: 2
+Amount: $18.00
+
+Subtotal: $67.00
+Total: $67.00
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

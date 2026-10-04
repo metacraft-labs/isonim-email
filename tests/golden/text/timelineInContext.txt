@@ -1,0 +1,14 @@
+Incident report
+===============
+
+SUCCESS: Resolved
+All systems normal.
+
+09:12 UTC — Investigating.
+09:40 UTC — Fix deployed.
+10:05 UTC — Resolved.
+
+Status page: https://example.com/status
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

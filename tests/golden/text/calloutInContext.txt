@@ -1,0 +1,14 @@
+Elevated error rates
+====================
+
+Between 09:12 and 10:05 UTC some requests failed.
+
+ERROR: Action needed
+Retry the jobs that failed in that window.
+
+Affected jobs
+Job | Status
+nightly-export | failed
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

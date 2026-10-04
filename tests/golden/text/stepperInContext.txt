@@ -1,0 +1,15 @@
+Your order has shipped
+======================
+
+It arrives on Thursday.
+
+Step 2 of 4: Shipped. Next: Out for delivery.
+
+[Print]
+
+Coast print, A3 — $24.00
+
+Track your parcel: https://example.com/track
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

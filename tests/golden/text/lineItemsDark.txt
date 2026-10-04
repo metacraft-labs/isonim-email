@@ -1,0 +1,13 @@
+Your order, dark
+================
+
+Order 1042
+Item | Qty | Amount
+Wireless keyboard (SKU KB-42 · $49.00 each) | 1 | $49.00
+USB-C cable (SKU CB-07 · $9.00 each) | 2 | $18.00
+
+Item: Desk lamp (SKU LP-3)
+Qty: 1
+Amount: $39.00
+
+Acme Inc., 1 Example Street, Springfield

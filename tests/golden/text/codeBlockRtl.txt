@@ -1,0 +1,10 @@
+مفتاح الواجهة
+=============
+
+ثبّت العميل:
+
+    npm install @acme/client
+    acme login --key KEY
+
+شركة أكمي، ١ شارع المثال، الرياض · إلغاء الاشتراك 
+(https://example.com/unsubscribe)

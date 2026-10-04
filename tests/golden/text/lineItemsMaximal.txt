@@ -1,0 +1,23 @@
+Invoice 2026-118
+================
+
+Readable at 320px: three columns, the SKU and unit price under each name.
+
+Invoice 2026-118
+
+Description: Ergonomic split keyboard with walnut wrist rests and
+  replaceable switches (SKU KB-SPLIT-42 · $189.00 each)
+Qty: 1
+Amount: $189.00
+
+Description: Braided USB-C to USB-C cable, 2 m (SKU CB-07 · $9.00 each)
+Qty: 12
+Amount: $108.00
+
+Description: Gift wrapping Supercalifragilisticexpialidociousnessless
+  (Reference Supercalifragilisticexpialidociousnessless)
+Qty: 1
+Amount: $4.50
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

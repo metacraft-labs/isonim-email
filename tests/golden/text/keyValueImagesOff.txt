@@ -1,0 +1,13 @@
+[Acme]
+
+Your receipt
+============
+
+With images blocked, the logo shows its alt text above the summary.
+
+Subtotal: $120.00
+Tax: $12.00
+Total: $132.00
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

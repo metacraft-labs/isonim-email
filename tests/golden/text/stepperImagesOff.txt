@@ -1,0 +1,11 @@
+[Acme]
+
+Your order has shipped
+======================
+
+With images blocked, the logo shows its alt text; the stepper has no images.
+
+Step 2 of 4: Shipped. Next: Out for delivery.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

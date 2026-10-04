@@ -1,0 +1,8 @@
+Your receipt, dark
+==================
+
+Subtotal: $120.00
+Tax: $12.00
+Total: $132.00
+
+Acme Inc., 1 Example Street, Springfield

@@ -1,0 +1,16 @@
+Notices, dark
+=============
+
+WARNING: Disk almost full
+The panel and its accent take their dark pairs.
+
+ERROR: Payment failed
+The panel and its accent take their dark pairs.
+
+SUCCESS: Backup complete
+The panel and its accent take their dark pairs.
+
+INFO: New region available
+The panel and its accent take their dark pairs.
+
+Acme Inc., 1 Example Street, Springfield

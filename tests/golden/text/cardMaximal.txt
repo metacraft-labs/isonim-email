@@ -1,0 +1,20 @@
+Picked for you
+==============
+
+An elevated card with an image cropped to 16:9, a long title, its text and a 
+button.
+
+This week
+---------
+
+Two nights by the coast, with breakfast and a guided walk on Sunday morning
+---------------------------------------------------------------------------
+
+A cottage above the harbour, breakfast at the pier café and a walk to the 
+lighthouse with a local guide. Booking reference 
+Supercalifragilisticexpialidociousnessless.
+
+See the dates: https://example.com/coast
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

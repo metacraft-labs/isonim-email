@@ -21,8 +21,11 @@
 ## (a boolean) and `family` (from the families with a selector; R-OL-02,
 ## R-RAW-05, R-RAW-06), and a `mailTable` holds exactly one `table`
 ## (R-TBL-18). The content patterns' own checks are here too: a
-## `mailNavLinks` of more than five links (`W-PATTERN-NAV-LONG`) and a
-## `mailCountdown` without its deadline text (`E-PATTERN-MISSING-TEXT`).
+## `mailNavLinks` of more than five links (`W-PATTERN-NAV-LONG`), a
+## `mailStepper` of more than five steps (`E-PATTERN-STEPPER-LONG`), and
+## a mandatory text alternative that is missing (`E-PATTERN-MISSING-TEXT`):
+## a `mailCountdown`'s deadline text, a `mailStepper`'s status (its
+## `current` step and that step's label) and a `mailEvent`'s date line.
 ##
 ## `mailRaw` (R-RAW-01…04): every use is reported once as `I-RAW-USED`,
 ## and each of its payloads is read by `raw.nim`: markup that would
@@ -199,11 +202,33 @@ proc countTag(node: EmailNode; tag: string): int =
 
 const navLinksMax = 5
   ## Links in a `mailNavLinks` before `W-PATTERN-NAV-LONG`.
+const stepperMax = 5
+  ## Steps in a `mailStepper` before `E-PATTERN-STEPPER-LONG`.
+
+proc stepTexts(node: EmailNode; acc: var seq[string]) =
+  ## The labels of the `mailStep`s under `node`, in order (the steps
+  ## stay in a stepper's expansion around their labels).
+  for c in node.children:
+    if c.kind != enElement:
+      continue
+    if c.tag == "mailStep":
+      var t = ""
+      proc collect(x: EmailNode) =
+        if x.kind == enText:
+          t.add(x.text)
+        for y in x.children:
+          collect(y)
+      collect(c)
+      acc.add(t.strip())
+    else:
+      stepTexts(c, acc)
 
 proc checkContentPatterns(node: EmailNode; diags: var seq[EmailDiagnostic]) =
   ## The content patterns' own diagnostics (layout-patterns.md §4): a
-  ## navigation of more than five links (`W-PATTERN-NAV-LONG`), and a
-  ## countdown without its deadline in text (`E-PATTERN-MISSING-TEXT`).
+  ## navigation of more than five links (`W-PATTERN-NAV-LONG`), a stepper
+  ## of more than five steps (`E-PATTERN-STEPPER-LONG`), and a countdown
+  ## without its deadline in text, a stepper whose status cannot be
+  ## written or an event without its date line (`E-PATTERN-MISSING-TEXT`).
   ## Read from the pattern element, whose props stay on it, and from
   ## its expansion (the links are `mailNavLink`s there).
   case node.tag
@@ -221,6 +246,49 @@ proc checkContentPatterns(node: EmailNode; diags: var seq[EmailDiagnostic]) =
           "collapsing menu is offered (most clients drop the media " &
           "queries one needs): keep the five that matter, and put the " &
           "rest in the footer (layout-patterns.md §4.1)",
+        origin: node.origin))
+  of "mailStepper":
+    var labels: seq[string] = @[]
+    stepTexts(node, labels)
+    if labels.len > stepperMax:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codePatternStepperLong,
+        message: "mailStepper with " & $labels.len & " steps: more than " &
+          $stepperMax & " do not fit a phone's width in one row (the " &
+          "stepper never stacks); use mailTimeline, which lists any " &
+          "number of events (layout-patterns.md §4.4)",
+        origin: node.origin))
+    let raw = node.attrs.getOrDefault("current",
+      node.styles.getOrDefault("current", "")).strip()
+    var current = 0
+    try:
+      current = parseInt(raw)
+    except ValueError:
+      discard
+    if current < 1 or current > labels.len or
+        labels[current - 1].len == 0:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codePatternMissingText,
+        message: "mailStepper " & (if raw.len == 0: "without current" else:
+          "current = " & raw & (if current >= 1 and
+            current <= labels.len: ", a step without a label" else:
+            ", which names none of its " & $labels.len & " steps")) &
+          ": the status line (\"Current step: Shipped (2 of 4)\", " &
+          "visually hidden, and the text part's \"Step 2 of 4: …\") is " &
+          "the stepper's meaning for a screen reader and a plain-text " &
+          "reader, and cannot be written; set current to the step the " &
+          "order is at (layout-patterns.md §4.4)",
+        origin: node.origin))
+  of "mailEvent":
+    let dateText = node.attrs.getOrDefault("date_text",
+      node.styles.getOrDefault("date_text", "")).strip()
+    if dateText.len == 0:
+      diags.add(EmailDiagnostic(severity: sevError,
+        code: codePatternMissingText,
+        message: "mailEvent without date_text: the date tile is " &
+          "decoration, hidden from screen readers and the text part, so " &
+          "the full date and time must be written out (\"Tuesday, 14 " &
+          "October 2026, 18:00–20:00 CEST\") (layout-patterns.md §4.4)",
         origin: node.origin))
   of "mailCountdown":
     let deadline = node.attrs.getOrDefault("deadline_text",
@@ -419,7 +487,7 @@ proc validate*(root: EmailNode): seq[EmailDiagnostic] =
         "mailSocialItem"]:
       checkHref(node, result)
     if node.kind == enElement and node.tag in ["mailNavLinks",
-        "mailCountdown"]:
+        "mailCountdown", "mailStepper", "mailEvent"]:
       checkContentPatterns(node, result)
     if node.kind == enElement and node.tag == "mailIf":
       checkIf(node, result)

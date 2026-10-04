@@ -7,7 +7,9 @@
 ## Pure tree building: identical on the C and JS targets.
 
 import std/[strutils, tables]
+import isonim/dsl/vocabulary
 import ../renderer
+import ../vocabulary as emailVocabulary
 import ../target
 import ../patterns
 import ../style/shorthand
@@ -148,7 +150,7 @@ proc htmlAndText*(ctx: ExpandCtx; n: EmailNode; html: EmailNode;
     text: openArray[EmailNode]): EmailNode =
   ## `html` for the HTML part and `text` for the plain-text part: a
   ## `div` holding `htmlOnly(html)` and `textOnly(text…)` (layout
-  ## patterns §4: the text form a pattern writes when it differs from
+  ## layout-patterns.md §4: the text form a pattern writes when it differs from
   ## what its expansion would).
   result = el(ctx, n, "div")
   let h = el(ctx, n, "htmlOnly")
@@ -159,3 +161,71 @@ proc htmlAndText*(ctx: ExpandCtx; n: EmailNode; html: EmailNode;
     if x != nil:
       ctx.r.appendChild(t, x)
   ctx.r.appendChild(result, t)
+
+proc plainText*(n: EmailNode): string =
+  ## What `n` says in the text part, on one line: its text, white space
+  ## collapsed, a `br` a space, `htmlOnly` content left out and
+  ## `textOnly` content kept (a value cell's own text form).
+  proc walk(x: EmailNode; acc: var string) =
+    case x.kind
+    of enText:
+      acc.add(x.text)
+    of enElement:
+      if x.tag == "htmlOnly":
+        return
+      if x.tag == "br":
+        acc.add(' ')
+        return
+      # A block's text is a word apart from its neighbours'.
+      let inline = x.tag in ["span", "strong", "b", "em", "i", "u", "s",
+        "small", "sup", "sub", "a", "code", "codeInline"]
+      if not inline:
+        acc.add(' ')
+      for c in x.children:
+        walk(c, acc)
+      if not inline:
+        acc.add(' ')
+    else:
+      discard
+  var s = ""
+  walk(n, s)
+  splitWhitespace(s).join(" ")
+
+proc linesPara*(ctx: ExpandCtx; n: EmailNode; lines: openArray[string]):
+    EmailNode =
+  ## One paragraph of `lines`, a `br` between them: the text part writes
+  ## them as consecutive lines (`label: value`, `time — event`).
+  result = el(ctx, n, "p")
+  for i, l in lines:
+    if i > 0:
+      add(ctx, result, el(ctx, n, "br"))
+    add(ctx, result, ctx.r.createTextNode(l))
+
+const visuallyHiddenStyles* = [("mso-hide", "all"), ("position", "absolute"),
+  ("width", "1px"), ("height", "1px"), ("margin", "0"),
+  ("overflow", "hidden"), ("clip", "rect(0 0 0 0)")]
+  ## Text a screen reader reads and a screen does not show: the hidden
+  ## caption's styles (catalogue R-A11Y-09). A client that drops
+  ## `position` keeps a 1px box with its overflow hidden.
+
+proc visuallyHidden*(ctx: ExpandCtx; n: EmailNode; text: string):
+    EmailNode =
+  ## A paragraph holding `text`, visually hidden (`visuallyHiddenStyles`).
+  el(ctx, n, "p", styles = visuallyHiddenStyles, text = text)
+
+proc itemTagDef*(name, parent: string; P: typedesc): TagDef
+    {.compileTime.} =
+  ## The static-vocabulary entry of a pattern's item element (a
+  ## `mailKeyValueRow`, a `mailLineItem`): one attribute per field of
+  ## `P`, allowed only in `parent`.
+  result = patternTagDef(name, P)
+  result.allowedParents = @[parent]
+
+template defineMailItem*(name: untyped; parent: string; props: typedesc) =
+  ## Declares `name`, an item element that only `parent` holds and reads
+  ## (with `readProps[props]`) when it expands: the item joins the static
+  ## vocabulary, so a template may write it inside its pattern (its
+  ## attributes checked), and never reaches the output on its own; one
+  ## left anywhere else is `E-LOWER-MISSING`.
+  static:
+    registerPatternTag(itemTagDef(astToStr(name), parent, props))

@@ -1,0 +1,15 @@
+Get started
+===========
+
+1. Install the command-line tool:
+
+    brew install acme
+
+2. Sign in with your key:
+
+    acme login
+
+Read the guide: https://example.com/docs
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

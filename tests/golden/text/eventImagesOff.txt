@@ -1,0 +1,17 @@
+[Acme]
+
+You're invited
+==============
+
+With images blocked, the logo shows its alt text; the date tile is text and 
+stays.
+
+Live demo
+---------
+
+Monday, 3 November 2026, 10:00 GMT
+
+Google Calendar (https://calendar.example.com/google/demo)
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

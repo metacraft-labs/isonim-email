@@ -1,0 +1,24 @@
+Two trips
+=========
+
+With images blocked, each card's image shows its alt text above the title.
+
+Coming up
+---------
+
+The forest
+----------
+
+Two nights, breakfast included.
+
+Book: https://example.com/book
+
+The lake
+--------
+
+Two nights, breakfast included.
+
+Book: https://example.com/book
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

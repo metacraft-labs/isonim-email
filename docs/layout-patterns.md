@@ -11,11 +11,11 @@
 > Built so far: the scaffolding (§2), every layout primitive (§3:
 > `mailStack`, `mailBox`, `mailColumns` with its four strategies,
 > `mailGrid`, `mailCluster`, `mailSidebar`) and `defineMailPattern`
-> (§4, §5), and the structure and media patterns (§4.1, §4.2). The
-> other content patterns (§4.3–§4.5) are specified here and not yet
-> implemented; an element without a lowering is reported
+> (§4, §5), and the structure, media, container and data patterns
+> (§4.1–§4.4). The actions and inline items (§4.5) are specified here
+> and not yet implemented; an element without a lowering is reported
 > (`E-LOWER-MISSING`), never emitted raw.
-> **Last Updated:** 2026-10-03
+> **Last Updated:** 2026-10-04
 
 Email has settled ways of building things. How tables nest, where widths
 and padding go, and how gaps, cards, grids, fixed+fluid rows and
@@ -533,107 +533,228 @@ designed`, in their designed dark colours (a band without a background
 
 **`mailCard`**
 
-- _Props:_ `image` (optional, top), `title`, a body slot, `cta`,
-  `variant: plain|bordered|elevated`.
-- _Built from:_ `mailBox(border for bordered/elevated,
-shadow = sm for elevated)` holding a Stack of image, heading, body and
-  CTA.
-- _Special:_ the heading level comes from the context (`level` prop, default
-  `h3`).
-- _Text:_ title underlined, body, CTA.
+- _Props:_ `title`, `level` (`h2`, `h3` or `h4`, default `h3`: the
+  heading level the card's context needs), `image: Url` (on top),
+  `image_alt` (required with an image unless `decorative`),
+  `decorative: bool`, `image_ratio` (`W:H`: the image cropped to it
+  before sending, R-IMG-13), `cta` (the button's label), `cta_href`
+  (required with a `cta`), `variant: plain|bordered|elevated =
+bordered`.
+- _Content:_ the body.
+- _Built from:_ `mailBox(padding = space.5, border_radius = 8px)` on
+  `color.surface.card`, with a 1px `color.border.subtle` border when
+  `bordered` or `elevated` and `shadow = sm` when `elevated` (a shadow
+  always keeps its border, R-TBL-09), holding a `mailStack(gap =
+space.3)` of the image (fluid, the box's full width, R-IMG-11, and
+  `fluid_on_mobile`, R-IMG-09: a card a stacked row widens stays
+  filled), the
+  heading (no margin of its own), the body and a `mailButton` for the
+  CTA. Colours are theme tokens, dark-paired under `darkMode =
+designed`.
+- _Special:_ the heading level comes from the context (`level`).
+- _Text:_ the title underlined, the body, the CTA as `label: url`. The
+  image is the HTML's alone: the title says what the card is.
 
 **`mailCallout`**
 
-- _Props:_ `tone: Tone`, `title`, a body slot, `icon` (optional).
-- _Built from:_ a two-cell table (`mailSidebar(fixed = 4px)`). The first
-  cell is the **accent drawn as a cell** (`bgcolor`, a zero font size),
-  not `border-left`. The second is a `mailBox` with the tone's `.bg`
-  colour (Foundation for Emails callout).
-- _A11y:_ the tone is never conveyed by colour alone. The title starts with
-  the tone word (e.g. "Warning:") unless `title` already carries it.
-- _Text:_ `WARNING: title`, then the body.
+- _Props:_ `tone: Tone = info`, `title`, `label` (the tone word; by
+  default `Note` for `neutral` and `primary`, `Info`, `Success`,
+  `Warning`, `Error` for the others), `icon: Url` (24px, decorative: the
+  tone word carries the meaning).
+- _Content:_ the body.
+- _Built from:_ a two-cell table, `mailSidebar(fixed = 4px, gap = 0,
+switch_below = 0)`. The first cell is the **accent drawn as a cell**: a
+  side holding no text, painted the tone's colour (`color.status.*`;
+  `color.accent.primary` for `primary`, `color.text.secondary` for
+  `neutral`) with a zero font size, so it paints its whole cell, the
+  height of the row (§3.6), never a `border-left`. The second is a
+  `mailBox(padding = 12px 16px)` on the tone's `.bg` colour
+  (`color.surface.subtle` for `neutral` and `primary`) holding a
+  `mailStack(gap = space.2)` of the title line (bold) and the body; with
+  an `icon`, the stack sits beside it in a `mailSidebar(fixed = 24px,
+gap = space.3, valign = top, switch_below = 0)` (Foundation for Emails
+  callout).
+- _A11y:_ the tone is never conveyed by colour alone. The title line
+  starts with the tone word (`Warning: title`) unless `title` already
+  does; without a title it is the tone word alone.
+- _Text:_ `WARNING: title` (the tone word upper-cased), then the body.
 
 **`mailCodeBlock`** / **`codeInline`**
 
-- _Built from:_ `mailBox(background = tok"color.surface.subtle")` holding a
-  `pre`.
+- _Content:_ the code: text, with inline elements (`span`, `strong`,
+  `b`, `em`, `i`, `u`, `br`) for highlighting.
+- _Built from:_ `mailBox(padding = 12px 16px, border_radius = 6px)` on
+  `color.surface.subtle` (dark-paired) holding a `pre` (`font.mono`,
+  14px/20px, no margin). `codeInline` is a `code` element on
+  `color.border.subtle` (the subtle surface barely shows on white),
+  `padding:0 4px` and a 4px radius, in `font.mono` at the size of the
+  text around it, breaking a long token rather than widening its line.
+  Both read left to right (`dir="ltr"`), the block at the start of its
+  line, in a right-to-left message too.
 - _Special:_
   - `white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere`,
     with no horizontal scroll (caniemail `css-overflow`);
-  - leading indentation converted to `&nbsp;`;
-  - highlighting as inline `span` colours only, with a palette that passes
-    R-DRK-04 in both inversion modes;
-  - font stack ends in `'Courier New', monospace`.
-- _Text:_ the code verbatim, indented 4 spaces.
+  - leading indentation (spaces; a tab counts four) converted to
+    no-break spaces;
+  - highlighting as inline `span` colours only, which the contrast
+    checks hold to the same thresholds as any text, in the light and
+    designed dark palettes and under both inversion models (R-DRK-04);
+  - the font stack ends in `'Courier New', monospace` (`font.mono`,
+    R-TXT-05).
+- _Text:_ the block: the code verbatim, indented 4 spaces. Inline: its
+  text.
 
 **`mailQuote`** (testimonial)
 
-- _Built from:_ a `mailStack` of a `blockquote style="margin:0"` or `p`
-  with typographic quotes, plus a `mailMediaObject(stack = never)` for the
-  avatar, name and role.
+- _Props:_ `name` (required), `role`, `avatar: Url`, `avatar_alt`
+  (default empty: the avatar is decorative, the name follows it),
+  `glyph: bool = false` (a large decorative quotation mark above the
+  quotation).
+- _Content:_ the quotation: inline content (one paragraph) or `p`s.
+- _Built from:_ a `mailStack(gap = space.3)` of the glyph (when
+  `glyph`: `“`, 40px, `color.accent.primary`, `aria-hidden`), the
+  quotation as `p`s (18px/28px) inside typographic quotes (`“…”`, which
+  the glyph replaces when it is drawn), and the attribution: the name
+  (bold) above the role (`type.small`, `color.text.secondary`), beside
+  the avatar (square, or a pre-cropped circular PNG as in
+  `mailAvatarName`) in a `mailMediaObject(image_width = 48, stack =
+never, valign = middle)` when there is one. Not a
+  `blockquote`: webmails fold one away as quoted mail (R-TXT-11).
 - _A11y:_ decorative quote glyphs are `aria-hidden`.
+- _Text:_ the quotation inside typographic quotes, then `— Name, role`.
 
 ### 4.4 Data patterns
 
 **`mailKeyValue`** (summary and totals)
 
-- _Props:_ `rows: seq[(label, value, emphasis)]`, `total_row: bool`.
-- _Built from:_ `mailColumns(strategy = cells)` per row. Values are
-  right-aligned with `white-space:nowrap`, and the total row has a top
-  border.
-- _Special:_ never stacks. The keys use `th scope="row"` in a real table
-  (non-presentation): it reads better in screen readers than a
-  presentation table and costs nothing.
+- _Props:_ `caption` (the data table's caption, required as for any
+  `mailTable`: `E-A11Y-TABLE-CAPTION`), `total_row: bool = false` (the
+  last row is the total).
+- _Content:_ `mailKeyValueRow(label, emphasis: bool)` items, each
+  holding its value.
+- _Built from:_ a `mailTable(caption, mobile = keep, border = none)`,
+  one row per item: the label a `th scope="row"` (start-aligned, regular
+  weight unless `emphasis`, `nowrap` when it is 20 characters or fewer,
+  so a wide value never squeezes it), the value a `td` aligned to the
+  end, with
+  `white-space:nowrap` when it is short (20 characters or fewer: an
+  amount; a longer value wraps rather than widen the row past a phone),
+  each cell padded `6px 0`. The total row is bold, with a 1px top border
+  in `color.border.subtle` (dark-paired) and 12px above its text.
+- _Special:_ never stacks: two cells fit at 320px. The keys use `th
+scope="row"` in a real table (non-presentation): it reads better in
+  screen readers than a presentation table and costs nothing.
 - _Text:_ `label: value` lines (no dot leaders or column alignment: most
-  clients show plain text in a proportional face, where they drift).
+  clients show plain text in a proportional face, where they drift),
+  written by the pattern (`textOnly`): the table walk would write
+  `label | value`.
 
 **`mailLineItems`** (invoice)
 
-- _Props:_ `items: seq[LineItem]` (description, sub-line, qty, amount,
-  optional thumb), `caption`, `mobile: auto|cards`.
+- _Props:_ `caption` (required, as for any `mailTable`), `mobile:
+auto|cards = auto`, `item_label = "Item"`, `qty_label = "Qty"`,
+  `amount_label = "Amount"`, `thumb_width = 48`.
+- _Content:_ `mailLineItem(description, detail, qty, amount, thumb,
+thumb_alt)` items: `description` and `amount` are required; `detail`
+  is the second line (SKU, unit price); `thumb` a thumbnail (decorative
+  unless `thumb_alt`).
+- _Built from:_ a `mailTable(caption, mobile = keep)` of **at most 3
+  columns**: a header row (`Item | Qty | Amount`, the last two
+  end-aligned) and one row per item. The description cell holds the
+  description and, under it, the detail (`type.small`,
+  `color.text.secondary`); with a thumbnail, both sit beside it in a
+  nested `mailSidebar(fixed = thumb_width, valign = top, gap = space.3,
+switch_below = 0)`, never a 4th column. Quantity and amount are
+  end-aligned and `nowrap`; without any quantity there is no quantity
+  column. The table's outer cells have no padding on its outer edges,
+  so its text lines up with the text around it.
 - _Special:_
-  - The desktop design is **readable at 320px**: at most 3 columns
-    (description | qty | amount). SKU and unit price are a second line in
-    the description cell. Amounts are right-aligned and `nowrap`. A
-    thumbnail is a nested `mailSidebar` inside the description cell, not a
-    4th column.
-  - `mobile = cards` (or `auto` with more than 3 columns): each row becomes a
-    `mailKeyValue` card. This is the only stacking data design, and it
-    works without CSS because it is the default rendering, not a media-query
-    switch.
-- _Text:_ as a `mailTable`: one line per row with cells joined by `|`,
-  or `label: value` blocks.
+  - The desktop design is **readable at 320px**: SKU and unit price are
+    the description's second line, so no stacking is needed (and none
+    happens without CSS).
+  - `mobile = cards`: a `mailStack(gap = space.3)` of bordered
+    `mailBox`es, one per item, each holding a `mailKeyValue` (its caption
+    the description) of `Item`, `Qty` and `Amount` (emphasised), beside
+    the thumbnail in a `mailSidebar` when there is one. This is
+    the only stacking data design, and it works without CSS because it
+    is every client's rendering, not a media-query switch. `auto` is the
+    table: the design never has more than 3 columns.
+- _Text:_ as a `mailTable`: the caption, then one line per row with
+  cells joined by `|` (the description cell reads `description
+(detail)`), or `label: value` blocks; cards: each card's `label: value`
+  lines.
 
 **`mailStatTiles`**
 
-- _Props:_ `stats: seq[(value, label, tone)]`, 2–4 items.
-- _Built from:_ 2–3 items use `mailColumns(strategy = cells)`; 4 items use
-  `mailGrid(columns = 4, mobile_columns = 2)`. Each tile is a `mailBox` with
-  `valign = middle`, `align = center`, a large number `p` and a label `p`.
-- _A11y:_ the number and unit share one text node.
+- _Content:_ `mailStat(value, label, tone = neutral)` items, 2–4 (a
+  `value` and a `label` each; another count is `E-VOCAB-BAD-VALUE`).
+- _Built from:_ 2–3 items use `mailColumns(strategy = cells, gutter =
+space.3, valign = middle)`, each tile its column's cell painted as a
+  box (background, 8px radius, padding `16px 4px`), so the tiles share a
+  height, with `min_width = 72px` (a short stat, R-TBL-11); 4 items use
+  `mailGrid(columns = 4, mobile_columns = 2, gutter = space.3,
+min_item = 72px)` of `mailBox`es (ragged when their labels wrap
+  differently, R-TBL-10). Each tile holds the value (a `p`, 28px/34px
+  bold, 24px/30px when three tiles share a phone's width, centred, in the
+  tone's colour) above the label (a `p`,
+  `type.small`, centred, `color.text.secondary`). Tones: `neutral` is
+  `color.text.primary` on `color.surface.subtle`, `primary` the accent on
+  it; the status tones are their colour on their `.bg`.
+- _A11y:_ the number and its unit share one text node (the `value`).
 - _Text:_ `label: value` lines.
 
 **`mailStepper`** (horizontal order status, 3–5 steps)
 
-- _Special lowering (bespoke geometry):_ a fixed, non-stacking two-row
-  table (_design rule_; no framework ships one).
-  - Row 1: step marker cells (≥ 28px, number or check glyph,
-    `border-radius:50%`, which is square in Word) alternating with connector
-    cells (`height:2px` `bgcolor`).
-  - Row 2: labels (≥ 12px).
-  - Fits 320px at 5 steps. More than 5 steps is an error that points to
-    `mailTimeline`.
+- _Props:_ `current: int` (the current step, from 1), `status` (the
+  visually hidden line, default `Current step: {label} ({n} of {m})`),
+  `text` (the plain-text line, default `Step {n} of {m}: {label}. Next:
+{next label}.`, with no `Next` at the last step).
+- _Content:_ `mailStep`s, each holding its label.
+- _Special lowering (bespoke geometry):_ a fixed, non-stacking table of
+  two rows (_design rule_; no framework ships one). The expansion writes
+  the table itself, which R-TBL-01 allows for steppers, rather than a
+  primitive. One column per step, `100/m`% wide:
+  - Row 1 (`aria-hidden`): each step's marker, a 28px circle
+    (`border-radius:50%`, square in Word) holding the step's number, or
+    a check glyph once the step is done, between the halves of its
+    connectors: lines drawn as 2px-high `bgcolor` cells, so each
+    connector runs from marker to marker (none before the first step or
+    after the last). Done and current markers are `color.accent.primary`
+    with `color.accent.primaryText`; later ones a 2px
+    `color.border.subtle` ring around a `color.text.secondary` number. A
+    connector is the accent up to the current step, `color.border.subtle`
+    after it.
+  - Row 2: the labels (`type.small`, 14px, ≥ 12px), each centred under
+    its marker, the current one bold.
+  - Fits 320px at 5 steps, about 60px a step on a phone: a label word
+    longer than that breaks inside its step today, which is a defect
+    still to fix, not a declared degradation; keep labels short. More
+    than 5 steps is `E-PATTERN-STEPPER-LONG`,
+    which points to `mailTimeline`; fewer than 3 is `E-VOCAB-BAD-VALUE`.
 - _A11y:_ a visually hidden **and** text-part line `Current step: Shipped
-(2 of 4)` is mandatory; markers are `aria-hidden`.
+(2 of 4)` is mandatory: a `current` that names no step, or a current
+  step without a label, is `E-PATTERN-MISSING-TEXT`. The line is hidden
+  with R-A11Y-09's styles; markers are `aria-hidden`.
 - _Text:_ `Step 2 of 4: Shipped. Next: Out for delivery.`
 
 **`mailTimeline`** (vertical, any length)
 
-- _Special lowering:_ a two-column table per event:
-  - a fixed left cell with the dot and the connector line, drawn as a
-    `width:2px` `bgcolor` cell, continuous because the cells are
-    equal-height;
-  - a fluid right cell with the time and the text.
+- _Content:_ `mailTimelineEvent(time)` items (`time` required), each
+  holding the event's text.
+- _Special lowering:_ one table of two rows per event (the expansion
+  writes it, as R-TBL-01 allows for timelines), five columns: a 16px
+  track of three cells (7px, 2px, 7px), a 12px gap and the fluid text
+  cell. The table's layout is fixed inline (`table-layout:fixed`), so
+  where head CSS is stripped an unbroken word breaks in the text cell
+  instead of widening the table past a phone and squeezing the track.
+  - The event's first row: the three track cells painted
+    `color.accent.primary`, the outer two rounded, a 16px dot (square
+    in Word), beside the time (14px/16px, bold, `nowrap`);
+  - its second row: the middle track cell is the line, a `width:2px`
+    `bgcolor` cell in `color.border.subtle`, continuous because a row's
+    cells share its height and the next row starts with the next dot,
+    beside the event's text, padded 16px below. The last event draws
+    no line.
 
   It never stacks and works in Word.
 
@@ -641,11 +762,23 @@ shadow = sm for elevated)` holding a Stack of image, heading, body and
 
 **`mailEvent`** (date tile + details)
 
-- _Built from:_ `mailSidebar(fixed = 64px)` with a date tile (month row plus
-  big day, `aria-hidden`), then details, then a `mailCluster` of "Add to
+- _Props:_ `month` (required, short: `OCT`), `day` (required),
+  `date_text` (the full date and time in text, "Tuesday, 14 October
+  2026, 18:00–20:00 CEST"), `location`, `google`, `outlook`, `ics`
+  (the calendar links), `google_label = "Google Calendar"`,
+  `outlook_label = "Outlook"`, `ics_label = "Apple Calendar (.ics)"`.
+- _Content:_ the details (a heading, a description).
+- _Built from:_ `mailSidebar(fixed = 64px, valign = top, gap = space.4,
+switch_below = 0)` with a date tile (`aria-hidden`: a `mailBox` with a
+  1px `color.border.subtle` border and an 8px radius, the month in a
+  12px bold row on `color.accent.primary` above the day at 28px/40px
+  bold), then a `mailStack(gap = space.2)` of the details, the date line
+  (bold), the location and a `mailCluster(gap = space.4)` of the "Add to
   calendar" links (Google, Outlook, .ics).
-- _A11y:_ the full date and time in text is mandatory (_design rule_).
-- _Text:_ the full date line, location, links.
+- _A11y:_ the full date and time in text is mandatory (_design rule_):
+  without `date_text`, `E-PATTERN-MISSING-TEXT`.
+- _Text:_ the details, the full date line, the location, then the links
+  one per line.
 
 ### 4.5 Actions and inline items
 

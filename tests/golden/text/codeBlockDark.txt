@@ -1,0 +1,7 @@
+Your API key, dark
+==================
+
+    export ACME_KEY=sk_live_example
+    acme whoami
+
+Acme Inc., 1 Example Street, Springfield
