@@ -314,8 +314,9 @@ proc stepperMinimalDoc*(): EmailNode =
 proc stepperMaximalDoc*(): EmailNode =
   let r = EmailRenderer()
   result = r.storyDoc("Out for delivery", "Five steps with long labels.")
-  r.intro(result, "Out for delivery", "Five steps fit a phone's width; " &
-    "long labels wrap under their markers.")
+  r.intro(result, "Out for delivery", "Five steps whose labels cannot " &
+    "fit a phone in one row: the stepper is drawn vertically, each label " &
+    "beside its marker.")
   let s = r.band(result)
   discard r.stepper(s, ["Order placed", "Payment confirmed",
     "Shipped from warehouse", "Out for delivery", "Delivered " & longWord],

@@ -1,8 +1,9 @@
 # expect: E-VOCAB-UNKNOWN-ATTR
-# expect-line: 30
+# expect-line: 31
 ## Compile-failure fixture: a pattern defined with `defineMailPattern`
 ## joins the static vocabulary with its props as attributes, so an
 ## attribute it does not declare is a compile error at the element.
+## (Named `mailPill`: the library defines its own `mailBadge`.)
 import isonim_email
 
 type BadgeProps = object
@@ -19,7 +20,7 @@ proc badgeDegradations(n: EmailNode; p: BadgeProps;
     v: BriefView): seq[string] =
   @[]
 
-defineMailPattern(mailBadge, BadgeProps, badgeExpand, badgeExpected,
+defineMailPattern(mailPill, BadgeProps, badgeExpand, badgeExpected,
   badgeDegradations)
 
 proc badTemplate*(r: EmailRenderer): EmailNode =
@@ -27,4 +28,4 @@ proc badTemplate*(r: EmailRenderer): EmailNode =
     mailDocument(lang = "en", title = "Badge"):
       h1: text "Badge"
       mailSection:
-        mailBadge(label = "New", colour = "red")
+        mailPill(label = "New", colour = "red")

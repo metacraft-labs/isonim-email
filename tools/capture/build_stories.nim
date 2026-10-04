@@ -29,6 +29,7 @@ import stories/seed_structure
 import stories/seed_media
 import stories/seed_containers
 import stories/seed_data
+import stories/seed_actions
 
 # `mime_sha256` uses the library's `sha256Hex`
 # (`src/isonim_email/assets.nim`, re-exported by the umbrella). The
@@ -103,11 +104,13 @@ proc main(): int =
     # The dark-mode story set (tests/stories/seed_dark.nim).
     registerDarkStories()
     # The content patterns' story sets (tests/stories/seed_structure.nim,
-    # seed_media.nim, seed_containers.nim, seed_data.nim).
+    # seed_media.nim, seed_containers.nim, seed_data.nim,
+    # seed_actions.nim).
     registerStructureStories()
     registerMediaStories()
     registerContainerStories()
     registerDataStories()
+    registerActionStories()
   let outDir = args[0]
   let wanted =
     if args.len > 1: args[1 .. ^1]

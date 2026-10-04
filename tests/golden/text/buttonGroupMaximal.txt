@@ -1,0 +1,19 @@
+Your plan is about to renew
+===========================
+
+Three long actions that stack at full width on a phone, then three that 
+wrap. Reference Supercalifragilisticexpialidociousnessless.
+
+Renew for another year at the same price: https://example.com/renew
+Switch to monthly billing instead: https://example.com/monthly
+Cancel the subscription: https://example.com/cancel
+
+Or pick an add-on
+-----------------
+
+Add 50 GB of storage: https://example.com/storage
+Add a second workspace: https://example.com/workspace
+Talk to sales: https://example.com/sales
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

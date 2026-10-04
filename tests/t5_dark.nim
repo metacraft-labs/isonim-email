@@ -207,7 +207,8 @@ suite "dark pairs come from the tokens (R-DRK-02, R-DRK-03)":
     check ("aria-label=\"Dark\" lang=\"en\" dir=\"ltr\" class=\"" & cls &
       "\" style=\"background-color:#ffffff;") in res.html
     check ("cellspacing=\"0\" class=\"" & cls &
-      "\" style=\"background-color:#ffffff;\">") in res.html
+      "\" style=\"background-color:#ffffff;table-layout:fixed;\">") in
+      res.html
     let blk = darkBlock(res.html)
     check "body{background-color:#1a1d23 !important}" in blk
     check "[data-ogsb] body" notin blk

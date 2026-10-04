@@ -1,0 +1,12 @@
+A new comment
+=============
+
+With images blocked, the decorative avatar shows nothing and the described 
+one its alt text.
+
+Ada Lovelace — Engineering
+
+Grace Hopper — Compilers
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

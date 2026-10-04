@@ -1,0 +1,16 @@
+[Acme]
+
+Sign in
+=======
+
+With images blocked, the logo shows its alt text; the divider is cells and 
+text.
+
+Sign in with a password: https://example.com/pw
+
+—— or ——
+
+Email me a sign-in link: https://example.com/link
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

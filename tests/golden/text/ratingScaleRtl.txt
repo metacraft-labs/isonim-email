@@ -1,0 +1,20 @@
+سؤال واحد
+=========
+
+ما مدى احتمال أن توصي بنا لصديق؟
+
+0 = غير محتمل، 10 = محتمل جدا
+0: https://example.com/rate?score=0
+1: https://example.com/rate?score=1
+2: https://example.com/rate?score=2
+3: https://example.com/rate?score=3
+4: https://example.com/rate?score=4
+5: https://example.com/rate?score=5
+6: https://example.com/rate?score=6
+7: https://example.com/rate?score=7
+8: https://example.com/rate?score=8
+9: https://example.com/rate?score=9
+10: https://example.com/rate?score=10
+
+شركة أكمي، ١ شارع المثال، الرياض · إلغاء الاشتراك 
+(https://example.com/unsubscribe)

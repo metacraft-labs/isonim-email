@@ -485,8 +485,8 @@ suite "strategies":
     check res.diagnostics.len == 0
     let html = res.html
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
-      "cellpadding=\"0\" cellspacing=\"0\"><tr><td class=\"e-cells-stack\" " &
-      "bgcolor=\"#fde68a\" valign=\"top\" width=\"47.826087%\" " &
+      "cellpadding=\"0\" cellspacing=\"0\" style=\"table-layout:fixed;\">" &
+      "<tr><td class=\"e-cells-stack\" bgcolor=\"#fde68a\" valign=\"top\" width=\"47.826087%\" " &
       "style=\"width:47.826087%;vertical-align:top;" &
       "background-color:#fde68a;font-size:16px;text-align:left;" &
       "direction:ltr;\">" in html

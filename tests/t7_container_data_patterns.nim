@@ -12,6 +12,7 @@
 ## `just test` also runs it on JS. No test doubles.
 import std/[sequtils, strutils, tables, unittest]
 import isonim_email
+from isonim_email/style/metrics import measureText
 
 const photo = "https://cdn.example.com/a/photo.png"
 
@@ -339,6 +340,17 @@ suite "mailLineItems":
     check table.find("tbody").find("mailSidebar") != nil
     check table.find("mailTable") == nil
     check res.html.count("<th scope=\"col\"") == 3
+    # A thumbnail description claims its longest word at 320px: the
+    # sidebar sits in a box of the measured minimum (48px thumbnail,
+    # 12px gap, the word), which fits beside the other columns.
+    let stack = defaultTheme().lightFor("font.body")
+    let boxes = table.find("tbody").all("mailSidebar").mapIt(it.parent)
+    check boxes.len >= 1
+    for b in boxes:
+      check b.tag == "div"
+      let mw = parseInt(b.styles["min-width"][0 ..< ^2])
+      check mw >= 60 + int(measureText("Wireless", stack, 16.0).width)
+      check mw < 288
     check res.html.count("white-space:nowrap") >= 6
     check res.semantic.find("mailTable").attrs["mobile"] == "keep"
     check "e-tbl-" notin res.html
@@ -506,6 +518,87 @@ suite "mailStepper":
     check ">الحالية: ب</p>" in own.html
     check "الخطوة ٢ من ٣\n" in own.text
     check "dir=\"rtl\"" in own.html
+
+  test "test_stepper_label_words_never_break":
+    # A step whose longest word does not fit its equal share of a phone's
+    # band (288px) is widened to it; the others share the rest, never
+    # below their own words. The current step is measured bold.
+    let stack = defaultTheme().lightFor("font.body")
+    let labels = @["Ordered", "Paid", "Packed", "Shipped", "Delivered"]
+    let w = stepWidths(labels, stack, 3)
+    require w.len == 5
+    var total = 0.0
+    for i, x in w:
+      check x >= longestWordPx(labels[i], stack, bold = i == 2) + 4.0 -
+        0.001
+      total += x
+    check abs(total - stepperNarrowPx) < 0.01
+    # Vacuity: equal shares would have broken a word.
+    check longestWordPx("Delivered", stack, bold = false) + 4.0 >
+      stepperNarrowPx / 5.0
+    check w[4] > stepperNarrowPx / 5.0
+    # Five steps of longer words cannot fit a phone together.
+    check stepWidths(@["Ordered", "Payment confirmed", "Packed", "Shipped",
+      "Delivered"], stack, 3).len == 0
+    let res = stepperDoc(labels, "3")
+    check not hasErrors(res.diagnostics)
+    let rows = res.semantic.find("mailStepper").find("table").children
+      .filterIt(it.kind == enElement and it.tag == "tr")
+    check rows.len == 2
+    var pct = 0.0
+    for i, td in rows[0].children:
+      let share = td.attrs["width"]
+      check share.endsWith("%")
+      check abs(parseFloat(share[0 ..< ^1]) - w[i] / stepperNarrowPx *
+        100.0) < 0.01
+      check rows[1].children[i].attrs["width"] == share
+      pct += parseFloat(share[0 ..< ^1])
+    check abs(pct - 100.0) < 0.05
+    # Short labels keep equal columns.
+    let short = stepperDoc(["A", "B", "C"], "2")
+    for td in short.semantic.find("mailStepper").find("tr").children:
+      check td.attrs["width"] == "33.33%"
+
+  test "test_stepper_turns_vertical_when_its_words_cannot_fit":
+    let labels = ["Ordered", "Reference Supercalifragilisticexpialidocious",
+      "Shipped", "Delivered"]
+    check stepWidths(@labels, defaultTheme().lightFor("font.body"),
+      2).len == 0
+    let res = stepperDoc(labels, "2")
+    check not hasErrors(res.diagnostics)
+    check codeTblUnexpected notin codesOf(res.diagnostics)
+    let table = res.semantic.find("mailStepper").find("table")
+    check table.styles["table-layout"] == "fixed"
+    let rows = table.children.filterIt(it.kind == enElement and
+      it.tag == "tr")
+    # A row per step and a connector row between two steps.
+    check rows.len == 7
+    for i, row in rows:
+      let cells = row.children.filterIt(it.kind == enElement)
+      check cells.len == 2
+      check cells[0].attrs["width"] == "28"
+      check cells[0].attrs["aria-hidden"] == "true"
+      if i mod 2 == 1:
+        # The connector: a 2px line between 13px halves, 16px tall.
+        let line = cells[0].find("table").find("tr").children
+          .filterIt(it.kind == enElement)
+        check line.mapIt(it.attrs["width"]) == @["13", "2", "13"]
+        check line[1].attrs["height"] == "16"
+      else:
+        check cells[1].find("p") != nil
+    # Done and current reached: the first connector is the accent.
+    check res.html.count("width=\"2\" height=\"16\" bgcolor=\"#1f6feb\"") == 1
+    check res.html.count("width=\"2\" height=\"16\" bgcolor=\"#e5e7eb\"") == 2
+    check res.html.count(">✓</td>") == 1
+    # The labels and the text part are the same as the horizontal form's.
+    check stepLabels(res.semantic.find("mailStepper")).len == 4
+    check "Step 2 of 4: Reference Supercalifragilisticexpialidocious. " &
+      "Next: Shipped." in res.text
+    check "Current step: Reference" in res.html
+    # Right to left: the label's padding faces the track.
+    let rtl = stepperDoc(["أ", "Supercalifragilisticexpialidociousnessless",
+      "ج"], "1", rtl = true)
+    check "padding:4px 12px 0 0" in rtl.html
 
 # --- mailTimeline ----------------------------------------------------------------
 

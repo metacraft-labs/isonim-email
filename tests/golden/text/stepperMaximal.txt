@@ -1,7 +1,8 @@
 Out for delivery
 ================
 
-Five steps fit a phone's width; long labels wrap under their markers.
+Five steps whose labels cannot fit a phone in one row: the stepper is drawn 
+vertically, each label beside its marker.
 
 Step 4 of 5: Out for delivery. Next: Delivered 
 Supercalifragilisticexpialidociousnessless.

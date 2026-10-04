@@ -26,6 +26,7 @@
 # Implemented: R-VML-01..05, R-OL-11 (tests/t5_background.nim; R-VML-03 and R-VML-04 stay ☐ in the catalogue, implemented behind `vmlFitToText` and as P8's URL check until a Word-engine capture settles them). R-VML-06 and R-VML-07 were added to the catalogue with their test, never pending.
 # Implemented: R-DRK-01..06, R-IMG-06, R-OL-14 (tests/t5_dark.nim; R-OL-14 with the preheader in tests/t5_preheader.nim and the hidden caption in tests/t5_table.nim), R-A11Y-05 back off this list (tests/t5_a11y.nim for its spacer, preheader-padding and decorative-VML parts, tests/t5_dark.nim for the dark-swap pair, settled as no aria-hidden on either image). R-DRK-07 stays: the theme generator's nudge is unbuilt and the rule is to be settled by dark-mode captures.
 # Implemented: R-PRE-04 (tests/t5_text_part.nim: the plain-text part leaves the preheader out).
+# Implemented: R-TBL-08 (tests/t7_action_patterns.nim: a dashed box paints its table; Outlook 2007/2010 itself is re-owned to the Word-engine capture).
 R-CSS-15
 R-CSS-17
 R-CSS-18
@@ -37,4 +38,3 @@ R-OL-16
 R-PRE-02
 R-RST-12
 R-SIZE-03
-R-TBL-08

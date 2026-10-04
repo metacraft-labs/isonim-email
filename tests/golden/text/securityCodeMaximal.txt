@@ -1,0 +1,16 @@
+Sign in to Acme
+===============
+
+Enter the code, or use the button on this device. Request 
+Supercalifragilisticexpialidociousnessless.
+
+Your one-time sign-in code: 482913 (this code stops working at 14:05 UTC on 
+Sunday, 4 October 2026)
+
+Sign in on this device: https://example.com/magic
+
+WARNING: Didn't request this?
+Ignore this message: nobody can sign in without the code.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

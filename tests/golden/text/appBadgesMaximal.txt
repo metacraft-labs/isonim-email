@@ -1,0 +1,12 @@
+Take Acme with you
+==================
+
+Three badges at 48px, the largest height; they wrap on a phone. Reference 
+Supercalifragilisticexpialidociousnessless.
+
+Download on the App Store: https://apps.example.com/ios
+Get it on Google Play: https://apps.example.com/android
+Download the tablet edition for iOS: https://apps.example.com/tablet
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

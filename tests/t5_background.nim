@@ -314,8 +314,8 @@ suite "mailHero":
       "background-position:center center;background-size:cover;" &
       "background-repeat:no-repeat;\"><!--<![endif]-->" &
       "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
-      "cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;\"><tr>" &
-      "<td height=\"252\" valign=\"middle\" align=\"left\" " &
+      "cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;" &
+      "table-layout:fixed;\"><tr><td height=\"252\" valign=\"middle\" align=\"left\" " &
       "style=\"padding:24px;height:252px;box-sizing:content-box;" &
       "vertical-align:middle;" &
       "font-size:16px;text-align:left;direction:ltr;\">") in res.html

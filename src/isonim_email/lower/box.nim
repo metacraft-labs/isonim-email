@@ -7,7 +7,7 @@
 ## padding, background and border without a ghost table:
 ##
 ## ```html
-## <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:{collapse|separate};">
+## <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:{collapse|separate};table-layout:fixed;">
 ##   <tr><td bgcolor="{bg}" style="padding:{pad};background-color:{bg};border:{border};border-radius:{r};box-shadow:{shadow};">…</td></tr>
 ## </table>
 ## ```
@@ -18,12 +18,17 @@
 ##   so a table nested in it (a data table) does not inherit `separate`
 ##   where no head CSS collapses it.
 ## - The cell breaks long unbroken words (`word-break:break-word`,
-##   R-TBL-17).
+##   R-TBL-17); the table's `table-layout:fixed` is the document
+##   lowering's (`fixLayoutTables`), the reset's written inline.
 ## - A shadow is decoration only: Gmail web, Word and Yahoo draw none,
 ##   and dark mode hides it. So a box with a shadow always has a border:
 ##   its own, or a 1px border one step darker than its background
 ##   (`darkerStep`, R-TBL-09), which marks the edge wherever the shadow
 ##   is missing.
+## - A dashed or dotted border with a background: the table carries the
+##   cell's background too (`bgcolor`, `background-color` and the dark
+##   class), since Outlook 2007/2010 paints the parent's colour between
+##   the dashes (R-TBL-08).
 ## - `outlook_rounded` (the 3×3 table with VML corner arcs) is not
 ##   built: it ships only once a Word-engine capture shows it works
 ##   (R-TBL-16). Asking for it is `E-LOWER-MISSING`, never ignored.
@@ -103,6 +108,15 @@ proc lowerBox*(node: EmailNode; ctx: LowerCtx):
   # collapsed table (R-TBL-16): the inline value is `!important` too.
   r.setStyle(table, "border-collapse",
     if radius.len > 0: "separate !important" else: "collapse")
+  let broken = border.contains(" dashed") or border.contains(" dotted")
+  if broken and bg.len > 0:
+    # R-TBL-08: Outlook 2007/2010 paints the parent's colour between a
+    # dashed or dotted border's dashes, so the table carries the cell's
+    # background too (and its dark class, which repaints both).
+    r.setAttribute(table, "bgcolor", bg)
+    r.setStyle(table, "background-color", bg)
+    if "class" in node.attrs:
+      r.setAttribute(table, "class", node.attrs["class"])
   let tr = r.createElement("tr")
   r.appendChild(table, tr)
   let td = r.createElement("td")

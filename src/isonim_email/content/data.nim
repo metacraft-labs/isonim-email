@@ -19,8 +19,11 @@
 ##   per row on a phone; its text part is `label: value` lines.
 ## - `mailStepper(current, status, text)` holding 3–5 `mailStep`s: its
 ##   special lowering, a two-row table the expansion writes (markers
-##   between connector halves, then the labels), a visually hidden
-##   status line, and its text-part line `Step n of m: …`. More than five
+##   between connector halves, then the labels, each step's column at
+##   least its longest word at 320px), or, when the words cannot fit a
+##   phone's band together, its vertical form (a row per step, the
+##   marker beside its label); a visually hidden status line, and its
+##   text-part line `Step n of m: …`. More than five
 ##   steps is `E-PATTERN-STEPPER-LONG`, a status it cannot write
 ##   `E-PATTERN-MISSING-TEXT` (P1, `passes/validate.nim`). The steps stay
 ##   in the tree as expanded patterns around their labels, so P1 counts
@@ -44,11 +47,12 @@
 
 {.used.}
 
-import std/[strutils, tables, unicode]
+import std/[math, strutils, tables, unicode]
 import ../renderer
 import ../target
 import ../patterns
 import ../style/tokens
+import ../style/metrics
 import ./kit
 
 ## The client families an edit to this module can change: read by
@@ -143,6 +147,17 @@ const
     ## The event's date tile.
   doneGlyph* = "✓"
     ## A done step's marker.
+  stepperNarrowPx* = 288.0
+    ## A band's content width at 320px (the phone less its 16px
+    ## gutters): the width a stepper's labels must fit.
+  stepLabelPx = 14.0
+    ## A step label's size (`type.small`).
+  stepLabelSlackPx = 4.0
+    ## Room a step keeps beside its longest word.
+  stepTrackSidePx = 13
+  stepConnectorRowPx = 16
+    ## The vertical form: the track's halves beside the 2px connector,
+    ## and the connector's row height between two steps.
 
 defineMailItem(mailKeyValueRow, "mailKeyValue", KeyValueRowProps)
 defineMailItem(mailLineItem, "mailLineItems", LineItemProps)
@@ -295,7 +310,7 @@ proc keyValueExpected(n: EmailNode; p: KeyValueProps;
 # --- mailLineItems ---------------------------------------------------------------
 
 proc descriptionCell(ctx: ExpandCtx; n: EmailNode; ip: LineItemProps;
-    thumbWidth: int): seq[EmailNode] =
+    thumbWidth: int; minWidth = 0): seq[EmailNode] =
   ## The description, its detail under it (and in brackets in the text
   ## part), beside the thumbnail when there is one.
   var parts: seq[EmailNode] = @[]
@@ -321,7 +336,53 @@ proc descriptionCell(ctx: ExpandCtx; n: EmailNode; ip: LineItemProps;
   let text = el(ctx, n, "div")
   moveInto(ctx, text, parts)
   add(ctx, sb, img, text)
+  if minWidth > 0:
+    # The sidebar's fixed layout claims no width for its words: a box of
+    # the measured minimum makes the description column claim them.
+    let box = el(ctx, n, "div", styles = [("min-width", $minWidth & "px")])
+    add(ctx, box, sb)
+    return @[box]
   @[sb]
+
+proc thumbMinWidth*(props: seq[LineItemProps]; thumbWidth: int;
+    labels: openArray[string]; withQty: bool; stack: string): int =
+  ## The px minimum of a thumbnail description, so that its longest word
+  ## never breaks at 320px: the thumbnail, its gap and the word (16px,
+  ## its detail's at 14px), when that fits a band's content width at
+  ## 320px (288px) beside the quantity and amount columns (their widest
+  ## text, bold for the header, and their padding) and the description
+  ## cell's own padding; 0 when it does not (the word breaks: a declared
+  ## degradation) or no item has a thumbnail.
+  var thumbs = false
+  var word = 0.0
+  for ip in props:
+    if ip.thumb.strip().len == 0:
+      continue
+    thumbs = true
+    for w in strutils.splitWhitespace(ip.description):
+      word = max(word, measureText(w, stack, 16.0).width)
+    for w in strutils.splitWhitespace(ip.detail):
+      word = max(word, measureText(w, stack, 14.0).width)
+  if not thumbs:
+    return 0
+  var cols = 12.0 # the description cell's padding beside the next column
+  var columns: seq[tuple[head: string; values: seq[string]; pad: float]] = @[]
+  if withQty:
+    var q: seq[string] = @[]
+    for ip in props: q.add(ip.qty.strip())
+    columns.add((labels[1], q, 24.0))
+  var a: seq[string] = @[]
+  for ip in props: a.add(ip.amount.strip())
+  columns.add((labels[2], a, 12.0))
+  for c in columns:
+    var w = measureText(c.head, stack, 16.0, bold = true).width
+    for v in c.values:
+      w = max(w, measureText(v, stack, 16.0).width)
+    cols += w + c.pad
+  let need = float(thumbWidth) + 12.0 + word
+  if need + cols > stepperNarrowPx:
+    return 0
+  int(ceil(need))
 
 proc lineItemsExpand(n: EmailNode; p: LineItemsProps;
     ctx: ExpandCtx): EmailNode =
@@ -412,10 +473,12 @@ proc lineItemsExpand(n: EmailNode; p: LineItemsProps;
       text = label))
   add(ctx, head, hr)
   let body = el(ctx, n, "tbody")
+  let minWidth = thumbMinWidth(props, p.thumb_width, [p.item_label,
+    p.qty_label, p.amount_label], withQty, ctx.theme.lightFor("font.body"))
   for ip in props:
     let tr = el(ctx, n, "tr")
     let d = el(ctx, n, "td", styles = [("padding", first)])
-    for part in descriptionCell(ctx, n, ip, p.thumb_width):
+    for part in descriptionCell(ctx, n, ip, p.thumb_width, minWidth):
       add(ctx, d, part)
     add(ctx, tr, d)
     var values = @[ip.amount.strip()]
@@ -608,31 +671,111 @@ proc connector(ctx: ExpandCtx; n: EmailNode; done: bool): EmailNode =
   add(ctx, t, tr)
   add(ctx, result, t)
 
-proc stepperExpand(n: EmailNode; p: StepperProps;
-    ctx: ExpandCtx): EmailNode =
-  let steps = slotOf(n, ["mailStep"], "mailStep items")
-  if steps.len < stepperMin:
-    raise newException(PatternError, "mailStepper needs " & $stepperMin &
-      " to " & $stepperMax & " steps (found " & $steps.len & ")")
-  var labels: seq[string] = @[]
-  for s in steps:
-    labels.add(plainText(s))
+proc longestWordPx*(label, stack: string; bold = true): float =
+  ## The widest word of `label` at a step label's size (bold, as the
+  ## current step's), at the text metrics' worst case over `stack`.
+  for w in strutils.splitWhitespace(label):
+    result = max(result, measureText(w, stack, stepLabelPx,
+      bold = bold).width)
+
+proc stepWidths*(labels: seq[string]; stack: string;
+    current = 0): seq[float] =
+  ## The steps' column widths at a band's content width at 320px
+  ## (`stepperNarrowPx`): equal, except that a step whose longest word
+  ## does not fit its share is widened to it and the others share the
+  ## rest. The current step's label (from 1) is measured bold, the others
+  ## regular, as they are drawn. Empty when the words cannot all fit
+  ## together: the stepper is then drawn vertically.
+  let m = labels.len
+  if m == 0:
+    return @[]
+  var need = newSeq[float](m)
+  var total = 0.0
+  for i, l in labels:
+    need[i] = longestWordPx(l, stack, bold = i + 1 == current) +
+      stepLabelSlackPx
+    total += need[i]
+  if total > stepperNarrowPx:
+    return @[]
+  var widened = newSeq[bool](m)
+  while true:
+    var rest = stepperNarrowPx
+    var free = 0
+    for i in 0 ..< m:
+      if widened[i]: rest -= need[i] else: inc free
+    let share = if free > 0: rest / float(free) else: 0.0
+    var changed = false
+    for i in 0 ..< m:
+      if not widened[i] and need[i] > share:
+        widened[i] = true
+        changed = true
+    if not changed:
+      result = newSeq[float](m)
+      for i in 0 ..< m:
+        result[i] = if widened[i]: need[i] else: share
+      return
+
+proc percentText(x: float): string =
+  formatFloat(x, ffDecimal, 2).strip(leading = false, chars = {'0'})
+    .strip(leading = false, chars = {'.'}) & "%"
+
+proc stepState(k, cur: int): string =
+  if k < cur: "done" elif k == cur: "current" else: "next"
+
+proc markerCell(ctx: ExpandCtx; n: EmailNode; k, cur: int): EmailNode =
+  ## Step `k`'s marker: a 28px circle (a ring around a grey number once
+  ## it is after the current step), its number or, done, a check.
+  let state = stepState(k, cur)
+  let size = if state == "next": stepMarkerPx - 2 * stepConnectorPx
+    else: stepMarkerPx
+  result = el(ctx, n, "td", attrs = [("width", $size),
+    ("height", $size), ("align", "center"), ("valign", "middle")],
+    styles = [("width", $size & "px"), ("height", $size & "px"),
+      ("padding", "0"), ("border-radius", $(size div 2) & "px"),
+      ("text-align", "center"), ("vertical-align", "middle"),
+      ("font-size", "14px"), ("line-height", $size & "px"),
+      ("font-weight", "700")],
+    text = if state == "done": doneGlyph else: $k)
+  if state == "next":
+    paint(ctx, result, "background-color", "color.surface.card")
+    paint(ctx, result, "color", "color.text.secondary")
+    border(ctx, result, width = $stepConnectorPx & "px")
+  else:
+    paint(ctx, result, "background-color", "color.accent.primary")
+    paint(ctx, result, "color", "color.accent.primaryText")
+
+proc labelPara(ctx: ExpandCtx; n: EmailNode; step: EmailNode; k, cur: int;
+    align: string): EmailNode =
+  ## A step's label: `type.small`, bold when current, grey after it.
+  result = el(ctx, n, "p", styles = [("margin", "0"),
+    ("text-align", align),
+    ("font-weight", if k == cur: "700" else: "400")])
+  useType(ctx, result, "type.small")
+  paint(ctx, result, "color", if k <= cur: "color.text.primary"
+    else: "color.text.secondary")
+  add(ctx, result, step)
+
+proc horizontalStepper(ctx: ExpandCtx; n: EmailNode; steps: seq[EmailNode];
+    cur: int; widths: seq[float]): EmailNode =
+  ## Two rows: the markers between their connectors' halves, then the
+  ## labels, one column per step (`widths` at 288px, as percentages).
   let m = steps.len
-  let cur = p.current
-  let (status0, text0) = stepperLines(labels, cur)
-  let status = if p.status.strip().len > 0: p.status.strip() else: status0
-  let line = if p.text.strip().len > 0: p.text.strip() else: text0
-  let share = formatFloat(100.0 / float(m), ffDecimal, 2)
-    .strip(leading = false, chars = {'0'}).strip(leading = false,
-      chars = {'.'}) & "%"
-  let table = layoutTable(ctx, n, [("table-layout", "fixed")])
+  var equal = true
+  for w in widths:
+    if abs(w - widths[0]) > 0.001:
+      equal = false
+  var shares: seq[string] = @[]
+  for w in widths:
+    shares.add(if equal: percentText(100.0 / float(m))
+      else: percentText(w / stepperNarrowPx * 100.0))
+  result = layoutTable(ctx, n, [("table-layout", "fixed")])
   # Row 1: the markers, each between its connectors' halves.
   let markers = el(ctx, n, "tr")
   for i in 0 ..< m:
     let k = i + 1
-    let td = el(ctx, n, "td", attrs = [("width", share), ("align", "center"),
-      ("valign", "middle"), ("aria-hidden", "true")],
-      styles = [("width", share), ("padding", "0")])
+    let td = el(ctx, n, "td", attrs = [("width", shares[i]),
+      ("align", "center"), ("valign", "middle"), ("aria-hidden", "true")],
+      styles = [("width", shares[i]), ("padding", "0")])
     let inner = layoutTable(ctx, n, [("border-collapse",
       "separate !important")])
     let tr = el(ctx, n, "tr")
@@ -640,25 +783,7 @@ proc stepperExpand(n: EmailNode; p: StepperProps;
       add(ctx, tr, connector(ctx, n, k <= cur))
     else:
       add(ctx, tr, spacerCell(ctx, n))
-    let state = if k < cur: "done" elif k == cur: "current" else: "next"
-    let size = if state == "next": stepMarkerPx - 2 * stepConnectorPx
-      else: stepMarkerPx
-    let marker = el(ctx, n, "td", attrs = [("width", $size),
-      ("height", $size), ("align", "center"), ("valign", "middle")],
-      styles = [("width", $size & "px"), ("height", $size & "px"),
-        ("padding", "0"), ("border-radius", $(size div 2) & "px"),
-        ("text-align", "center"), ("vertical-align", "middle"),
-        ("font-size", "14px"), ("line-height", $size & "px"),
-        ("font-weight", "700")],
-      text = if state == "done": doneGlyph else: $k)
-    if state == "next":
-      paint(ctx, marker, "background-color", "color.surface.card")
-      paint(ctx, marker, "color", "color.text.secondary")
-      border(ctx, marker, width = $stepConnectorPx & "px")
-    else:
-      paint(ctx, marker, "background-color", "color.accent.primary")
-      paint(ctx, marker, "color", "color.accent.primaryText")
-    add(ctx, tr, marker)
+    add(ctx, tr, markerCell(ctx, n, k, cur))
     if i < m - 1:
       add(ctx, tr, connector(ctx, n, k + 1 <= cur))
     else:
@@ -669,25 +794,108 @@ proc stepperExpand(n: EmailNode; p: StepperProps;
   # Row 2: the labels, each centred under its marker.
   let names = el(ctx, n, "tr")
   for i, s in steps:
-    let td = el(ctx, n, "td", attrs = [("width", share), ("align", "center"),
-      ("valign", "top")], styles = [("width", share),
+    let td = el(ctx, n, "td", attrs = [("width", shares[i]),
+      ("align", "center"), ("valign", "top")], styles = [("width", shares[i]),
         ("padding", "8px 0 0"), ("text-align", "center"),
         ("vertical-align", "top")])
-    let para = el(ctx, n, "p", styles = [("margin", "0"),
-      ("text-align", "center"),
-      ("font-weight", if i + 1 == cur: "700" else: "400")])
-    useType(ctx, para, "type.small")
-    paint(ctx, para, "color", if i + 1 <= cur: "color.text.primary"
-      else: "color.text.secondary")
-    add(ctx, para, s)
-    add(ctx, td, para)
+    add(ctx, td, labelPara(ctx, n, s, i + 1, cur, "center"))
     add(ctx, names, td)
-  add(ctx, table, markers, names)
+  add(ctx, result, markers, names)
+
+proc verticalStepper(ctx: ExpandCtx; n: EmailNode; steps: seq[EmailNode];
+    cur: int): EmailNode =
+  ## The vertical form: a row per step, its marker in a 28px track beside
+  ## its label, and between two steps a 16px row whose track is the
+  ## connector (13px, 2px, 13px).
+  let rtl = isRtl(n)
+  let m = steps.len
+  result = layoutTable(ctx, n, [("table-layout", "fixed"),
+    ("border-collapse", "separate !important")])
+  for i, s in steps:
+    let k = i + 1
+    if i > 0:
+      let link = el(ctx, n, "tr")
+      let track = el(ctx, n, "td", attrs = [("width", $stepMarkerPx),
+        ("aria-hidden", "true")], styles = [("width", $stepMarkerPx & "px"),
+          ("padding", "0")])
+      let t = layoutTable(ctx, n)
+      let tr = el(ctx, n, "tr")
+      add(ctx, tr, spacerCell(ctx, n, [("width", $stepTrackSidePx),
+        ("height", $stepConnectorRowPx)], [("width", $stepTrackSidePx &
+          "px"), ("height", $stepConnectorRowPx & "px")]))
+      let line = spacerCell(ctx, n, [("width", $stepConnectorPx),
+        ("height", $stepConnectorRowPx)], [("width", $stepConnectorPx &
+          "px"), ("height", $stepConnectorRowPx & "px")])
+      paint(ctx, line, "background-color",
+        if k <= cur: "color.accent.primary" else: "color.border.subtle")
+      add(ctx, tr, line)
+      add(ctx, tr, spacerCell(ctx, n, [("width", $stepTrackSidePx),
+        ("height", $stepConnectorRowPx)], [("width", $stepTrackSidePx &
+          "px"), ("height", $stepConnectorRowPx & "px")]))
+      add(ctx, t, tr)
+      add(ctx, track, t)
+      add(ctx, link, track, spacerCell(ctx, n, [("height",
+        $stepConnectorRowPx)], [("height", $stepConnectorRowPx & "px")]))
+      add(ctx, result, link)
+    let row = el(ctx, n, "tr")
+    # Top-aligned: a label that wraps grows its row downwards, so the
+    # connector above meets the marker.
+    let track = el(ctx, n, "td", attrs = [("width", $stepMarkerPx),
+      ("align", "center"), ("valign", "top"), ("aria-hidden", "true")],
+      styles = [("width", $stepMarkerPx & "px"), ("padding", "0"),
+        ("vertical-align", "top")])
+    let inner = layoutTable(ctx, n, [("border-collapse",
+      "separate !important")])
+    let tr = el(ctx, n, "tr")
+    add(ctx, tr, markerCell(ctx, n, k, cur))
+    add(ctx, inner, tr)
+    add(ctx, track, inner)
+    # The label's first line is centred on the marker (a 20px line
+    # beside a 28px circle).
+    let label = el(ctx, n, "td", attrs = [("valign", "top")],
+      styles = [("padding", if rtl: "4px 12px 0 0" else: "4px 0 0 12px"),
+        ("vertical-align", "top")])
+    add(ctx, label, labelPara(ctx, n, s, k, cur, startSide(n)))
+    add(ctx, row, track, label)
+    add(ctx, result, row)
+  discard m
+
+proc stepperExpand(n: EmailNode; p: StepperProps;
+    ctx: ExpandCtx): EmailNode =
+  let steps = slotOf(n, ["mailStep"], "mailStep items")
+  if steps.len < stepperMin:
+    raise newException(PatternError, "mailStepper needs " & $stepperMin &
+      " to " & $stepperMax & " steps (found " & $steps.len & ")")
+  var labels: seq[string] = @[]
+  for s in steps:
+    labels.add(plainText(s))
+  let cur = p.current
+  let (status0, text0) = stepperLines(labels, cur)
+  let status = if p.status.strip().len > 0: p.status.strip() else: status0
+  let line = if p.text.strip().len > 0: p.text.strip() else: text0
+  let widths = stepWidths(labels, ctx.theme.lightFor("font.body"), cur)
+  let table =
+    if widths.len > 0: horizontalStepper(ctx, n, steps, cur, widths)
+    else: verticalStepper(ctx, n, steps, cur)
   let html = el(ctx, n, "div")
   if status.len > 0:
     add(ctx, html, visuallyHidden(ctx, n, status))
   add(ctx, html, table)
   htmlAndText(ctx, n, html, [el(ctx, n, "p", text = line)])
+
+proc stepperVertical*(n: EmailNode; theme = defaultTheme()): bool =
+  ## True when the stepper `n` is drawn in its vertical form: its labels'
+  ## longest words cannot fit a phone's band together.
+  var labels: seq[string] = @[]
+  for c in slot(n):
+    if c.kind == enElement:
+      labels.add(plainText(c))
+  var current = 0
+  try:
+    current = parseInt(n.attrs.getOrDefault("current", "0").strip())
+  except ValueError:
+    discard
+  stepWidths(labels, theme.lightFor("font.body"), current).len == 0
 
 proc stepperExpected(n: EmailNode; p: StepperProps;
     view: BriefView): seq[string] =
@@ -695,26 +903,28 @@ proc stepperExpected(n: EmailNode; p: StepperProps;
   for c in slot(n):
     if c.kind == enElement:
       labels.add(quoted(textOf(c)))
+  let states = "steps before step " & $p.current & " show a check " &
+    "mark, step " & $p.current & " is filled and its label bold, later " &
+    "steps are outlined circles with grey numbers; the line is coloured " &
+    "up to the current step and grey after it. No label word is broken " &
+    "inside a step, and nothing overflows at any width."
+  if stepperVertical(n):
+    return @["Stepper (vertical: its labels are too long for one row on " &
+      "a phone): " & $labels.len & " numbered circles one under another " &
+      "at the " & startSide(n) & ", joined by a thin vertical line from " &
+      "circle to circle, each with its label (" & labels.join(", ") &
+      ") beside it, vertically centred on the circle; " & states]
   @["Stepper: " & $labels.len & " numbered circles in one row, joined by " &
     "thin lines from circle to circle, with their labels (" &
     labels.join(", ") & ") centred under them, never stacked or wrapped " &
-    "into two rows; steps before step " & $p.current & " show a check " &
-    "mark, step " & $p.current & " is filled and its label bold, later " &
-    "steps are outlined circles with grey numbers; the line is coloured " &
-    "up to the current step and grey after it. Nothing overflows at any " &
-    "width."]
+    "into two rows; " & states]
 
 proc stepperDegradations(n: EmailNode; p: StepperProps;
     view: BriefView): seq[string] =
-  var steps = 0
-  for c in slot(n):
-    if c.kind == enElement:
-      inc steps
-  if steps >= 5 and view.width < 480:
-    result.add("five steps share a phone's width, about 60px each: a " &
-      "label word longer than that (\"confirmed\", \"warehouse\") breaks " &
-      "inside its step rather than overflow it (layout-patterns.md §4.4: " &
-      "keep labels short)")
+  if stepperVertical(n):
+    result.add("in the vertical form a label that wraps onto a second " &
+      "line makes its row taller than its circle, so the line below that " &
+      "circle starts after the label's last line")
   if view.word:
     result.add("Word draws the step markers as squares, not circles " &
       "(border-radius, R-TBL-16)")
@@ -906,6 +1116,7 @@ defineMailPattern(mailStepper, StepperProps, stepperExpand, stepperExpected,
   stepperDegradations)
 defineMailPattern(mailStep, StepProps, stepExpand, noLines[StepProps],
   noLines[StepProps])
+declareItemOf("mailStep", "mailStepper")
 defineMailPattern(mailTimeline, TimelineProps, timelineExpand,
   timelineExpected, timelineDegradations)
 defineMailPattern(mailEvent, EventProps, eventExpand, eventExpected,

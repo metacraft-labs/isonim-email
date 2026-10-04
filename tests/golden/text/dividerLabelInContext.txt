@@ -1,0 +1,11 @@
+Sign in
+=======
+
+Sign in with a password: https://example.com/pw
+
+—— or ——
+
+Email me a sign-in link: https://example.com/link
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

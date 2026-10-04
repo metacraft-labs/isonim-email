@@ -24,7 +24,7 @@
 ## **The table button** (catalogue R-BTN-01, after MJML's `mj-button`):
 ##
 ## ```html
-## <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td align="{align}" style="text-align:{align};">
+## <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="table-layout:fixed;"><tr><td align="{align}" style="text-align:{align};">
 ## <table role="presentation" border="0" cellpadding="0" cellspacing="0" align="{align}" style="border-collapse:separate !important;line-height:100%;">
 ##   <tr><td align="center" bgcolor="{bg}" role="presentation" valign="middle" style="border:{border};border-radius:{r};cursor:auto;mso-padding-alt:{pad};background-color:{bg};">
 ##     <a href="{href}" target="_blank" style="display:inline-block;background-color:{bg};color:{fg};font-family:{ff};font-size:{fs};font-weight:{fw};line-height:{lh};mso-line-height-rule:exactly;margin:0;text-decoration:none;text-transform:none;padding:{pad};mso-padding-alt:0px;border-radius:{r};">{label}</a>
@@ -375,7 +375,9 @@ proc lowerButton*(node: EmailNode; ctx: LowerCtx):
     r.setAttribute(td, "bgcolor", bg)
   r.setAttribute(td, "role", "presentation")
   r.setAttribute(td, "valign", "middle")
-  if cls.len > 0 and bg.len > 0:
+  if cls.len > 0 and (bg.len > 0 or border.len > 0):
+    # The cell paints the fill and draws the border: its dark rules
+    # (an outline button's border colour) must reach it.
     r.setAttribute(td, "class", cls)
   r.setStyle(td, "border", if border.len > 0: border else: "none")
   r.declare(td, [("border-radius", radius), ("cursor", "auto"),

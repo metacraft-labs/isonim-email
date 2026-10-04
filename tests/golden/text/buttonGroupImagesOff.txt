@@ -1,0 +1,12 @@
+[Acme]
+
+Invoice 2041
+============
+
+With images blocked, the logo shows its alt text; the buttons are text.
+
+Pay invoice: https://example.com/pay
+Download PDF: https://example.com/invoice.pdf
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

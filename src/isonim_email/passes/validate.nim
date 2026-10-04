@@ -253,10 +253,10 @@ proc checkContentPatterns(node: EmailNode; diags: var seq[EmailDiagnostic]) =
     if labels.len > stepperMax:
       diags.add(EmailDiagnostic(severity: sevError,
         code: codePatternStepperLong,
-        message: "mailStepper with " & $labels.len & " steps: more than " &
-          $stepperMax & " do not fit a phone's width in one row (the " &
-          "stepper never stacks); use mailTimeline, which lists any " &
-          "number of events (layout-patterns.md §4.4)",
+        message: "mailStepper with " & $labels.len & " steps: a stepper " &
+          "holds at most " & $stepperMax & " (more do not fit a phone's " &
+          "width in one row); use mailTimeline, which lists any number " &
+          "of events (layout-patterns.md §4.4)",
         origin: node.origin))
     let raw = node.attrs.getOrDefault("current",
       node.styles.getOrDefault("current", "")).strip()

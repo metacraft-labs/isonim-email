@@ -40,9 +40,46 @@ proc toneOf*(node: EmailNode): string =
   let t = node.attrs.getOrDefault("tone", "primary").strip().toLowerAscii()
   if t in tones: t else: "primary"
 
+proc groupIndex(node: EmailNode): int =
+  ## The button's place among the buttons of the `mailButtonGroup` it
+  ## sits in (its content, or the row its expansion made of it), -1
+  ## outside one.
+  var g = node.parent
+  var depth = 0
+  while g != nil and depth < 6:
+    if g.kind == enElement and g.tag == "mailButtonGroup":
+      break
+    g = g.parent
+    inc depth
+  if g == nil or g.kind != enElement or g.tag != "mailButtonGroup":
+    return -1
+  var i = 0
+  proc walk(x: EmailNode): int =
+    if x.kind != enElement:
+      return -1
+    if x.tag == "mailButton":
+      if x == node:
+        return i
+      inc i
+      return -1
+    for c in x.children:
+      let f = walk(c)
+      if f >= 0:
+        return f
+    -1
+  walk(g)
+
 proc variantOf*(node: EmailNode): string =
-  let v = node.attrs.getOrDefault("variant", "solid").strip().toLowerAscii()
-  if v in variants: v else: "solid"
+  ## The button's variant; without one of its own, `solid`, except in a
+  ## `mailButtonGroup`, whose first button is the primary action
+  ## (`solid`) and the rest secondary (`outline`, layout-patterns.md
+  ## §4.5).
+  let own = node.attrs.getOrDefault("variant", "").strip().toLowerAscii()
+  if own in variants:
+    return own
+  if own.len == 0 and groupIndex(node) > 0:
+    return "outline"
+  "solid"
 
 proc hasAny(node: EmailNode; keys: openArray[string]): bool =
   for k in keys:

@@ -164,7 +164,7 @@ suite "vocabulary compile failures":
       testsDir / "compile_fail" / "pattern_unknown_attr.nim")
     check exitCode != 0
     check want in output
-    check "'mailBadge' has no attribute 'colour'" in output
+    check "'mailPill' has no attribute 'colour'" in output
     check "Did you mean 'label'?" in output
     check cited in output
     let first = firstErrorLine(output)

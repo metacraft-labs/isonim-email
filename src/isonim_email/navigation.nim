@@ -418,5 +418,8 @@ proc registerNavigation() =
     navbarExpected, navbarDegradations))
   registerPattern(typedPattern[NavLinkProps]("mailNavLink", navLinkExpand,
     noLines[NavLinkProps], noLines[NavLinkProps]))
+  # The items only their row places (their stories are the row's).
+  declareItemOf("mailSocialItem", "mailSocial")
+  declareItemOf("mailNavLink", "mailNavbar")
 
 registerNavigation()

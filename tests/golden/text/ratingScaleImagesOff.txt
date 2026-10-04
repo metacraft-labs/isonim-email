@@ -1,0 +1,16 @@
+[Acme]
+
+How did we do?
+==============
+
+With images blocked, the logo shows its alt text; the stars are text.
+
+1 = Poor, 5 = Excellent
+1: https://example.com/rate?score=1
+2: https://example.com/rate?score=2
+3: https://example.com/rate?score=3
+4: https://example.com/rate?score=4
+5: https://example.com/rate?score=5
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

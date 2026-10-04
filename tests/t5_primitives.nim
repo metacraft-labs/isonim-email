@@ -98,12 +98,13 @@ suite "mailBox":
     # Default padding space.5 (24px); background as bgcolor and CSS.
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
       "cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:" &
-      "collapse;\"><tr><td bgcolor=\"#f3f4f6\" style=\"padding:24px;" &
+      "collapse;table-layout:fixed;\"><tr><td bgcolor=\"#f3f4f6\" style=\"padding:24px;" &
       "background-color:#f3f4f6;word-break:break-word;overflow-wrap:break-word;\"><p" in res.html
     # R-TBL-16: a radius rides on the cell, the table separate, with
     # `!important` against the reset's `border-collapse:collapse
     # !important`.
-    check "style=\"border-collapse:separate !important;\"><tr><td " &
+    check "style=\"border-collapse:separate !important;" &
+      "table-layout:fixed;\"><tr><td " &
       "style=\"padding:12px 16px;border:1px solid #9ca3af;" &
       "border-radius:8px;border-collapse:collapse;word-break:break-word;" &
       "overflow-wrap:break-word;\"><p" in res.html
@@ -324,10 +325,10 @@ suite "mailCluster":
     # last item flush; font size reset in a zero-size container.
     check html.count("<div style=\"display:inline-block;vertical-align:" &
       "middle;padding:0 12px 12px 0;font-size:16px;overflow-wrap:break-word;" &
-      "\">") == 2
+      "max-width:100%;box-sizing:border-box;\">") == 2
     check html.count("<div style=\"display:inline-block;vertical-align:" &
-      "middle;padding:0 0 12px;font-size:16px;overflow-wrap:break-word;\">") ==
-      1
+      "middle;padding:0 0 12px;font-size:16px;overflow-wrap:break-word;" &
+      "max-width:100%;box-sizing:border-box;\">") == 1
     check "<div style=\"font-size:0.01px;text-align:left;direction:ltr;\">" in
       html
     # The separator follows every item but the last, hidden from AT, in
@@ -401,7 +402,8 @@ suite "mailSidebar":
     noErrors(res)
     let html = body(res.html)
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
-      "cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"64\" " &
+      "cellpadding=\"0\" cellspacing=\"0\" style=\"table-layout:fixed;\">" &
+      "<tr><td width=\"64\" " &
       "valign=\"middle\" style=\"width:64px;vertical-align:middle;" &
       "text-align:left;direction:ltr;word-break:break-word;overflow-wrap:break-word;\"><p" in html
     check "<td valign=\"middle\" style=\"padding-left:16px;vertical-align:" &
@@ -423,7 +425,8 @@ suite "mailSidebar":
     discard r2.child(sb2, "p", text = "أ")
     discard r2.child(sb2, "p", text = "ب")
     let rtl = renderTree(doc2).html
-    check "cellspacing=\"0\" dir=\"rtl\"><tr><td width=\"64\"" in rtl
+    check "cellspacing=\"0\" dir=\"rtl\" style=\"table-layout:fixed;\">" &
+      "<tr><td width=\"64\"" in rtl
     check "padding-right:16px;vertical-align:middle;text-align:right;" &
       "direction:rtl;" in rtl
 

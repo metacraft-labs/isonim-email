@@ -1,0 +1,14 @@
+[Acme]
+
+A code for you
+==============
+
+With images blocked, the logo shows its alt text; the code is text, never an 
+image.
+
+20% off
+Code: SPRING20
+Enter it at checkout.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

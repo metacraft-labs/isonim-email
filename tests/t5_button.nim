@@ -104,7 +104,8 @@ suite "the table button":
     let left = body(render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Open dashboard")).html)
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
-      "cellpadding=\"0\" cellspacing=\"0\"><tr><td align=\"left\" " &
+      "cellpadding=\"0\" cellspacing=\"0\" style=\"table-layout:fixed;\">" &
+      "<tr><td align=\"left\" " &
       "style=\"text-align:left;\"><table role=\"presentation\" border=\"0\" " &
       "cellpadding=\"0\" cellspacing=\"0\" align=\"left\"" in left
     # Right to left, the start is the right.
@@ -171,6 +172,24 @@ suite "the table button":
     check ("<a href=\"https://app.example.com/\" target=\"_blank\" class=\"" &
       cls & "\"") in html
 
+  test "test_outline_cell_carries_its_dark_class":
+    # An outline button has no fill: its cell draws the border, so the
+    # dark rule that repaints the border must reach the cell too.
+    var t = defaultTarget()
+    t.darkMode = dmDesigned
+    let res = render(proc(r: EmailRenderer; s: EmailNode) =
+      discard r.button(s, "Download", attrs = [("variant", "outline")]),
+      target = t)
+    let html = res.html
+    let at = html.find("<td align=\"center\" role=\"presentation\" " &
+      "valign=\"middle\" class=\"")
+    require at >= 0
+    let cls = html[at ..< html.find(">", at)].split("class=\"")[1].split(
+      "\"")[0]
+    check ("<a href=\"https://app.example.com/\" target=\"_blank\" " &
+      "class=\"" & cls & "\"") in html
+    check ("." & cls & "{") in html and "border-color:#7aa7ff" in html
+
   test "test_width_goes_on_the_table_and_the_link_fills_it":
     let res = render(proc(r: EmailRenderer; s: EmailNode) =
       discard r.button(s, "Pay now", [("width", "100%")])
@@ -181,12 +200,13 @@ suite "the table button":
     # R-BTN-03: full width needs no placement; the link is a block.
     check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
       "cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:" &
-      "separate !important;line-height:100%;width:100%;\">" in html
+      "separate !important;line-height:100%;width:100%;" &
+      "table-layout:fixed;\">" in html
     check "style=\"display:block;background-color:#1f6feb;color:#ffffff;" &
       "text-align:center;" in html
     check "width=\"240\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" " &
       "align=\"left\" style=\"border-collapse:separate !important;" &
-      "line-height:100%;width:240px;\"" in html
+      "line-height:100%;width:240px;table-layout:fixed;\"" in html
     # The label may wrap: nothing stops it.
     check "nowrap" notin html
 

@@ -32,6 +32,14 @@
 ## classes is still the accommodate golden byte for byte (the test
 ## below).
 ##
+## Golden update, 2026-10-04 (catalogue §1 and R-TBL-17, amended
+## first): in both goldens the wrapper table and the button's outer
+## one-cell table (the one that contains its float) gained
+## `table-layout:fixed;` at the end of their `style` (two declarations
+## per golden), the reset's fixed layout written inline, so a long
+## unbroken word cannot widen the message where head CSS is stripped.
+## Every other byte is unchanged.
+##
 ## Both renders carry one diagnostic, pinned below: information on the
 ## button's label under the inversion simulation's full model, not yet
 ## calibrated (catalogue R-DRK-04).

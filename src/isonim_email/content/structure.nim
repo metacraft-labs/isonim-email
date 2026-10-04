@@ -102,6 +102,9 @@ const
     ## Links in a `mailNavLinks` before `W-PATTERN-NAV-LONG`.
   footerLegalPx* = 12
     ## The footer's legal text size (R-TXT-03 allows it here only).
+  footerLinkPadPx* = 12
+    ## A footer link's padding above and below its 20px line: a 44px hit
+    ## area (R-TBL-12).
 
 proc textOf(n: EmailNode): string =
   if n.kind == enText:
@@ -293,28 +296,41 @@ proc footerExpand(n: EmailNode; p: FooterProps; ctx: ExpandCtx): EmailNode =
     if i > 0:
       add(ctx, adr, el(ctx, n, "br"))
     add(ctx, adr, ctx.r.createTextNode(line.strip()))
-  add(ctx, result, adr)
   var links: seq[EmailNode] = @[]
   for (href, label) in [(p.unsubscribe, p.unsubscribe_label),
       (p.preferences, p.preferences_label)]:
     if href.strip().len > 0:
+      # A link in a row is a 44px hit area (R-TBL-12): its 20px line
+      # padded 12px above and below.
       let a = el(ctx, n, "a", attrs = [("href", href.strip())],
-        text = label.strip())
+        styles = [("display", "inline-block"),
+          ("padding", $footerLinkPadPx & "px 0")], text = label.strip())
       useType(ctx, a, "type.small")
       colour(a)
       links.add(a)
-  if links.len > 0:
-    let row = el(ctx, n, "mailCluster", attrs = [("align", align),
-      ("separator", "·")], styles = [("gap", "tok:space.3")])
-    colour(row)
-    moveInto(ctx, row, links)
-    add(ctx, result, row)
+  var legal: EmailNode = nil
   if p.legal.strip().len > 0:
-    let legal = small("p")
+    legal = small("p")
     ctx.r.setStyle(legal, "font-size", $footerLegalPx & "px")
     ctx.r.setStyle(legal, "line-height", "18px")
     add(ctx, legal, ctx.r.createTextNode(p.legal.strip()))
-    add(ctx, result, legal)
+  if links.len > 0:
+    # A wrapped line is a row of 44px targets too: 8px apart (R-TBL-12),
+    # the least the rule allows.
+    let row = el(ctx, n, "mailCluster", attrs = [("align", align),
+      ("separator", "·")], styles = [("gap", "tok:space.3"),
+        ("row_gap", "tok:space.2")])
+    colour(row)
+    moveInto(ctx, row, links)
+    # The links' padding is the space around their row: the address,
+    # the row and the legal text sit in a stack of their own with no
+    # gap, so the footer is no taller than with the stack's gap.
+    let group = el(ctx, n, "mailStack", attrs = [("align", align)],
+      styles = [("gap", "0")])
+    add(ctx, group, adr, row, legal)
+    add(ctx, result, group)
+  else:
+    add(ctx, result, adr, legal)
 
 proc footerExpected(n: EmailNode; p: FooterProps;
     view: BriefView): seq[string] =

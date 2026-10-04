@@ -1,0 +1,15 @@
+Invoice 2041
+============
+
+Due on 1 November.
+
+Plan: $120.00
+Total: $120.00
+
+Pay invoice: https://example.com/pay
+Download PDF: https://example.com/invoice.pdf
+
+Questions? Reply to this message.
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

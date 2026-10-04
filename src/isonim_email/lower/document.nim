@@ -77,6 +77,26 @@ proc docBackground(doc: EmailNode): string =
     return doc.styles["background-color"]
   "#ffffff"
 
+proc hasWidth(t: EmailNode): bool =
+  "width" in t.attrs or "width" in t.styles
+
+proc fixLayoutTables*(n: EmailNode) =
+  ## The reset's `table-layout:fixed` (R-RST-06), inline on every layout
+  ## table outside Outlook conditionals that has a width of its own and
+  ## no layout of its own (catalogue R-TBL-17): where head CSS is
+  ## stripped (Gmail with a non-Google account), an auto-layout table
+  ## grows to its longest unbroken word, so a long reference in a plain
+  ## paragraph would widen the whole message past a phone. A data table
+  ## keeps its own `auto` (R-TBL-18); Word reads only its ghost tables.
+  if n == nil or n.kind == enMsoIf:
+    return
+  if n.kind == enElement and n.tag == "table" and
+      n.attrs.getOrDefault("role", "") == "presentation" and hasWidth(n) and
+      "table-layout" notin n.styles:
+    n.styles["table-layout"] = "fixed"
+  for c in n.children:
+    fixLayoutTables(c)
+
 proc lowerDocument*(doc: EmailNode; sections: EmailNode;
     head: seq[EmailNode]; target: EmailTarget): EmailNode =
   ## Lowers `mailDocument` to the catalogue §1 skeleton. `sections`
@@ -218,4 +238,5 @@ proc lowerDocument*(doc: EmailNode; sections: EmailNode;
   if sections != nil:
     r.appendChild(td, sections)
   r.appendChild(tr, td)
+  fixLayoutTables(body)
   html

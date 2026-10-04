@@ -1,0 +1,13 @@
+Welcome to Acme
+===============
+
+Your account is ready. Get the app to stay in touch on the go.
+
+Download on the App Store: https://apps.example.com/ios
+Get it on Google Play: https://apps.example.com/android
+
+GitHub: https://github.example/acme
+Mastodon: https://mastodon.example/@acme
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

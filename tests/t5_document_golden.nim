@@ -87,6 +87,14 @@
 ## alone. One hunk per golden, that element only; every other byte is
 ## unchanged.
 ##
+## Golden update, 2026-10-04: the wrapper table of both goldens gained
+## `table-layout:fixed;` at the end of its `style` (catalogue §1 and
+## R-TBL-17, amended first): where head CSS is stripped, the reset's
+## fixed layout is gone, and an auto-layout wrapper grew to a long
+## unbroken word, widening a 320px message (371px with a 42-letter word
+## in a paragraph). One hunk per golden, that declaration only; every
+## other byte is unchanged.
+##
 ## Backend-independent (tree building + pure passes; the goldens load
 ## via `staticRead`), so `just test` also runs it on JS.
 import std/[algorithm, os, strutils, unittest]
@@ -359,9 +367,11 @@ suite "document golden skeleton":
       # rule: R-DOC-14
       check "class=" notin html.split("<body")[1].split(">")[0]
       # The wrapper table carries no align attribute; the cell does.
+      # Its layout is fixed inline, as the reset fixes it (R-TBL-17):
+      # without head CSS an auto-layout wrapper grows to a long word.
       check "<table role=\"presentation\" width=\"100%\" border=\"0\" " &
         "cellpadding=\"0\" cellspacing=\"0\" " &
-        "style=\"background-color:#ffffff;\">" in html
+        "style=\"background-color:#ffffff;table-layout:fixed;\">" in html
       check "<tr><td align=\"center\"></td></tr>" in html
 
   test "test_document_style_block_order":

@@ -206,6 +206,40 @@ proc samples(): OrderedTable[string, Sample] =
       ("date_text", "Tuesday, 14 October 2026, 18:00 CEST"),
       ("google", "https://example.com/g")])
     discard r.el(e, "h2", text = "Launch")
+  result["mailButtonGroup"] = proc(r: EmailRenderer; s: EmailNode) =
+    for stack in ["false", "true"]:
+      let g = r.el(s, "mailButtonGroup", [("stack_on_mobile", stack)])
+      discard r.el(g, "mailButton", [("href", "https://example.com/pay")],
+        text = "Pay")
+      discard r.el(g, "mailButton", [("href", "https://example.com/pdf")],
+        text = "Download")
+  result["mailBadge"] = proc(r: EmailRenderer; s: EmailNode) =
+    # Both forms: the Word wrapper on a line of its own, the span in a
+    # sentence.
+    discard r.el(s, "mailBadge", [("tone", "success")], text = "Paid")
+    let p = r.el(s, "p", text = "Status ")
+    discard r.el(p, "mailBadge", text = "New")
+  result["mailAvatarName"] = proc(r: EmailRenderer; s: EmailNode) =
+    discard r.el(s, "mailAvatarName", [("name", "Ada"), ("role", "CTO"),
+      ("avatar", "photo.png")])
+  result["mailDividerLabel"] = proc(r: EmailRenderer; s: EmailNode) =
+    discard r.el(s, "mailDividerLabel", text = "or")
+  result["mailCoupon"] = proc(r: EmailRenderer; s: EmailNode) =
+    discard r.el(s, "mailCoupon", [("code", "SPRING-20"),
+      ("title", "20% off"), ("hint", "At checkout.")])
+  result["mailRatingScale"] = proc(r: EmailRenderer; s: EmailNode) =
+    for kind in ["stars", "nps"]:
+      discard r.el(s, "mailRatingScale", [("kind", kind),
+        ("href", "https://example.com/rate?s={score}")])
+  result["mailSecurityCode"] = proc(r: EmailRenderer; s: EmailNode) =
+    discard r.el(s, "mailSecurityCode", [("code", "123456"),
+      ("expires", "14:05 UTC"), ("href", "https://example.com/m"),
+      ("cta", "Sign in")])
+  result["mailAppBadges"] = proc(r: EmailRenderer; s: EmailNode) =
+    let b = r.el(s, "mailAppBadges")
+    discard r.el(b, "mailAppBadge", [("store", "apple"),
+      ("href", "https://apps.example.com/ios"), ("image", photo),
+      ("width", "120")])
 
 const
   ownLowering = ["mailBox", "mailCluster", "mailSidebar", "mailHero"]
@@ -219,7 +253,13 @@ const
     "mailQuote", "mailKeyValue", "mailLineItems", "mailStatTiles",
     "mailStepper", "mailStep", "mailTimeline", "mailEvent"]
     ## The containers and data patterns (layout-patterns.md §4.3, §4.4).
-  specialLowering = ["mailStepper", "mailTimeline"]
+  partC = ["mailButtonGroup", "mailBadge", "mailAvatarName",
+    "mailDividerLabel", "mailCoupon", "mailRatingScale", "mailSecurityCode",
+    "mailAppBadges"]
+    ## The actions and inline items (layout-patterns.md §4.5; the social
+    ## row is `mailSocial`).
+  specialLowering = ["mailStepper", "mailTimeline", "mailDividerLabel",
+    "mailBadge"]
     ## The patterns whose expansion writes its own layout table (their
     ## special lowering, R-TBL-01); every other table in an expansion is
     ## a data table's (`mailTable`).
@@ -250,10 +290,12 @@ suite "the patterns expand only into the vocabulary":
     let names = patternNames()
     # Vacuity guard: the registry is not empty, every structure and
     # media pattern is in it, and every registered pattern has a sample.
-    check names.len >= 30
+    check names.len >= 38
     for p in partA:
       check isPattern(p)
     for p in partB:
+      check isPattern(p)
+    for p in partC:
       check isPattern(p)
     let table = samples()
     for name in names:
@@ -517,6 +559,35 @@ suite "mailFooter":
     check "Acme Inc.<br>1 Example Street" in res.html
     check "font-size:12px;line-height:18px;" in res.html
     check ">·</span>" in res.html
+
+  test "test_footer_links_are_44px_targets":
+    # rule: R-TBL-12
+    # Links in a row are 44px hit areas: a 20px line padded 12px above
+    # and below; their padding is the space around the row, so the
+    # address, the row and the legal line share a stack with no gap.
+    let res = footerDoc([("address", "1 Example Street"),
+      ("unsubscribe", "https://example.com/u"),
+      ("preferences", "https://example.com/p"), ("legal", "Legal.")])
+    check not hasErrors(res.diagnostics)
+    let f = res.semantic.find("mailFooter")
+    # The links' row: the cluster with the separator (the social row,
+    # the footer's content, is a cluster too).
+    let row = f.all("mailCluster").filterIt(
+      it.attrs.getOrDefault("separator", "") == "·")
+    require row.len == 1
+    let links = row[0].all("a")
+    check links.len == 2
+    for a in links:
+      check a.styles["display"] == "inline-block"
+      check a.styles["padding"] == "12px 0"
+      check a.styles["line-height"] == "20px"
+    let group = row[0].parent
+    check group.tag == "mailStack" and group.styles["gap"] == "0"
+    let kids = group.children.filterIt(it.kind == enElement)
+    check kids.len == 3 and kids[1].tag == "mailCluster"
+    check "display:inline-block;padding:12px 0;" in res.html
+    # The legal line is still the footer's legal line (12px, no warning).
+    check codeA11yFontSmall notin codesOf(res.diagnostics)
 
   test "test_footer_needs_an_address_and_an_unsubscribe_link":
     check codeVocabBadValue in codesOf(footerDoc([("unsubscribe",

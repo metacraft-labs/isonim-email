@@ -1,0 +1,12 @@
+Your account manager
+====================
+
+A 64px avatar cropped to a circle from a landscape photo, a long name and a 
+role that wraps.
+
+Maximiliane Charlotte von Hohenberg-Winterfeld — Senior customer success 
+manager, enterprise accounts, Europe, the Middle East and Africa; reference 
+Supercalifragilisticexpialidociousnessless
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

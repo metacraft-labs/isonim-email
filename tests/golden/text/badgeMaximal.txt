@@ -1,0 +1,18 @@
+Release status
+==============
+
+Every tone in a cluster, a badge inside a sentence and inside a heading, and 
+a long label that wraps.
+
+[Neutral] · [Primary] · [Info] · [Shipped] · [Pending] · [Failed]
+
+Single sign-on [Beta]
+---------------------
+
+Your invoice is [Paid] and the order is [Awaiting shipment]. Reference 
+Supercalifragilisticexpialidociousnessless.
+
+[Scheduled maintenance this weekend: read-only from 02:00 to 03:00 UTC]
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

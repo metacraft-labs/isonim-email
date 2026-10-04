@@ -1,0 +1,13 @@
+Two new reviewers
+=================
+
+These two will review your pull request:
+
+Ada Lovelace — Engineering
+
+Grace Hopper — Compilers
+
+Open the pull request: https://example.com/pr/12
+
+Acme Inc., 1 Example Street, Springfield · Unsubscribe 
+(https://example.com/unsubscribe)

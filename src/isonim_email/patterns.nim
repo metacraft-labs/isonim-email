@@ -85,6 +85,11 @@ type
     expand*: ExpandProc
     expectedElements*: BriefProc
     degradations*: BriefProc
+    itemOf*: string
+      ## For an item element (a `mailStep`, a `mailSocialItem`), the
+      ## pattern that places it; "" for a pattern that stands on its
+      ## own. An item never appears outside its parent, so its parent's
+      ## stories are its stories (layout-patterns.md §5).
 
   PatternError* = object of ValueError
     ## A prop value that does not parse, or an expansion that refuses its
@@ -132,6 +137,15 @@ proc patternNames*(): seq[string] =
   ## Registered names, in registration order.
   for k in patternRegistry.keys:
     result.add(k)
+
+proc declareItemOf*(name, parent: string) =
+  ## Marks the registered pattern `name` as an item element that only
+  ## `parent` places (its `itemOf`); raises `PatternError` when either is
+  ## not registered.
+  if name notin patternRegistry or parent notin patternRegistry:
+    raise newException(PatternError, "declareItemOf: '" & name & "' and '" &
+      parent & "' must both be registered")
+  patternRegistry[name].itemOf = parent
 
 # --- Typed props ------------------------------------------------------------
 

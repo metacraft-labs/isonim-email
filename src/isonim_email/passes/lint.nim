@@ -1490,9 +1490,12 @@ const nonCssProps = [("mailstack", "gap"), ("mailcluster", "gap"),
   ## Vocabulary props that arrive as style keywords but are lowered to
   ## other markup, never emitted as the CSS property of that name.
 
-const specialLoweringTags* = ["mailStepper", "mailTimeline"]
+const specialLoweringTags* = ["mailStepper", "mailTimeline",
+  "mailDividerLabel", "mailBadge"]
   ## Patterns whose expansion writes its own layout table (their special
-  ## lowering, layout-patterns.md §4.4), which R-TBL-01 allows.
+  ## lowering, layout-patterns.md §4.4 and §4.5: the stepper, the
+  ## timeline, the labelled divider and the badge's Word wrapper), which
+  ## R-TBL-01 allows.
 
 proc lintTables(node: EmailNode; ancestors: seq[EmailNode]):
     seq[EmailDiagnostic] =
@@ -1821,22 +1824,32 @@ proc holdsDirectText(node: EmailNode): bool =
 
 proc isFooterLegal*(node: EmailNode): bool =
   ## True when `node` is the legal text of an expanded `mailFooter` (the
-  ## last line of the footer's stack, written from its `legal` prop):
-  ## that line only, never the author's content in the footer.
-  let stack = node.parent
-  if stack == nil or stack.kind != enElement or stack.tag != "mailStack":
-    return false
+  ## last line of the footer's stack, or of the stack the footer's links
+  ## row sits in, which closes the footer's; written from its `legal`
+  ## prop): that line only, never the author's content in the footer.
+  proc lastElement(x: EmailNode): EmailNode =
+    for c in x.children:
+      if c.kind == enElement:
+        result = c
+  var item = node
+  var stack = node.parent
+  var depth = 0
+  while true:
+    if stack == nil or stack.kind != enElement or stack.tag != "mailStack" or
+        lastElement(stack) != item:
+      return false
+    let up = stack.parent
+    if up != nil and up.kind == enElement and up.tag == "mailFooter":
+      break
+    inc depth
+    if depth > 1:
+      return false
+    item = stack
+    stack = up
   let footer = stack.parent
-  if footer == nil or footer.kind != enElement or
-      footer.tag != "mailFooter" or not footer.expanded:
+  if not footer.expanded:
     return false
-  if rawValue(footer, "legal").strip().len == 0:
-    return false
-  var last: EmailNode = nil
-  for c in stack.children:
-    if c.kind == enElement:
-      last = c
-  last == node
+  rawValue(footer, "legal").strip().len > 0
 
 proc lintFontSize(node: EmailNode; ancestors: seq[EmailNode]):
     seq[EmailDiagnostic] =

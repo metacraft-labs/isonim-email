@@ -1,0 +1,8 @@
+Status, dark
+============
+
+[Neutral] · [Primary] · [Info] · [Shipped] · [Pending] · [Failed]
+
+Your invoice is [Paid]
+
+Acme Inc., 1 Example Street, Springfield

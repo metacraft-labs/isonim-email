@@ -12,9 +12,9 @@
 > `mailStack`, `mailBox`, `mailColumns` with its four strategies,
 > `mailGrid`, `mailCluster`, `mailSidebar`) and `defineMailPattern`
 > (§4, §5), and the structure, media, container and data patterns
-> (§4.1–§4.4). The actions and inline items (§4.5) are specified here
-> and not yet implemented; an element without a lowering is reported
-> (`E-LOWER-MISSING`), never emitted raw.
+> (§4.1–§4.4), and the actions and inline items (§4.5). An element
+> without a lowering is reported (`E-LOWER-MISSING`), never emitted
+> raw.
 > **Last Updated:** 2026-10-04
 
 Email has settled ways of building things. How tables nest, where widths
@@ -175,15 +175,15 @@ email lowerings are this library's own: no published framework maps them
 
 ### 3.2 `mailBox`: padding, background, border
 
-|                   |                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Props             | `padding: Box = tok"space.5"`; `background_color`; `border: Border`; `border_radius: Len`; `shadow: none\|sm\|md = none`; `outlook_rounded: bool = false`                                                                                                                                                                                                                                                                     |
-| Lowering          | **a single-cell table**, the one primitive that is a table by default (Blocks Edit; goodemailcode.com container): `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:{separate if radius else collapse};"><tr><td bgcolor="{bg}" style="padding;background-color;border;border-radius;box-shadow">`. Everyone, Word included, sees the cell: no ghost table is needed |
-| Shadow            | `box-shadow` is decoration only. Unsupported in Gmail web, Word and Yahoo (caniemail `box-shadow`), so a `shadow` Box **always also has a border**: its own, else a 1px border one step (0.1 OKLCH lightness) darker than its background (R-TBL-09)                                                                                                                                                                           |
-| `outlook_rounded` | ☐ opt-in: the 3×3 table with VML corner arcs (kontent.ai, "Outlook containers with rounded corners"). Requires `padding ≥ border_radius`; never nest VML inside it. Shipped only once a Word-engine capture shows it works (R-TBL-16): until then it is not built, and asking for it is `E-LOWER-MISSING` (the box lowers square)                                                                                             |
-| NoCSS             | ✓                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Word              | ✓, with square corners and no shadow                                                                                                                                                                                                                                                                                                                                                                                          |
-| Text part         | content, as a Stack's (§3.1); the Box itself contributes nothing                                                                                                                                                                                                                                                                                                                                                              |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Props             | `padding: Box = tok"space.5"`; `background_color`; `border: Border`; `border_radius: Len`; `shadow: none\|sm\|md = none`; `outlook_rounded: bool = false`                                                                                                                                                                                                                                                                                        |
+| Lowering          | **a single-cell table**, the one primitive that is a table by default (Blocks Edit; goodemailcode.com container): `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:{separate if radius else collapse};table-layout:fixed;"><tr><td bgcolor="{bg}" style="padding;background-color;border;border-radius;box-shadow">`. Everyone, Word included, sees the cell: no ghost table is needed |
+| Shadow            | `box-shadow` is decoration only. Unsupported in Gmail web, Word and Yahoo (caniemail `box-shadow`), so a `shadow` Box **always also has a border**: its own, else a 1px border one step (0.1 OKLCH lightness) darker than its background (R-TBL-09)                                                                                                                                                                                              |
+| `outlook_rounded` | ☐ opt-in: the 3×3 table with VML corner arcs (kontent.ai, "Outlook containers with rounded corners"). Requires `padding ≥ border_radius`; never nest VML inside it. Shipped only once a Word-engine capture shows it works (R-TBL-16): until then it is not built, and asking for it is `E-LOWER-MISSING` (the box lowers square)                                                                                                                |
+| NoCSS             | ✓                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Word              | ✓, with square corners and no shadow                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Text part         | content, as a Stack's (§3.1); the Box itself contributes nothing                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ### 3.3 `mailColumns` / `mailColumn`: rows with an explicit strategy
 
@@ -412,7 +412,12 @@ designed`, in their designed dark colours (a band without a background
 - _Built from:_ a `mailStack(gap = space.3)` aligned per `align`: the
   content, the reason and the address (`type.small`), a
   `mailCluster(separator = "·")` of the links (`type.small`), and the
-  legal text (12px).
+  legal text (12px). The links sit in a row, so each is a 44px hit area
+  (R-TBL-12): `display:inline-block;padding:12px 0` around its 20px
+  line. That padding is the space around the row: the address, the
+  row and the legal text are a `mailStack(gap = 0)` inside the
+  footer's, so the links' text sits 12px from the lines above and below
+  it, as the stack's gap set it before, and the footer is no taller.
 - _Special:_ text ≥ 12px (R-TXT-03 allows 12 only here: the legal text
   is not `W-A11Y-FONT-SMALL`); contrast ≥ 4.5:1 in all four palettes
   (light, designed dark, partial and full inversion; _design rule_): the
@@ -666,8 +671,17 @@ thumb_alt)` items: `description` and `amount` are required; `detail`
   nested `mailSidebar(fixed = thumb_width, valign = top, gap = space.3,
 switch_below = 0)`, never a 4th column. Quantity and amount are
   end-aligned and `nowrap`; without any quantity there is no quantity
-  column. The table's outer cells have no padding on its outer edges,
-  so its text lines up with the text around it.
+  column. A nested sidebar's fixed layout claims no width for its words,
+  so with thumbnails the sidebar sits in a box whose `min-width` is the
+  thumbnail, its gap and the descriptions' longest word (16px; a
+  detail's at 14px) by the text metrics' worst case, whenever that fits
+  a band's content width at 320px (288px) beside the quantity and
+  amount columns (their widest text and padding): the word then never
+  breaks on a phone. When it does not fit, there is no minimum and such
+  a word breaks inside the column (a declared degradation; prefer the
+  `cards` form for long words beside thumbnails). The table's outer
+  cells have no padding on its outer edges, so its text lines up with
+  the text around it.
 - _Special:_
   - The desktop design is **readable at 320px**: SKU and unit price are
     the description's second line, so no stacking is needed (and none
@@ -703,7 +717,7 @@ min_item = 72px)` of `mailBox`es (ragged when their labels wrap
 - _A11y:_ the number and its unit share one text node (the `value`).
 - _Text:_ `label: value` lines.
 
-**`mailStepper`** (horizontal order status, 3–5 steps)
+**`mailStepper`** (order status, 3–5 steps: horizontal, or vertical when its labels cannot fit a phone)
 
 - _Props:_ `current: int` (the current step, from 1), `status` (the
   visually hidden line, default `Current step: {label} ({n} of {m})`),
@@ -713,7 +727,9 @@ min_item = 72px)` of `mailBox`es (ragged when their labels wrap
 - _Special lowering (bespoke geometry):_ a fixed, non-stacking table of
   two rows (_design rule_; no framework ships one). The expansion writes
   the table itself, which R-TBL-01 allows for steppers, rather than a
-  primitive. One column per step, `100/m`% wide:
+  primitive, with `table-layout:fixed` inline, so no label can widen it
+  past its box. One column per step, `100/m`% wide unless a label needs
+  more (below):
   - Row 1 (`aria-hidden`): each step's marker, a 28px circle
     (`border-radius:50%`, square in Word) holding the step's number, or
     a check glyph once the step is done, between the halves of its
@@ -726,11 +742,30 @@ min_item = 72px)` of `mailBox`es (ragged when their labels wrap
     after it.
   - Row 2: the labels (`type.small`, 14px, ≥ 12px), each centred under
     its marker, the current one bold.
-  - Fits 320px at 5 steps, about 60px a step on a phone: a label word
-    longer than that breaks inside its step today, which is a defect
-    still to fix, not a declared degradation; keep labels short. More
-    than 5 steps is `E-PATTERN-STEPPER-LONG`,
-    which points to `mailTimeline`; fewer than 3 is `E-VOCAB-BAD-VALUE`.
+  - **A label word never breaks inside its step.** The expansion
+    measures each label's longest word, bold at 14px, with the text
+    metrics' worst case (`style/metrics`, the estimate that errs wide),
+    plus 4px, against a band's content width at 320px (288px: the
+    phone's width less the 16px gutters), where 5 steps get about 58px
+    each. A step whose word does not fit its equal share is widened to
+    it, and the others share the rest equally (each still at least its
+    own word): the column widths are those percentages at every width,
+    so the markers stay centred over their labels and the connectors run
+    marker to marker. Where head CSS is stripped nothing changes, since
+    nothing here depends on it.
+  - **Vertical form.** When the steps' words cannot all fit 288px
+    together, the stepper is drawn vertically at every width, still one
+    fixed table: one row per step, its marker (as above) in a 28px track
+    beside its label (padded 12px on the start side, vertically
+    centred), and between two steps a 16px row whose track is a
+    three-cell line (13px, 2px, 13px: the connector, in the colours
+    above). A word longer than the label cell itself (an unbroken
+    reference) still breaks there (R-TBL-17).
+  - Inside a box narrower than a band (a card, a column) a word that
+    fits 288px may still break: a declared degradation; keep the labels
+    of a nested stepper short. More than 5 steps is
+    `E-PATTERN-STEPPER-LONG`, which points to `mailTimeline`; fewer than
+    3 is `E-VOCAB-BAD-VALUE`.
 - _A11y:_ a visually hidden **and** text-part line `Current step: Shipped
 (2 of 4)` is mandatory: a `current` that names no step, or a current
   step without a label, is `E-PATTERN-MISSING-TEXT`. The line is hidden
@@ -784,75 +819,176 @@ switch_below = 0)` with a date tile (`aria-hidden`: a `mailBox` with a
 
 **`mailButtonGroup`**
 
-- _Built from:_ a `mailCluster(gap ≥ 12px)` of `mailButton`s (primary plus
-  secondary `variant = outline`). `stack_on_mobile = true` adds a
-  full-width-on-mobile class. NoCSS wraps, which is correct (Foundation for
-  Emails `small-expand`; Cerberus).
-- _Text:_ each `label: url`.
+- _Props:_ `gap: Len = 12px` (at least 12px: below it is
+  `E-VOCAB-BAD-VALUE`), `align: Align` (the start of the direction),
+  `stack_on_mobile: bool = false`.
+- _Content:_ 1–3 `mailButton`s. A button without a `variant` of its own
+  is `solid` when it is the first (the primary action) and `outline`
+  after it (secondary): the button's defaults read its place in the
+  group.
+- _Built from:_ a `mailCluster(gap, row_gap = gap, align)` of the
+  buttons: side by side, wrapping where they do not fit, which is
+  correct without CSS too (Foundation for Emails; Cerberus). Word lays
+  them on one row.
+  `stack_on_mobile = true`: a `mailColumns(strategy = hybrid, gutter =
+gap)` of one column per button, each button `width = 100%` of its
+  column: side by side with equal widths from the breakpoint up, one
+  per line at full width on a phone, and stacked wherever head CSS is
+  lost (the hybrid row's safe state); Word gets one row (Foundation for
+  Emails `small-expand`). Side by side, buttons whose labels wrap onto
+  different numbers of lines have different heights (the hybrid row is
+  ragged, §3.3).
+- _A11y:_ every button is a 44px target (R-BTN-06), 12px or more from
+  the next (R-TBL-12).
+- _Text:_ each `label: url`, one per line.
 
 **`mailBadge`**
 
-- An inline `span` (`inline-block`, padding, radius 999px, tone background).
-- _Special:_ Word ignores span padding (caniemail `css-padding`). When
-  Outlook output is on, the badge is wrapped in a single-cell
-  `inline-table`, following MJML's `mj-social` item pattern. Groups of
-  badges are a `mailCluster`.
+- _Props:_ `tone: Tone = neutral`.
+- _Content:_ the label (text).
+- _Built from:_ an inline `span`: `display:inline-block`, padding
+  `1px 9px`, radius 999px, `type.small` bold, `white-space:nowrap` when
+  the label has 20 characters or fewer; the label in
+  `color.text.primary` on the tone's tint (`color.surface.subtle` for
+  `neutral` and `primary`, a status tone's `.bg`) inside a 1px border in
+  the tone's colour (`color.text.secondary` for `neutral`, the accent
+  for `primary`), all dark-paired under `designed`. The label is never
+  the tone's colour: on its tint that is under 4.5:1 for 14px text
+  (primary 4.4:1, info 4.07:1 in the default theme). The border keeps the
+  pill visible where its tint is close to the surface (a neutral or
+  primary badge on a white card) and where a client darkens the tint
+  with the canvas (Outlook web's dark recolouring keeps a border a
+  line).
+- _Special (the badge Word wrapper):_ Word ignores a span's padding
+  (caniemail `css-padding`). When Outlook output is on and the badge
+  sits on a line of its own or in a cluster (not inside a line of
+  text), the expansion writes it as a single-cell table,
+  `display:inline-table`, whose cell carries the padding, the
+  background, the radius and the type, following MJML's `mj-social`
+  item pattern (R-TBL-01 admits it); every client reads that table, so
+  the badge looks the same everywhere and Word pads it. Inside a line
+  of text (a paragraph, a heading, a list item, a link) a table cannot
+  sit, so the badge stays the span: Word draws it unpadded and square,
+  a declared degradation. Groups of badges are a `mailCluster`.
 - _A11y:_ the text carries the meaning, never the colour alone.
 - _Text:_ `[label]`.
 
 **`mailAvatarName`**
 
-- _Built from:_ `mailSidebar(fixed = size, valign = middle)` of an avatar and
-  a name/role Stack.
-- _Special:_ avatars are **pre-cropped circular PNGs**. `border-radius:50%`
-  alone is square in Word. Overlapping avatar stacks are not offered
-  (they need negative margins; caniemail `css-margin`).
-- _Text:_ `Name — role`.
+- _Props:_ `name` (required), `role`, `avatar: Url` (required),
+  `avatar_alt` (default empty: decorative, the name beside it says who
+  it is), `size = 48` (32–96 px), `crop: circle|none = circle`.
+- _Built from:_ `mailSidebar(fixed = size, valign = middle, gap =
+space.3, switch_below = 0)` of the avatar (a `mailImage` `size` px
+  square) and a `mailStack(gap = 0)` of the name (bold) and the role
+  (`type.small`, `color.text.secondary`).
+- _Special:_ avatars are **circular PNGs**: `crop = circle` has the
+  asset pass cut one from a PNG the store holds (R-IMG-13); a hosted
+  avatar (an absolute URL) must already be one, `crop = none`
+  (otherwise `E-ASSET-CROP`). `border-radius:50%` alone is square in
+  Word. Overlapping avatar stacks are not offered (they need negative
+  margins; caniemail `css-margin`).
+- _Text:_ `Name — role` (the name alone without a role).
 
 **`mailDividerLabel`** ("or")
 
-- _Special lowering:_ a three-cell table: rule cell | label cell (nowrap,
-  padding 0 12px) | rule cell. The rules are 1px `bgcolor` cells inside
-  nested tables, all `valign = middle` (Parcel `x-hr`).
+- _Content:_ the label (text).
+- _Special lowering:_ the expansion writes a three-cell table (R-TBL-01
+  admits labelled dividers): rule cell | label cell (`type.small`,
+  `color.text.secondary`, padding `16px 12px`) | rule cell. The rules
+  are the 1px top borders (`color.border.subtle`) of empty cells inside
+  nested tables, all `valign = middle`, the rule cells padded `16px 0`
+  (Parcel `x-hr`). A border, not a painted cell: a client that inverts
+  a message (Outlook web's dark recolouring) darkens a background with
+  the canvas, so a painted hairline vanishes, and keeps a border a
+  visible line, as it does `mailDivider`'s.
+  The table keeps an automatic layout (`table-layout:auto !important`
+  inline: the reset fixes every table's layout, which would give the
+  label a third of the row). A label of 20 characters or fewer is
+  `white-space:nowrap` beside rule cells 50% wide, so its cell takes its
+  text's width and the rules share the rest; a longer one wraps in a
+  cell 60% wide beside rules of 20%, breaking a word too long for it
+  (`word-break:break-word`), so it never widens the row. The rule cells
+  are `aria-hidden`; the label is real text.
 - _Text:_ `—— or ——`.
 
 **`mailCoupon`**
 
-- _Built from:_ `mailBox(border = "2px dashed …")` holding a centred
-  monospace code with `letter-spacing` and an optional copy-hint text.
+- _Props:_ `code` (required), `title` (the offer, above the code),
+  `hint` (a copy hint, under it), `label = "Code"` (the text part's
+  word for the code).
+- _Built from:_ `mailBox(border = "2px dashed color.accent.primary",
+background = color.surface.subtle, radius 8px, padding 16px 24px)`
+  holding a centred `mailStack(gap = space.2)` of the title (bold), the
+  code (`font.mono`, 24px/32px bold, `letter-spacing:2px`) and the hint
+  (`type.small`, `color.text.secondary`).
 - _Special:_ the same background colour on the cell **and** its parent
   (Outlook shows the parent colour between dashes, R-TBL-08; hteumeuleu
-  email-bugs #34); the code wrapped against data detectors (R-TXT-06).
-- _Text:_ `Code: ABC-123`.
+  email-bugs #34): the box lowering does this for any dashed or dotted
+  box with a background. The code is a `span nolink = true` (R-TXT-06),
+  so no data detector turns its digits into a link. The code is text,
+  never an image.
+- _Text:_ the title, then `Code: ABC-123`, then the hint.
 
 **`mailRatingScale`** (NPS 0–10, stars 1–5)
 
-- _Props:_ `kind: nps|stars`, `href: proc(score): Url`, `low_label`,
-  `high_label`.
+- _Props:_ `kind: nps|stars = stars`, `href` (required: the link for a
+  score, with `{score}` where the score goes; without it
+  `E-VOCAB-BAD-VALUE`), `low_label`, `high_label` (the scale's end
+  labels; an NPS scale's default `Not likely` and `Very likely`).
 - _Built from:_
-  - stars: a `mailCluster` of 5 linked 44px items;
-  - NPS: two fixed rows (0–5 and 6–10), `cells` rows in a Stack, so the
-    wrap point is deterministic and every target stays 44px.
-- _A11y:_ each link has text ("Rate 4 out of 5"); the end labels are real
-  text.
-- _Text:_ `0: url` … one line per score.
+  - stars: a `mailCluster(gap = 8px)` of 5 linked 44px items, each a
+    `★` (28px, `color.accent.primary`) in a 44px square link box;
+  - NPS: two fixed rows (0–5 and 6–10), `cells` rows of six 44px-tall
+    painted cells (`color.surface.subtle`, a 1px `color.border.subtle`
+    border, 6px radius, `min_width = 40px`, gutter 8px) in a
+    `mailStack(gap = 8px)`, the second row's sixth cell empty, so the
+    wrap point is deterministic, the two rows' cells line up, and every
+    target stays 44px tall; each cell's link fills it (`display:block`,
+    the number bold, centred);
+  - the end labels (`type.small`, `color.text.secondary`) under the
+    scale, a `cells` row of two, the high one end-aligned.
+- _A11y:_ each link has text: a visually hidden "Rate" before the
+  number and "out of 10" ("out of 5") after it, so it reads "Rate 4
+  out of 10"; a star's glyph is `aria-hidden` beside its hidden text
+  "Rate 4 out of 5". The end labels are real text. Every target is 44px
+  tall and 8px from the next (R-TBL-12).
+- _Text:_ the end labels (`0 = Not likely, 10 = Very likely`) when
+  there are any, then `0: url` … one line per score.
 
 **`mailSecurityCode`** (OTP / magic link)
 
-- _Built from:_ a `mailBox` holding a large monospace code with
-  letter-spacing, the expiry line in absolute time, and an optional
+- _Props:_ `code` (required), `expires` (required: the expiry in
+  absolute time, `14:05 UTC`), `label = "Your code"`, `expires_label =
+"Expires at"`, `href` and `cta` (the magic link's button).
+- _Built from:_ a centred `mailBox` (`color.surface.subtle`, radius 8px,
+  padding 24px) holding a `mailStack(gap = space.3)` of the label
+  (`type.small`, `color.text.secondary`), the code (`font.mono`,
+  32px/40px bold, `letter-spacing:6px`), the expiry line (`type.small`,
+  `color.text.secondary`: `Expires at 14:05 UTC`) and an optional
   `mailButton` for the magic link.
-- _Special:_ data-detector protection; the code is never an image.
-- _Text:_ `Your code: 123456 (expires 14:05 UTC)`.
+- _Special:_ the code is a `span nolink = true` (R-TXT-06: no detector
+  links its digits) and is never an image.
+- _Text:_ `Your code: 123456 (expires at 14:05 UTC)`, then the button's
+  `label: url`.
 
-**`mailSocialRow`** / **`mailAppBadges`**
+**`mailSocial`** (the social row) / **`mailAppBadges`**
 
 - _Built from:_ `mailCluster` of icon images.
-  - Social icons: 24–32px @2x, with light/dark variants swapped (R-IMG-06);
-    alt = network name (MJML `mj-social`).
-  - App badges: official artwork, 40–48px tall, gap ≥ ¼ of the badge
-    height (Apple's App Store marketing guidelines).
-- _Text:_ `Network: url` lines.
+  - Social icons are the `mailSocial` element (catalogue R-IMG-12):
+    24–32px @2x, with light/dark variants swapped (R-IMG-06); alt = the
+    network's name (MJML `mj-social`).
+  - App badges: `mailAppBadges(height = 40, align = center, gap)`
+    holding `mailAppBadge(store: apple|google|other, href, image,
+dark_image, width, alt)` items: the application's official artwork
+    (`image`, required, with `width` its px width at the row's height),
+    40–48px tall (another `height` is `E-VOCAB-BAD-VALUE`), the gap at
+    least a quarter of the badge height (default the larger of 12px and
+    that; less is `E-VOCAB-BAD-VALUE`) (Apple's App Store marketing
+    guidelines); `dark_image` its dark variant, swapped under
+    `designed` (R-IMG-06). The alt defaults to `Download on the App
+Store` and `Get it on Google Play`; `other` needs one.
+- _Text:_ `Network: url` lines; a badge's `alt: url`.
 
 ### 4.6 Pattern coverage of common email types
 
@@ -865,6 +1001,11 @@ switch_below = 0)` with a date tile (`aria-hidden`: a `mailBox` with a
 | Digest / newsletter                   | Header, Hero, Grid of Cards or ZigZag, Footer                          |
 | Event invitation                      | Header, Hero, Event, ButtonGroup, Footer                               |
 | Survey                                | Header, RatingScale, Footer                                            |
+
+Each row is built from exactly these patterns, with no raw markup and no
+error, by `test_common_email_types_are_buildable`; the layouts that wrap
+them (`receiptLayout`, …) and the reference emails come with the
+templates.
 
 ---
 
@@ -884,6 +1025,21 @@ client it is captured in:
 6. `inContext`: the pattern between two different neighbours in a band
    (spacing and colour-bleed checks between adjacent modules; Litmus and
    Parcel on module QA).
+
+A story is named after its element without the `mail` prefix, first
+letter lower-cased, and the kind (`cardMinimal`, `codeInlineRtl`). Two
+exceptions are made, and `test_pattern_story_set_complete` holds every
+registered primitive and pattern to the rule with exactly these:
+
+- **Item elements are covered by their parent's stories.** An item
+  (`mailStep`, `mailSocialItem`, `mailNavLink`) is a registered pattern
+  only its parent places, and it never appears on its own: its six
+  stories are its parent's, which show every item kind it has. Items a
+  parent reads and consumes (`mailKeyValueRow`, `mailLineItem`,
+  `mailStat`, `mailTimelineEvent`, `mailAppBadge`) are not registered
+  patterns at all.
+- **No `rtl` story where right to left is refused**: `mailZigZag`
+  (R-LAY-11).
 
 The review brief generator reads each pattern's `expectedElements` and
 `degradations` declarations, which `defineMailPattern` requires: both

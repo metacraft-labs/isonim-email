@@ -29,7 +29,8 @@
 ## away from it (for Word, which ignores the span's padding, a space).
 ## A line that wraps ends with its last item's separator, a declared
 ## degradation like its trailing gap. Items break a word too long for
-## the line (`overflow-wrap:break-word`, R-TBL-17). Word's row never
+## the line (`overflow-wrap:break-word`, capped at the line's width with
+## `max-width:100%` and `box-sizing:border-box`, R-TBL-17). Word's row never
 ## wraps, so a cluster whose items do not fit one line runs past its box
 ## there: a declared degradation (keep such clusters short, or let them
 ## wrap to a `mailGrid`).
@@ -175,6 +176,12 @@ proc lowerCluster*(node: EmailNode; ctx: LowerCtx):
     # item's narrowest width alone, so a row Word cannot wrap never
     # squeezes every label into broken words.
     r.setStyle(itemDiv, "overflow-wrap", "break-word")
+    # …and an item is never wider than its line, its gap included: an
+    # inline-block grows to its longest word, which `overflow-wrap`
+    # leaves alone, so a word longer than the line would push the item
+    # past the message's edge (R-TBL-17). Word reads its ghost cells.
+    r.setStyle(itemDiv, "max-width", "100%")
+    r.setStyle(itemDiv, "box-sizing", "border-box")
     r.appendChild(itemDiv, item)
     if separator.len > 0 and not last:
       if ctx.target.outlookWord:
