@@ -21,6 +21,7 @@
 ## one current client lacking a feature means the family lacks it. This is
 ## the conservative reading, and the right one for email.
 
+import std/tables
 import ../target
 import ./caniemail_data
 
@@ -90,6 +91,22 @@ proc familySupport*(slug: string; f: ClientFamily): FamilySupport =
           notes.add(n)
   FamilySupport(value: worst, witnesses: witnesses, notes: notes)
 
+proc computeUnsupportedFamilies(slug: string): set[ClientFamily] =
+  ## `unsupportedFamilies` read from the snapshot, every time.
+  for f in ClientFamily:
+    if familySupport(slug, f).value == svNo:
+      result.incl(f)
+
+var unsupportedMemo {.threadvar.}: Table[string, set[ClientFamily]]
+  ## `unsupportedFamilies` per slug, as read once on this thread. The
+  ## snapshot is constant, so the answer never changes; reading it means
+  ## scanning the feature and client lists for each of a family's keys,
+  ## which the lint pass otherwise repeats for every declaration of every
+  ## element. The lint's slugs come from fixed mappings; a caller passing
+  ## slugs of its own is bounded by `unsupportedMemoCap`.
+
+const unsupportedMemoCap = 1024
+
 proc unsupportedFamilies*(slug: string): set[ClientFamily] =
   ## Families where `slug` reads `svNo`. Partial (`svPartial`) counts as
   ## supported here: caniemail partials overwhelmingly restrict exotic
@@ -97,6 +114,9 @@ proc unsupportedFamilies*(slug: string): set[ClientFamily] =
   ## `/` shorthand), and counting them as gaps would warn on bread-and-
   ## butter CSS — `margin` and `text-align` are partial in seven families.
   ## Unknown (`svUnknown`) abstains: no data, no diagnostic.
-  for f in ClientFamily:
-    if familySupport(slug, f).value == svNo:
-      result.incl(f)
+  unsupportedMemo.withValue(slug, known):
+    return known[]
+  result = computeUnsupportedFamilies(slug)
+  if unsupportedMemo.len >= unsupportedMemoCap:
+    unsupportedMemo.clear()
+  unsupportedMemo[slug] = result

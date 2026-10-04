@@ -1104,6 +1104,26 @@ proc logoVerdict*(bytes: string): tuple[verdict: LogoVerdict;
     return (lvUnsafe, "near-black")
   (lvSafe, "")
 
+const logoVerdictMemoCap = 256
+  ## How many images' verdicts `memoLogoVerdict` keeps per thread before
+  ## it starts over (a sender with endless distinct logos stays bounded).
+
+var logoVerdictMemo {.threadvar.}: Table[string, tuple[
+  verdict: LogoVerdict; failsOn: string]]
+  ## `logoVerdict` per image bytes, as computed on this thread.
+
+proc memoLogoVerdict(bytes: string): tuple[verdict: LogoVerdict;
+    failsOn: string] =
+  ## `logoVerdict(bytes)`, decoded once per distinct image: the verdict
+  ## is a function of the bytes alone, and a sender renders the same
+  ## logo into every message.
+  logoVerdictMemo.withValue(bytes, known):
+    return known[]
+  result = logoVerdict(bytes)
+  if logoVerdictMemo.len >= logoVerdictMemoCap:
+    logoVerdictMemo.clear()
+  logoVerdictMemo[bytes] = result
+
 proc lintDarkLogos*(root: EmailNode;
                     assets: openArray[AssetRef]): seq[EmailDiagnostic] =
   ## R-DRK-06 for the light image of every `dark_src` pair (P10, after
@@ -1125,7 +1145,7 @@ proc lintDarkLogos*(root: EmailNode;
       let src = node.attrs.getOrDefault("src", "")
       for a in assets:
         if a.url.len > 0 and a.url == src and a.bytes.len > 0:
-          let (verdict, failsOn) = logoVerdict(a.bytes)
+          let (verdict, failsOn) = memoLogoVerdict(a.bytes)
           if verdict == lvTooLarge:
             result.add(EmailDiagnostic(severity: sevInfo,
               code: codeDarkLogoUnchecked,

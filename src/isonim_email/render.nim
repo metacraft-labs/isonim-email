@@ -44,6 +44,7 @@ import ./content
 import ./text
 import ./crop
 import ./gmail_markup
+import ./pass_timing
 
 ## The client families an edit to this module can change: read by
 ## the capture CLI to pick the families of an `--affected` run.
@@ -55,6 +56,7 @@ export diagnostics
 export assets
 export tokens
 export gmail_markup
+export pass_timing
 
 type RenderedEmail* = object
   ## One rendered email: the document bytes, the plain-text
@@ -447,109 +449,136 @@ proc renderTree*(doc: EmailNode; theme = defaultTheme();
   ## (`E-TEXT-EMPTY`) the text is "" and MIME packaging sends the HTML
   ## alone, never an empty `text/plain` part (see `toMessage`).
   assertNoReactiveResidue(doc)
+  # Each stage runs inside `timedStage`, which is the stage's code alone
+  # unless the benchmark build asks for its timings (pass_timing.nim).
   # Patterns expand first, so their expansions go through every pass.
-  var diags = expandPatterns(doc, theme, target)
-  diags.add(validate(doc))
+  var diags: seq[EmailDiagnostic]
+  timedStage(rsPatterns):
+    diags = expandPatterns(doc, theme, target)
   # P1's Gmail markup check (R-SND-07): the blocks with no error are
   # written at the end of the head by the document lowering.
-  let markup = gmailMarkupBlocks(doc)
-  diags.add(markup.diagnostics)
+  var markup: tuple[json: seq[string]; diagnostics: seq[EmailDiagnostic]]
+  timedStage(rsP1):
+    diags.add(validate(doc))
+    markup = gmailMarkupBlocks(doc)
+    diags.add(markup.diagnostics)
   # P3 reads the authoring values (P5 rounds percentages to two
   # decimals; the width maths needs them whole) and annotates the tree,
   # so the semantic tree carries the widths too.
-  diags.add(solveLayout(doc, theme, target))
-  let styled = applyStyles(doc, theme, target, profile)
-  diags.add(styled.diagnostics)
-  let fonts = webFontRules(target, theme)
-  diags.add(fonts.diagnostics)
-  let headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
-    msoRules = fonts.mso, columns = columnRules(doc),
-    swaps = darkSwapImages(doc))
-  diags.add(headRes.diagnostics)
-  for blk in headRes.blocks:
-    if blk.kind == enHeadStyle and blk.priority == fontsPriority:
-      # R-TXT-07: web fonts load in a few families only; the fallback
-      # stack is the design everywhere else, an expected degradation.
-      var supported: set[ClientFamily] = {}
-      for f in ClientFamily:
-        if f notin {cfApple, cfSamsung, cfThunderbird, cfOutlookApp}:
-          supported.incl(f)
-      diags.add(lintHeadCss(blk.text, profile, [expectDegradation(
-        lkAtRule, "font-face", supported, "web fonts fall back to the " &
-        "stack's next family (R-TXT-07)")]))
-  diags.add(applyA11y(doc))
-  diags.add(lintTree(doc, profile))
-  if target.darkMode != dmNone:
-    # R-DRK-04's inversion simulation: the clients that recolour a
-    # message themselves do so under `accommodate` and `designed` alike.
-    diags.add(lintInversion(doc, profile))
-  if target.darkMode == dmDesigned:
-    # R-DRK-04's dark scheme, as painted by the dark block when it
-    # survived the head budget (a dropped block paints nothing dark).
-    var darkSurvived = false
+  timedStage(rsP3):
+    diags.add(solveLayout(doc, theme, target))
+  var styled: typeof(applyStyles(doc, theme, target, profile))
+  timedStage(rsP5):
+    styled = applyStyles(doc, theme, target, profile)
+    diags.add(styled.diagnostics)
+  var headRes: typeof(assembleHead(@[], target))
+  timedStage(rsP6):
+    let fonts = webFontRules(target, theme)
+    diags.add(fonts.diagnostics)
+    headRes = assembleHead(styled.head, target, webfonts = fonts.faces,
+      msoRules = fonts.mso, columns = columnRules(doc),
+      swaps = darkSwapImages(doc))
+    diags.add(headRes.diagnostics)
+  timedStage(rsP10):
     for blk in headRes.blocks:
-      if blk.kind == enHeadStyle and blk.priority == darkPriority:
-        darkSurvived = true
-    if darkSurvived:
-      var dark: seq[DarkDecl] = @[]
-      for d in styled.head:
-        if d.variant == "dark" and d.prop in ["color", "background-color"]:
-          dark.add((d.node, d.prop, d.value))
-      diags.add(lintDarkContrast(doc, dark))
-  if target.darkMode != dmNone:
-    # Adjacent bands that read as one once a client darkens them, or in
-    # the designed dark palette (layout-patterns.md §4.1).
-    var bandDark: seq[DarkDecl] = @[]
+      if blk.kind == enHeadStyle and blk.priority == fontsPriority:
+        # R-TXT-07: web fonts load in a few families only; the fallback
+        # stack is the design everywhere else, an expected degradation.
+        var supported: set[ClientFamily] = {}
+        for f in ClientFamily:
+          if f notin {cfApple, cfSamsung, cfThunderbird, cfOutlookApp}:
+            supported.incl(f)
+        diags.add(lintHeadCss(blk.text, profile, [expectDegradation(
+          lkAtRule, "font-face", supported, "web fonts fall back to the " &
+          "stack's next family (R-TXT-07)")]))
+  timedStage(rsP7):
+    diags.add(applyA11y(doc))
+  timedStage(rsP10):
+    diags.add(lintTree(doc, profile))
+    if target.darkMode != dmNone:
+      # R-DRK-04's inversion simulation: the clients that recolour a
+      # message themselves do so under `accommodate` and `designed` alike.
+      diags.add(lintInversion(doc, profile))
     if target.darkMode == dmDesigned:
+      # R-DRK-04's dark scheme, as painted by the dark block when it
+      # survived the head budget (a dropped block paints nothing dark).
+      var darkSurvived = false
       for blk in headRes.blocks:
         if blk.kind == enHeadStyle and blk.priority == darkPriority:
-          for d in styled.head:
-            if d.variant == "dark" and d.prop == "background-color":
-              bandDark.add((d.node, d.prop, d.value))
-          break
-    diags.add(lintBandsMerge(doc, bandDark))
-  let found = resolveAssets(doc, assets)
-  diags.add(found.diagnostics)
+          darkSurvived = true
+      if darkSurvived:
+        var dark: seq[DarkDecl] = @[]
+        for d in styled.head:
+          if d.variant == "dark" and d.prop in ["color", "background-color"]:
+            dark.add((d.node, d.prop, d.value))
+        diags.add(lintDarkContrast(doc, dark))
+    if target.darkMode != dmNone:
+      # Adjacent bands that read as one once a client darkens them, or in
+      # the designed dark palette (layout-patterns.md §4.1).
+      var bandDark: seq[DarkDecl] = @[]
+      if target.darkMode == dmDesigned:
+        for blk in headRes.blocks:
+          if blk.kind == enHeadStyle and blk.priority == darkPriority:
+            for d in styled.head:
+              if d.variant == "dark" and d.prop == "background-color":
+                bandDark.add((d.node, d.prop, d.value))
+            break
+      diags.add(lintBandsMerge(doc, bandDark))
+  var found: tuple[assets: seq[AssetRef]; diagnostics: seq[EmailDiagnostic]]
+  timedStage(rsP8):
+    found = resolveAssets(doc, assets)
+    diags.add(found.diagnostics)
   if target.darkMode != dmNone:
     # R-DRK-06: a pair's light image shows unswapped in dark mode
     # wherever the dark block does not apply.
-    diags.add(lintDarkLogos(doc, found.assets))
-  diags.add(checkBackgroundUrls(doc))
+    timedStage(rsP10):
+      diags.add(lintDarkLogos(doc, found.assets))
+  timedStage(rsP8):
+    diags.add(checkBackgroundUrls(doc))
   # P12: the plain-text part, from the semantic tree (never the HTML).
-  let plain = renderText(doc)
-  diags.add(plain.diagnostics)
+  var plain: typeof(renderText(doc))
+  timedStage(rsP12):
+    plain = renderText(doc)
+    diags.add(plain.diagnostics)
 
   # Lowering reads the same tree the passes just walked. P4 lowers the
   # vocabulary elements of the clone (images read their intrinsic
   # size from the assets just published) and collects an error for
   # any element with no lowering; the document shell then wraps it.
-  let work = cloneTree(doc)
-  diags.add(lowerElements(work, theme, found.assets, target))
-  let r = EmailRenderer()
-  let sections = r.createElement("div")
-  let kids =
-    if work == nil: @[]
-    else: work.children # Copy: appendChild detaches as it moves.
-  for c in kids:
-    r.appendChild(sections, c)
-  let lowered = lowerDocument(work, sections, headRes.blocks, target,
-    markup.json)
+  var lowered: EmailNode
+  timedStage(rsP4):
+    let work = cloneTree(doc)
+    diags.add(lowerElements(work, theme, found.assets, target))
+    let r = EmailRenderer()
+    let sections = r.createElement("div")
+    let kids =
+      if work == nil: @[]
+      else: work.children # Copy: appendChild detaches as it moves.
+    for c in kids:
+      r.appendChild(sections, c)
+    lowered = lowerDocument(work, sections, headRes.blocks, target,
+      markup.json)
   # P10 over what is emitted: the closed mso-* list (R-OL-15), the
   # layout-table depth outside Outlook conditionals (R-TBL-15) and no
   # sectioning element (R-A11Y-10).
-  diags.add(lintMsoProperties(lowered))
-  diags.add(lintTableDepth(lowered))
-  diags.add(lintSectioning(lowered))
+  timedStage(rsP10):
+    diags.add(lintMsoProperties(lowered))
+    diags.add(lintTableDepth(lowered))
+    diags.add(lintSectioning(lowered))
   # The breakdown is counted while the bytes are written (R-SIZE-02),
   # so it partitions the document exactly.
-  let (html, sizeBreakdown) = serializeDocumentMeasured(lowered)
+  var html: string
+  var sizeBreakdown: seq[(string, int)]
+  timedStage(rsP11):
+    (html, sizeBreakdown) = serializeDocumentMeasured(lowered)
 
   var headCssBytes = 0
   for blk in headRes.blocks:
     if blk.kind == enHeadStyle:
       headCssBytes += blk.text.len
   let htmlBytes = html.len
-  diags.add(checkSize(html, target, sizeBreakdown))
+  timedStage(rsP10):
+    diags.add(checkSize(html, target, sizeBreakdown))
 
   if strict and hasErrors(diags):
     raiseDiagnostic(firstError(diags))
@@ -579,5 +608,7 @@ proc renderEmail*[T](tpl: EmailTemplate[T]; data: T;
   ## Renders one email: `renderAuthoringTree` plus `renderTree`. The
   ## same template, data, theme, target and profile always yield the
   ## same record, byte for byte.
-  renderTree(renderAuthoringTree(tpl, data), theme, target, profile,
-    strict, assets)
+  var tree: EmailNode
+  timedStage(rsTemplate):
+    tree = renderAuthoringTree(tpl, data)
+  renderTree(tree, theme, target, profile, strict, assets)

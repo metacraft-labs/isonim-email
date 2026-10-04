@@ -655,6 +655,16 @@ proc newsletterColumnsTemplate*(r: EmailRenderer; d: NewsletterColumns):
     "Springfield.</p>"))
   r.layoutFooter(result, d.frame)
 
+proc eventInvitationData*(): EventInvitation =
+  EventInvitation(frame: acme("You're invited: Acme Build Day 2026",
+    "Saturday, 14 November, in Springfield and online."),
+    title: "You're invited", intro: "Join us for a day of talks on " &
+    "shipping software.")
+
+proc newsletterColumnsData*(): NewsletterColumns =
+  NewsletterColumns(frame: acme("The October newsletter", "Prints, " &
+    "frames and the shops' opening hours."))
+
 # --- The set ---------------------------------------------------------------------------
 
 template entry(n, desc, lay: string; isDark: bool; tpl: untyped;
@@ -704,13 +714,8 @@ proc referenceEmails*(): seq[ReferenceEmail] =
       transactionalLayout, darkPalette()),
     entry("eventInvitation", "Event invitation: hero, event, countdown, " &
       "speakers, buttons.", "", false, eventInvitationTemplate,
-      EventInvitation(frame: acme("You're invited: Acme Build Day 2026",
-        "Saturday, 14 November, in Springfield and online."),
-        title: "You're invited", intro: "Join us for a day of talks on " &
-        "shipping software.")),
+      eventInvitationData()),
     entry("newsletterColumns", "Newsletter: sections of one to four " &
       "columns, a band, a wrapper, a group, a table, a Word-only note.",
-      "", false, newsletterColumnsTemplate, NewsletterColumns(
-        frame: acme("The October newsletter", "Prints, frames and the " &
-        "shops' opening hours."))),
+      "", false, newsletterColumnsTemplate, newsletterColumnsData()),
   ]

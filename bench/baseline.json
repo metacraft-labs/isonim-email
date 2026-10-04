@@ -1,0 +1,362 @@
+[
+  {
+    "name": "render/receiptTypical/p50",
+    "unit": "ms",
+    "value": 5.136892,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=845baee41e6fb32e"
+  },
+  {
+    "name": "render/receiptTypical/p95",
+    "unit": "ms",
+    "value": 5.924356,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/receiptHebrew/p50",
+    "unit": "ms",
+    "value": 4.444501,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=4442ba76fddf9f4b"
+  },
+  {
+    "name": "render/receiptHebrew/p95",
+    "unit": "ms",
+    "value": 5.401719,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/securityCodeJapanese/p50",
+    "unit": "ms",
+    "value": 2.438831,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=c2a545d6d95fc036"
+  },
+  {
+    "name": "render/securityCodeJapanese/p95",
+    "unit": "ms",
+    "value": 2.889134,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/alertCritical/p50",
+    "unit": "ms",
+    "value": 5.110129,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=2b622d4fcddf0420"
+  },
+  {
+    "name": "render/alertCritical/p95",
+    "unit": "ms",
+    "value": 6.256086,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/alertArabic/p50",
+    "unit": "ms",
+    "value": 2.670272,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=5c3bba0ed7d7173d"
+  },
+  {
+    "name": "render/alertArabic/p95",
+    "unit": "ms",
+    "value": 3.348325,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/digestGrid/p50",
+    "unit": "ms",
+    "value": 3.835586,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=b092460626c98d6e"
+  },
+  {
+    "name": "render/digestGrid/p95",
+    "unit": "ms",
+    "value": 4.76402,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/digestZigZag/p50",
+    "unit": "ms",
+    "value": 3.111793,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=267b4df1785c8092"
+  },
+  {
+    "name": "render/digestZigZag/p95",
+    "unit": "ms",
+    "value": 3.579109,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/digestNearBudget/p50",
+    "unit": "ms",
+    "value": 8.250807,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=3abafa252546d6dc"
+  },
+  {
+    "name": "render/digestNearBudget/p95",
+    "unit": "ms",
+    "value": 10.586407,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/notificationMarkdown/p50",
+    "unit": "ms",
+    "value": 4.099017,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=f1e292fe082104df"
+  },
+  {
+    "name": "render/notificationMarkdown/p95",
+    "unit": "ms",
+    "value": 5.519589,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/shippingChinese/p50",
+    "unit": "ms",
+    "value": 4.749046,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=0067f794a1ac702e"
+  },
+  {
+    "name": "render/shippingChinese/p95",
+    "unit": "ms",
+    "value": 5.666469,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/surveyRequest/p50",
+    "unit": "ms",
+    "value": 4.554859,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=f9a01b275cfffcf8"
+  },
+  {
+    "name": "render/surveyRequest/p95",
+    "unit": "ms",
+    "value": 5.356212,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/darkPalette/p50",
+    "unit": "ms",
+    "value": 6.885213,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=ef844b7f0456c68d"
+  },
+  {
+    "name": "render/darkPalette/p95",
+    "unit": "ms",
+    "value": 8.015466,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/eventInvitation/p50",
+    "unit": "ms",
+    "value": 3.518977,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=6c5328d3028ae0c5"
+  },
+  {
+    "name": "render/eventInvitation/p95",
+    "unit": "ms",
+    "value": 5.037205,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/newsletterColumns/p50",
+    "unit": "ms",
+    "value": 4.814941,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=6c3abc8bae736fbf"
+  },
+  {
+    "name": "render/newsletterColumns/p95",
+    "unit": "ms",
+    "value": 6.210539,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render/invoiceSummary/p50",
+    "unit": "ms",
+    "value": 2.680098,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z digest=ead0fcf23180ced6"
+  },
+  {
+    "name": "render/invoiceSummary/p95",
+    "unit": "ms",
+    "value": 3.114991,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=101 shape=one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render+mime/invoiceSummary/p50",
+    "unit": "ms",
+    "value": 3.00863,
+    "extra": "target<=1ms verdict=unmet-CONDITION-NOT-external gap=external better=smaller samples=401 shape=one-renderEmail+toMessage+toRfc5322-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render+mime/invoiceSummary/p95",
+    "unit": "ms",
+    "value": 3.2245869999999996,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=401 shape=one-renderEmail+toMessage+toRfc5322-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "render+mime/invoiceSummary/cpu-p50",
+    "unit": "ms",
+    "value": 2.987780000001294,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=401 shape=one-renderEmail+toMessage+toRfc5322-thread-cpu build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "mime/invoiceSummary/p50",
+    "unit": "ms",
+    "value": 0.545294,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=401 shape=one-toMessage+toRfc5322-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "mime/invoiceSummary/p95",
+    "unit": "ms",
+    "value": 0.565976,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=401 shape=one-toMessage+toRfc5322-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "batch/invoiceSummary/messages-per-second",
+    "unit": "msg/s",
+    "value": 318.41390899458236,
+    "extra": "target>=1000msg/s verdict=unmet-CONDITION-NOT-external gap=external better=bigger samples=7 shape=batch-of-200-personalised-renderEmail+MIME-one-thread build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/invoiceSummary/plain-p50",
+    "unit": "ms",
+    "value": 2.340801,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-personalised-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/invoiceSummary/skeleton-p50",
+    "unit": "ms",
+    "value": 0.234937,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-personalised-skeleton-render-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/invoiceSummary/first-render",
+    "unit": "ms",
+    "value": 224.665423,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=1 shape=one-first-render-with-classification-and-skeleton-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/reference-set/skeleton-stories",
+    "unit": "stories",
+    "value": 15.0,
+    "extra": "target=none verdict=reported gap=none better=bigger samples=1 shape=count-of-15-stories-whose-recipient-1-took-a-skeleton build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/receiptTypical/per-recipient-url-plain-p50",
+    "unit": "ms",
+    "value": 4.970958,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=51 shape=one-personalised-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "prelower/receiptTypical/per-recipient-url-prelowered-p50",
+    "unit": "ms",
+    "value": 13.497132,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=51 shape=one-personalised-prototype-render-new-key-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/template/p50",
+    "unit": "ms",
+    "value": 0.042947,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/patterns/p50",
+    "unit": "ms",
+    "value": 0.088678,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P1-validate/p50",
+    "unit": "ms",
+    "value": 0.017812,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P3-layout/p50",
+    "unit": "ms",
+    "value": 0.030252,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P5-styles/p50",
+    "unit": "ms",
+    "value": 0.800898,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P6-head/p50",
+    "unit": "ms",
+    "value": 0.059887,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P7-a11y/p50",
+    "unit": "ms",
+    "value": 0.012959,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P8-urls/p50",
+    "unit": "ms",
+    "value": 0.028188,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P10-lint/p50",
+    "unit": "ms",
+    "value": 0.637174,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P12-text/p50",
+    "unit": "ms",
+    "value": 0.087309,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P4-lower/p50",
+    "unit": "ms",
+    "value": 0.586751,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/P11-serialize/p50",
+    "unit": "ms",
+    "value": 0.1584,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-stage-of-one-renderEmail-wall build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "stage/invoiceSummary/outside-stages/p50",
+    "unit": "ms",
+    "value": 0.15927100000000038,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=201 shape=one-renderEmail-wall-less-its-stages build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "alloc/invoiceSummary/per-message",
+    "unit": "allocations",
+    "value": 51974.0,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=3 shape=allocations-of-one-renderEmail+MIME-identical-in-3-runs build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "alloc/digestCards4/per-output-KB",
+    "unit": "allocations/KB",
+    "value": 1021.0293400145051,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=1 shape=allocations-of-one-renderEmail-per-KB-of-HTML-30334-bytes build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "alloc/digestCards8/per-output-KB",
+    "unit": "allocations/KB",
+    "value": 1000.0261028009661,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=1 shape=allocations-of-one-renderEmail-per-KB-of-HTML-47198-bytes build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "alloc/digestCards17/per-output-KB",
+    "unit": "allocations/KB",
+    "value": 974.7136939171952,
+    "extra": "target=none verdict=reported gap=none better=smaller samples=1 shape=allocations-of-one-renderEmail-per-KB-of-HTML-85454-bytes build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  },
+  {
+    "name": "alloc/digestCards17-vs-4/per-KB-ratio",
+    "unit": "ratio",
+    "value": 0.9546382809169304,
+    "extra": "target<=1.10 verdict=met gap=none better=smaller samples=1 shape=allocations-per-KB-at-17-cards-over-4-cards build=release host=loaded machine=linux-amd64 reference-machine=no load1=85.478,71.284,71.284,71.284 cpus=24 commit=9e81aec-dirty date=2026-10-04T19:33:19Z"
+  }
+]

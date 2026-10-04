@@ -23,7 +23,7 @@
 ##
 ## Pure arithmetic over strings: identical on the C and JS targets.
 
-import std/strutils
+import std/[strutils, tables]
 import ./assets
 import ./imaging
 import ./target
@@ -80,28 +80,38 @@ proc hasRatio*(width, height, rw, rh: int): bool =
   ## True when `width × height` is `rw:rh` within a pixel either way.
   abs(width * rh - height * rw) <= max(rw, rh)
 
+const pngCropMemoCap = 64
+  ## How many PNG crops `cropAsset` keeps per thread before it starts
+  ## over (a sender with endless distinct images stays bounded).
+
+var pngCropMemo {.threadvar.}: Table[string, tuple[source: bool;
+  made: CropResult]]
+  ## The PNG crops made on this thread, keyed by everything a crop's
+  ## result depends on: the source's name, its bytes and the crop.
+  ## `source` marks a PNG that already had the ratio: the caller's own
+  ## asset is the answer then, not the one first asked about.
+
+proc cropPng(a: AssetRef; c: CropSpec): CropResult
+
 proc cropAsset*(a: AssetRef; c: CropSpec): CropResult =
-  ## The asset `c` turns `a` into (see the module comment).
+  ## The asset `c` turns `a` into (see the module comment). A PNG crop
+  ## is made once per source and crop on a thread and reused: its bytes
+  ## depend only on those, and decoding and re-encoding the image is
+  ## most of a render that crops (a digest re-sent to every reader).
   if not c.ok:
     return CropResult(error: "not a crop")
   if a.mime == "image/png":
-    if a.bytes.len == 0:
-      return CropResult(error: "its bytes are not held by the render")
-    let px = decodePng(a.bytes)
-    if px.tooLarge:
-      return CropResult(error: "it is larger than " & $maxDecodePixels &
-        " pixels, which the crop does not decode")
-    if not px.ok:
-      return CropResult(error: "it is not a PNG the crop can read " &
-        "(an interlaced or damaged PNG)")
-    let (x, y, w, h) = centredCrop(px.width, px.height, c.rw, c.rh)
-    if not c.circle and w == px.width and h == px.height:
-      return CropResult(ok: true, asset: a)
-    var cut = cropPixels(px, x, y, w, h)
-    if c.circle:
-      circleMask(cut)
-    return CropResult(ok: true,
-      asset: loadAsset(croppedName(a.name, c), encodePng(cut)))
+    let key = a.name & "\x00" & cropSuffix(c) & "\x00" & a.bytes
+    pngCropMemo.withValue(key, known):
+      if known.source:
+        return CropResult(ok: true, asset: a)
+      return known.made
+    result = cropPng(a, c)
+    if pngCropMemo.len >= pngCropMemoCap:
+      pngCropMemo.clear()
+    let source = result.ok and result.asset == a
+    pngCropMemo[key] = (source, if source: CropResult() else: result)
+    return
   if c.circle:
     return CropResult(error: "a circle needs a PNG (its corners are " &
       "made transparent), and this is " & (if a.mime.len > 0: a.mime
@@ -115,3 +125,23 @@ proc cropAsset*(a: AssetRef; c: CropSpec): CropResult =
   CropResult(error: article & a.mime & " is not re-encoded, so it must " &
     "already be " & $c.rw & ":" & $c.rh & ", and it is " & $a.width &
     "×" & $a.height & ": crop it before sending")
+
+proc cropPng(a: AssetRef; c: CropSpec): CropResult =
+  ## `cropAsset` for a PNG, made every time.
+  if a.bytes.len == 0:
+    return CropResult(error: "its bytes are not held by the render")
+  let px = decodePng(a.bytes)
+  if px.tooLarge:
+    return CropResult(error: "it is larger than " & $maxDecodePixels &
+      " pixels, which the crop does not decode")
+  if not px.ok:
+    return CropResult(error: "it is not a PNG the crop can read " &
+      "(an interlaced or damaged PNG)")
+  let (x, y, w, h) = centredCrop(px.width, px.height, c.rw, c.rh)
+  if not c.circle and w == px.width and h == px.height:
+    return CropResult(ok: true, asset: a)
+  var cut = cropPixels(px, x, y, w, h)
+  if c.circle:
+    circleMask(cut)
+  CropResult(ok: true,
+    asset: loadAsset(croppedName(a.name, c), encodePng(cut)))

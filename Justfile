@@ -36,7 +36,7 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_gmail_markup.nim tests/t6_gmail_markup_json_ld_valid.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_reference_set.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/t7_domain_view.nim tests/t7_editor_stories.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t5_render_memo.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_gmail_markup.nim tests/t6_gmail_markup_json_ld_valid.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_reference_set.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/t7_domain_view.nim tests/t7_editor_stories.nim tests/t8_prelowered.nim tests/t8_bench.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
@@ -62,8 +62,10 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # fc-list font checks), and e2e_brief_diff_missing_element (shells out
 # to node for the findings.ts rating and writes its baseline to
 # tmp), and e2e_dom_assertions (two gated CLI runs plus run-dir
-# reads).)
-tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_gmail_markup.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_domain_view.nim tests/t7_editor_stories.nim"
+# reads). t8_prelowered and t8_bench render the benchmark's stories, the
+# reference set among them, and t8_bench reads the committed benchmark
+# baseline off disk.)
+tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t5_render_memo.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_gmail_markup.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_domain_view.nim tests/t7_editor_stories.nim"
 
 # --- Default targets ---
 
@@ -446,6 +448,8 @@ lint-nim:
     nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} tools/conformance/mjml_conformance.nim 2>&1 | tee -a test-logs/lint-nim.log
     nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} src/isonim_email/editor_stories.nim 2>&1 | tee -a test-logs/lint-nim.log
     nim check --backend:js {{nim-flags}} {{src-paths}} {{tailwind-flags}} examples/invoice_summary_page.nim 2>&1 | tee -a test-logs/lint-nim.log
+    nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} -d:release bench/bench.nim 2>&1 | tee -a test-logs/lint-nim.log
+    nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} -d:release -d:isonimEmailStageTimings -d:nimAllocStats bench/bench.nim 2>&1 | tee -a test-logs/lint-nim.log
     @for t in {{tests}}; do \
       echo "Checking $t"; \
       nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} $t 2>&1 | tee -a test-logs/lint-nim.log; \
@@ -513,10 +517,57 @@ format-nim:
 format-nix:
     nixfmt flake.nix nix/*.nix
 
-# Benchmarks placeholder: no benchmarks exist until the
-# rendering pipeline they measure lands (after the components).
-bench:
-    @echo "isonim-email: no benchmarks yet (they land with the components)"
+# The benchmark (bench/bench.nim; its module comment has the method):
+# render time per reference email, the reference story's per-stage,
+# render + MIME and MIME times, its batch rate and allocations, and the
+# static pre-lowering prototype against the plain path. Writes
+# bench-results/benchmark_results.json (github-action-benchmark format;
+# also split into benchmark_results_smaller.json and
+# benchmark_results_bigger.json by each entry's `better=` token),
+# report.html, and comparison.json against the committed baseline
+# bench/baseline.json, and prints a summary to stderr.
+#
+# Figures are recorded, not gated: a target missed or a regression past
+# the threshold is reported, and the exit status is 0, unless
+# --fail-on-regression or --require-quiet-host (for a dedicated
+# benchmark host) is given. --quick takes fewer samples. Every entry
+# says how loaded the host was; on a loaded host, or one that is not a
+# reference machine, the timing targets read `...-CONDITION-NOT-external`.
+# The operator of a reference machine (one the timing targets are stated
+# for) says so with ISONIM_EMAIL_BENCH_REFERENCE_MACHINE=1.
+#
+# The timing build is -d:release; the stage and allocation figures come
+# from a second -d:release build with the stage clocks and the
+# allocation counters compiled in, whose bytes the assembly step checks
+# against the first's.
+bench *args: build-tailwind bench-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    commit="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then commit="$commit-dirty"; fi
+    export ISONIM_EMAIL_BENCH_COMMIT="$commit"
+    rm -rf bench-results/parts
+    mkdir -p bench-results
+    ISONIM_EMAIL_BENCH_MEASURE=1 build/bench/bench --part=timing {{args}}
+    ISONIM_EMAIL_BENCH_MEASURE=1 build/bench/bench-detail --part=detail {{args}}
+    build/bench/bench --assemble {{args}}
+
+# Build the benchmark's two binaries (see `bench`).
+bench-build:
+    @mkdir -p build/bench test-logs
+    nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} -d:release --out:build/bench/bench --nimcache:build/nimcache-bench bench/bench.nim 2>&1 | tee test-logs/bench-build.log
+    nim c {{nim-flags}} {{src-paths}} {{tailwind-flags}} -d:release -d:isonimEmailStageTimings -d:nimAllocStats --out:build/bench/bench-detail --nimcache:build/nimcache-bench-detail bench/bench.nim 2>&1 | tee -a test-logs/bench-build.log
+
+# The benchmark in correctness mode: every story on every path once,
+# bytes compared, nothing timed or written.
+bench-check: build-tailwind bench-build
+    build/bench/bench
+
+# Make the last `just bench` run the committed baseline that later runs
+# compare against (a deliberate change: review the figures and the
+# host state in each entry's `extra` first).
+bench-baseline:
+    cp bench-results/benchmark_results.json bench/baseline.json
 
 # Single-source-of-truth version bump: the nimble file owns the
 # version; the umbrella const follows it.

@@ -38,7 +38,10 @@ just example-page    # the billing page example rendered by IsoNim's web
                      # renderer, saved as static HTML with screenshots
 just email-preview   # every story on http://127.0.0.1:4610/: transforms,
                      # widths, schemes, diagnostics, reload on change
-just bench           # benchmarks (none yet; they land later)
+just bench           # render, stage, MIME, batch and allocation figures in
+                     # bench-results/ (github-action-benchmark format), compared
+                     # with bench/baseline.json; recorded, not gated
+just bench-baseline  # make the last `just bench` the committed baseline
 just t               # alias for test
 ```
 
