@@ -1,0 +1,128 @@
+<!doctype html>
+<!--
+  The billing page: the domain view renderInvoiceSummary
+  (invoice_summary.nim), rendered in the browser by IsoNim's web renderer
+  from the same source as the invoice email (invoice_summary_email.nim).
+  The page owns its chrome and its stylesheet; the view's leaves write
+  semantic HTML. `just example-page` builds the script and saves the
+  rendered page as static HTML.
+-->
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Invoice INV-2041 · Billing</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --canvas: #f4f5f7;
+        --card: #ffffff;
+        --text: #111827;
+        --muted: #4b5563;
+        --rule: #e5e7eb;
+        --link: #0969da;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas: #0f1115;
+          --card: #1a1d23;
+          --text: #f3f4f6;
+          --muted: #c3c8d0;
+          --rule: #2f343d;
+          --link: #7aa7ff;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--text);
+        font:
+          16px/24px Helvetica,
+          Arial,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 24px;
+        align-items: baseline;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--rule);
+        background: var(--card);
+      }
+      .bar strong {
+        font-size: 18px;
+      }
+      .bar nav {
+        display: flex;
+        gap: 16px;
+      }
+      a {
+        color: var(--link);
+      }
+      main {
+        max-width: 720px;
+        margin: 32px auto;
+        padding: 0 16px;
+      }
+      #invoice > section {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding: 32px;
+        border-radius: 12px;
+        background: var(--card);
+      }
+      #invoice h1,
+      #invoice h2,
+      #invoice p {
+        margin: 0;
+      }
+      #invoice h1 {
+        font-size: 28px;
+        line-height: 36px;
+      }
+      #invoice h2 {
+        font-size: 22px;
+        line-height: 30px;
+      }
+      #invoice dt {
+        font-weight: inherit;
+      }
+      #invoice th,
+      #invoice td {
+        padding: 8px 16px 8px 0;
+        border-bottom: 1px solid var(--rule);
+        vertical-align: top;
+      }
+      #invoice th:last-child,
+      #invoice td:last-child {
+        padding-right: 0;
+      }
+      @media (max-width: 480px) {
+        main {
+          margin: 16px auto;
+          padding: 0 8px;
+        }
+        #invoice > section {
+          padding: 20px 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="bar">
+      <strong>Acme Inc.</strong>
+      <nav aria-label="Billing">
+        <a href="https://example.com/billing/invoices">Invoices</a>
+        <a href="https://example.com/billing/methods">Payment methods</a>
+      </nav>
+    </header>
+    <main id="invoice"></main>
+    <script src="invoice_summary_page.js"></script>
+  </body>
+</html>

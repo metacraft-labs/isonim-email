@@ -34,6 +34,8 @@ just email-capture-ci # capture regression checks (part of just test)
 just test-conformance # Outlook geometry and widths against the pinned MJML
 just lint            # nim check, tsc, capture-CLI gate, nixfmt, markdownlint
 just format          # nimpretty + nixfmt (alias: just fmt)
+just example-page    # the billing page example rendered by IsoNim's web
+                     # renderer, saved as static HTML with screenshots
 just bench           # benchmarks (none yet; they land later)
 just t               # alias for test
 ```
@@ -71,9 +73,11 @@ and the content patterns' story sets (`tests/stories/seed_structure.nim`,
 Markdown bodies' (`seed_markdown.nim`) and the reference emails
 (`examples/reference_set.nim`, registered by
 `tests/stories/seed_reference.nim`: `receiptTypical` …
-`newsletterColumns`) are captured with `ISONIM_CAPTURE_LAYOUT=1 just
-email-shots layoutOneColumn …`; they are outside the regression matrix,
-apart from the reference emails: the matrix (`just email-capture-ci`,
+`newsletterColumns`) and the domain view's invoice email
+(`tests/stories/seed_domain.nim`: `invoiceSummary`) are captured with
+`ISONIM_CAPTURE_LAYOUT=1 just email-shots layoutOneColumn …`; they are
+outside the regression matrix, apart from the reference emails: the
+matrix (`just email-capture-ci`,
 gated with `--assert` in `just test`) is the canary and the fourteen
 reference emails, Tier-1 the canary, `receiptTypical`, `alertArabic`
 and `securityCodeJapanese` (`tests/baselines/README.md`). Images a
@@ -114,6 +118,9 @@ examples/
   reference_set.nim                # the reference emails: the layouts and
                                    # every common email type, with their
                                    # fixed data (and assets/, their images)
+  invoice_summary*.nim             # a domain view on the portable leaves
+                                   # (docs/portable-views.md), rendered
+                                   # into an email and a web page
 tests/
   t1_*.nim, t2_*, t3_*             # unit/golden/invariant tests
   golden/                          # byte-exact goldens; changed only on
@@ -128,6 +135,8 @@ tools/capture/                     # email-shots CLI, emulation transforms,
 tools/review/                      # review briefs and the findings list
 tools/test/                        # the concurrent test runners behind
                                    # `just test`, `test-c` and `test-js`
+tools/web/                         # renders an IsoNim web page in the
+                                   # pinned Chromium, saved as static HTML
 ```
 
 ## Layer rules

@@ -36,7 +36,7 @@ tailwind-flags := "-d:tailwindStylesPathOverride=" + justfile_directory() + "/bu
 # The ordered list of test files. Adding a new test file here gates it
 # on CI. Files follow the `tests/t1_*`, `t2_*`, `t3_*`, `t4_*` naming
 # convention used by the verification pointers.
-tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_reference_set.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
+tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t1_rule_traceability.nim tests/t1_compile_fail.nim tests/t1_ir_restriction.nim tests/t2_vocabulary.nim tests/t2_vocabulary_compile_fail.nim tests/t2_tailwind_map.nim tests/t3_snapshot_reproducible.nim tests/t3_metrics_reproducible.nim tests/t3_icons_reproducible.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_crop.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t6_header_fuzz.nim tests/t6_dot_stuff.nim tests/t6_mailgun.nim tests/t6_roundtrip.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_reference_set.nim tests/t7_pattern_story_sets.nim tests/t7_text_part_goldens.nim tests/t7_domain_view.nim tests/e2e_local_shots_latency.nim tests/e2e_local_capture_deterministic.nim tests/e2e_brief_diff_missing_element.nim tests/e2e_dom_assertions.nim tests/e2e_local_columns.nim tests/e2e_local_primitives.nim tests/e2e_local_images_off.nim tests/e2e_local_text_edges.nim tests/e2e_local_dark_modes_legible.nim tests/e2e_local_line_items.nim tests/e2e_local_overflow_320.nim"
 
 # Backend-independent passes, also run on the JS target.
 # A file listed here must not touch backend-specific modules (no `std/os`
@@ -62,7 +62,7 @@ tests := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_seria
 # to node for the findings.ts rating and writes its baseline to
 # tmp), and e2e_dom_assertions (two gated CLI runs plus run-dir
 # reads).)
-tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim"
+tests-js := "tests/t1_plumbing.nim tests/t1_renderer_conformance.nim tests/t1_serializer_determinism.nim tests/t1_conditional_comments.nim tests/t1_no_hydration_residue.nim tests/t1_render_email.nim tests/t1_source_spans.nim tests/t2_vocabulary.nim tests/t3_lint_flex.nim tests/t3_lint_degradation.nim tests/t4_tokens.nim tests/t4_text_metrics.nim tests/t4_theme_snapshot.nim tests/t4_normalisation.nim tests/t4_head_css.nim tests/t4_class_names.nim tests/t4_styles.nim tests/t4_head_budget.nim tests/t5_document_golden.nim tests/t5_preheader.nim tests/t5_validate.nim tests/t5_a11y.nim tests/t5_lint_a11y.nim tests/t5_emc_top_five.nim tests/t5_pass_order.nim tests/t5_ganga_strip.nim tests/t5_media_queries.nim tests/t5_lower_elements.nim tests/t5_layout.nim tests/t5_scaffolding.nim tests/t5_columns.nim tests/t5_primitives.nim tests/t5_text.nim tests/t5_images.nim tests/t5_leaves.nim tests/t5_button.nim tests/t5_background.nim tests/t5_table.nim tests/t5_navigation.nim tests/t5_raw.nim tests/t5_text_checks.nim tests/t5_welcome_golden.nim tests/t5_dark.nim tests/t5_text_part.nim tests/t5_long_words.nim tests/t6_qp.nim tests/t6_unsubscribe.nim tests/t6_assets.nim tests/t6_size.nim tests/t6_message_api.nim tests/t6_headers.nim tests/t7_stories.nim tests/t7_brief.nim tests/t7_patterns.nim tests/t7_content_patterns.nim tests/t7_container_data_patterns.nim tests/t7_action_patterns.nim tests/t7_markdown.nim tests/t7_layouts.nim tests/t7_domain_view.nim"
 
 # --- Default targets ---
 
@@ -146,7 +146,7 @@ social-icons:
 # regression checks (Tier-1 + Tier-2).
 #
 # The shared prerequisites (the Tailwind map, the story and brief
-# drivers) are built first; then the six test recipes run at the same
+# drivers, the billing page example's script) are built first; then the six test recipes run at the same
 # time (tools/test/run-recipes.sh), each logging to
 # test-logs/<recipe>.log, and the C and JS recipes run their files
 # concurrently too (tools/test/run-nim-tests.sh). Every test keeps its
@@ -155,7 +155,7 @@ social-icons:
 # it finishes; a failed recipe's log follows at the end, naming the
 # failing file and test; the exit status is non-zero if any failed.
 # `test-serial` runs the same recipes one after another, as before.
-test: build-tailwind email-shots-build
+test: build-tailwind email-shots-build example-page-build
     tools/test/run-recipes.sh test-c test-js test-ts test-webmail test-desktop test-capture-ci
 
 # The same recipes, one at a time, each streaming its output (slower;
@@ -213,9 +213,11 @@ node-test := "node --test --test-reporter=spec --test-timeout=1500000"
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
 # The self-hosted webmail and desktop-client end-to-end files are left
-# to `test-webmail` and `test-desktop`.
-test-ts:
-    {{node-test}} "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts" "tools/test/*.test.ts"
+# to `test-webmail` and `test-desktop`. The web-page suite
+# (tools/web/) renders the billing page example and compares it with
+# the invoice email: it needs the page's script and the story driver.
+test-ts: example-page-build email-shots-build
+    {{node-test}} "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts" "tools/test/*.test.ts" "tools/web/*.test.ts"
 
 # The self-hosted webmail provider end to end: real Roundcube and
 # SnappyMail on php-fpm and caddy, Dovecot and Chromium (~3 min on a
@@ -298,6 +300,24 @@ email-shots-build: build-tailwind
 # --full captures the whole matrix.
 email-shots *args: email-shots-build
     node tools/capture/email-shots.ts {{args}}
+
+# The billing page example (examples/invoice_summary_page.*): the
+# invoice email's domain view rendered by IsoNim's web renderer. The
+# script is built with `nim js` into build/examples/invoice-summary/
+# (rebuilt only when a Nim source under src/ or examples/ is newer).
+example-page-build: build-tailwind
+    @mkdir -p build/examples/invoice-summary test-logs
+    @if [ -f build/examples/invoice-summary/invoice_summary_page.js ] && [ -z "$(find src examples -name '*.nim' -newer build/examples/invoice-summary/invoice_summary_page.js 2>/dev/null)" ]; then \
+      echo "build/examples/invoice-summary/invoice_summary_page.js up to date"; \
+    else \
+      nim js {{nim-flags}} {{src-paths}} {{tailwind-flags}} --out:build/examples/invoice-summary/invoice_summary_page.js --nimcache:build/nimcache-invoice-summary-page examples/invoice_summary_page.nim 2>&1 | tee test-logs/example-page-build.log; \
+    fi
+
+# Render the billing page in the pinned Chromium and save it as static
+# HTML (build/examples/invoice-summary/index.html, no script), with
+# screenshots at desktop and phone widths, light and dark, beside it.
+example-page *args: example-page-build
+    node tools/web/static_page.ts {{args}}
 
 # The review loop's own check (visual design methodology, checklist
 # item 7): does a reviewer notice a missing element? Captures the
@@ -402,6 +422,7 @@ lint-nim:
     nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} tools/capture/build_stories.nim 2>&1 | tee -a test-logs/lint-nim.log
     nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} tools/review/brief_driver.nim 2>&1 | tee -a test-logs/lint-nim.log
     nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} tools/conformance/mjml_conformance.nim 2>&1 | tee -a test-logs/lint-nim.log
+    nim check --backend:js {{nim-flags}} {{src-paths}} {{tailwind-flags}} examples/invoice_summary_page.nim 2>&1 | tee -a test-logs/lint-nim.log
     @for t in {{tests}}; do \
       echo "Checking $t"; \
       nim check {{nim-flags}} {{src-paths}} {{tailwind-flags}} $t 2>&1 | tee -a test-logs/lint-nim.log; \
@@ -436,6 +457,8 @@ lint-ts:
     for m in tools/capture/providers/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/review/findings.ts')"
     node --input-type=module -e "await import('./tools/review/broken_story.ts')"
+    node --input-type=module -e "await import('./tools/web/static_page.ts')"
+    node tools/web/static_page.ts --help >/dev/null
 
 lint-nix:
     nixfmt --check flake.nix nix/*.nix

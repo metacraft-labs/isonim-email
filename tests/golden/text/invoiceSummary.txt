@@ -1,0 +1,34 @@
+[Northwind Studio]
+
+Invoice INV-2041
+================
+
+Northwind Studio billed Acme Inc. on 4 October 2026.
+
+Invoice number: INV-2041
+Issued: 4 October 2026
+Due: 18 October 2026
+Status: Awaiting payment
+
+What you are paying for
+-----------------------
+
+Lines of invoice INV-2041
+Description | Qty | Amount
+Website redesign, phase 2 | 1 | $4,800.00
+Illustrations for the product pages | 6 | $1,260.00
+Hosting, October | 1 | $40.00
+
+Subtotal: $6,100.00
+Tax (20%): $1,220.00
+Total due: $7,320.00
+
+View and pay invoice INV-2041 (https://example.com/invoices/INV-2041/pay)
+
+Questions about this invoice? Write to billing@example.com.
+
+You're receiving this because Northwind Studio bills your account.
+
+Northwind Studio, 12 Harbour Road, Portsmouth PO1 3AB, United Kingdom
+
+© 2026 Northwind Studio.

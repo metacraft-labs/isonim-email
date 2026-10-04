@@ -43,6 +43,7 @@ import stories/seed_data
 import stories/seed_actions
 import stories/seed_markdown
 import stories/seed_reference
+import stories/seed_domain
 
 proc splitMatrix(s: string): seq[string] =
   for part in s.split(','):
@@ -112,6 +113,8 @@ proc registerAll() =
     registerMarkdownStoryTrees()
     registerReferenceStories()
     registerReferenceStoryTrees()
+    registerDomainStories()
+    registerDomainStoryTrees()
 
 proc clientMain(args: seq[string]): int =
   ## `--client <backend> <family> <client> <story> <outDir> <viewports>
