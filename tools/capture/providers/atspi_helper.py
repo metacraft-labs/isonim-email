@@ -27,6 +27,11 @@ on stdout ({"ok": true, "result": ...} or {"ok": false, "error": ...}).
       objects: a window exists here as soon as the app created it,
       before the compositor shows it)
   {"op": "focus", "path": P}                gives the node the focus
+  {"op": "table_rows", "path": P}           the number of rows of a table
+      node (its table interface), -1 when the table is gone
+  {"op": "select_row", "path": P, "row": R} selects the table's row R
+      through the table's own selection interface (as focusing one of
+      its cells does), without asking any cell for anything
   {"op": "set_text", "path": P, "text": T}  replaces an editable text
   {"op": "dbus_call", "dest": D, "path": P, "iface": I, "method": M,
     "args": TEXT}
@@ -246,6 +251,29 @@ def focus(req):
     return Atspi.Component.grab_focus(comp)
 
 
+def table_iface(req):
+    node = resolve(req["path"])
+    t = node.get_table_iface()
+    if t is None:
+        raise RuntimeError("the node is not a table")
+    return node, t
+
+
+def table_rows(req):
+    _, t = table_iface(req)
+    return Atspi.Table.get_n_rows(t)
+
+
+def select_row(req):
+    node, t = table_iface(req)
+    sel = node.get_selection_iface()
+    if sel is None:
+        raise RuntimeError("the table has no selection interface")
+    index = Atspi.Table.get_index_at(t, req["row"], 0)
+    Atspi.Selection.clear_selection(sel)
+    return Atspi.Selection.select_child(sel, index)
+
+
 def wait_name(req):
     deadline = time.monotonic() + req.get("timeout_ms", 10000) / 1000
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -304,6 +332,8 @@ OPS = {
     "act": act,
     "windows": windows,
     "focus": focus,
+    "table_rows": table_rows,
+    "select_row": select_row,
     "set_text": set_text,
     "wait_name": wait_name,
     "dbus_call": dbus_call,

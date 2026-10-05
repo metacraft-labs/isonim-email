@@ -18,8 +18,9 @@
 //   your keyring" stays off, so nothing is stored);
 // - Evolution's own `handle-uris` application action (over D-Bus, the
 //   `folder:` URI Evolution's command line takes) selects the account's
-//   INBOX, and focusing the message's row in the message list (through
-//   the accessibility tree) shows it in the preview;
+//   INBOX, and selecting the message's row in the message list (through
+//   the list's own accessible table and selection) shows it in the
+//   preview;
 // - the layout is set through GSettings so that the preview fills the
 //   window: no sidebar, no to-do bar, no status bar or preview toolbar,
 //   collapsed headers, the message list a few rows tall;
@@ -27,6 +28,22 @@
 //   display (its extents in the accessibility tree, relative to the
 //   display's web view), so Evolution's header block is not in it; the
 //   output grows until the frame is inside the display.
+//
+// The message list's cells are never queried. Evolution's accessible
+// table cells read their text from the list's model without checking
+// that the row still exists there, and keep a pointer to the list's
+// table item after it is rebuilt: asking a cell for its name or text
+// while the list changes (a folder selected, an account removed) makes
+// Evolution crash (SIGSEGV in ect_get_name or ect_get_text, reached from
+// the accessibility bus). Measured: polling the list's cells while it
+// changed, as this driver did, crashed Evolution 3 times in 53 restarts
+// and captures, with the stack of the crashes behind "evolution: the
+// window closed"; the table-level path below, 0 times in 120.
+// So every search of Evolution's tree skips the subtrees of its tree
+// tables (EVOLUTION_PRUNE); the list's rows are counted and selected
+// through the list's own table and selection interfaces, which check
+// that the list is still there; and the subject shown is read from the
+// mail display's header, not from the list.
 //
 // Remote content: Evolution allows remote content per site (host), in
 // its remote-content list; the list holds the assets service's host
@@ -70,6 +87,9 @@ import type { Requirement, Scheme, ViewportSpec } from "./types.ts";
 const APP = "org.gnome.Evolution";
 const SOURCES_BUS_NAME = "org.gnome.evolution.dataserver.Sources5";
 const STEP_TIMEOUT_MS = 30000;
+// The roles whose subtrees no search of Evolution's tree enters (see the
+// file header): its message list and folder tree.
+export const EVOLUTION_PRUNE = ["tree table"];
 const MAX_OUTPUT_HEIGHT = 8000;
 
 export const EVOLUTION_VIEWPORTS: ViewportSpec[] = [
@@ -249,10 +269,17 @@ class EvolutionInstance implements DesktopClientInstance {
     // The INBOX, its one message focused (and so in the preview); the
     // password prompts answered on the way.
     ts = t();
-    let row: A11yNode[] = [];
+    let list: A11yNode | null = null;
+    let rows = 0;
     let lastSelect = 0;
     for (const t0 = Date.now(); ; ) {
-      await answerPasswordPrompt(this.a11y, APP, a.password, "OK");
+      await answerPasswordPrompt(
+        this.a11y,
+        APP,
+        a.password,
+        "OK",
+        EVOLUTION_PRUNE,
+      );
       if (Date.now() - lastSelect > 1000) {
         lastSelect = Date.now();
         await this.a11y.dbusCall({
@@ -263,8 +290,8 @@ class EvolutionInstance implements DesktopClientInstance {
           args: `('handle-uris', [<['folder://${uid}/INBOX']>], @a{sv} {})`,
         });
       }
-      row = await this.rows();
-      if (row.length > 0) break;
+      ({ list, rows } = await this.messageList());
+      if (rows > 0) break;
       if (Date.now() - t0 > STEP_TIMEOUT_MS)
         throw new Error(
           `evolution: the INBOX of ${a.user} did not list its message`,
@@ -274,7 +301,8 @@ class EvolutionInstance implements DesktopClientInstance {
     timing.sync = t() - ts;
 
     ts = t();
-    await this.a11y.focus(row[row.length - 1]!);
+    if (!(await this.a11y.selectRow(list!, rows - 1)))
+      throw new Error("evolution: the message list refused the selection");
     // The message's frame inside the mail display.
     const frame = async (): Promise<{
       body: Rect;
@@ -285,6 +313,7 @@ class EvolutionInstance implements DesktopClientInstance {
         app: APP,
         role: "document web",
         showing: true,
+        prune: EVOLUTION_PRUNE,
       });
       const outer = docs.find(
         (d) => !d.ancestors.some((x) => x.role === "document web"),
@@ -315,7 +344,13 @@ class EvolutionInstance implements DesktopClientInstance {
     };
     let f = null as Awaited<ReturnType<typeof frame>>;
     for (const t0 = Date.now(); ; ) {
-      await answerPasswordPrompt(this.a11y, APP, a.password, "OK");
+      await answerPasswordPrompt(
+        this.a11y,
+        APP,
+        a.password,
+        "OK",
+        EVOLUTION_PRUNE,
+      );
       f = await frame();
       if (f !== null && f.body.width > 0) break;
       if (Date.now() - t0 > STEP_TIMEOUT_MS)
@@ -369,7 +404,7 @@ class EvolutionInstance implements DesktopClientInstance {
     });
     return {
       body: f!.body,
-      subject: row.map((c) => c.name).join(" | "),
+      subject: await this.displayedHeader(),
       scheme: {
         dark: scheme.dark,
         evidence: { gtk_theme: themeFor(req.scheme), ...scheme.evidence },
@@ -386,24 +421,52 @@ class EvolutionInstance implements DesktopClientInstance {
     };
   }
 
-  // The message list's rows (the cells of its one message).
-  private async rows(): Promise<A11yNode[]> {
+  // The message list (the showing tree table that is not the folder
+  // tree) and its number of rows, read through the table itself (see the
+  // file header); no list, or a list that is gone, has 0 rows.
+  private async messageList(): Promise<{
+    list: A11yNode | null;
+    rows: number;
+  }> {
+    const list =
+      (
+        await this.a11y.find({
+          app: APP,
+          role: "tree table",
+          showing: true,
+          prune: EVOLUTION_PRUNE,
+        })
+      ).find((n) => n.name !== "Mail Folder Tree") ?? null;
+    if (list === null) return { list, rows: 0 };
+    return { list, rows: Math.max(0, await this.a11y.tableRows(list)) };
+  }
+
+  // The header the mail display shows above the message (collapsed:
+  // the subject, then the sender), from the display's own document,
+  // not from the message inside it.
+  private async displayedHeader(): Promise<string> {
     return (
-      await this.a11y.find({ app: APP, role: "table cell", showing: true })
-    ).filter(
-      (c) =>
-        c.name !== "" &&
-        c.ancestors.some(
-          (x) => x.role === "tree table" && x.name !== "Mail Folder Tree",
-        ),
-    );
+      await this.a11y.find({
+        app: APP,
+        role: "section",
+        showing: true,
+        prune: EVOLUTION_PRUNE,
+      })
+    )
+      .filter(
+        (n) =>
+          n.ancestors.filter((x) => x.role === "document web").length === 1 &&
+          (n.text ?? "").trim() !== "",
+      )
+      .map((n) => n.text!.trim())
+      .join(" | ");
   }
 
   async close(): Promise<void> {
     // The account goes with its sources; its message leaves the list,
     // so the next capture's row is the next account's.
     for (const p of this.sources.splice(0)) rmSync(p, { force: true });
-    for (const t0 = Date.now(); (await this.rows()).length > 0; ) {
+    for (const t0 = Date.now(); (await this.messageList()).rows > 0; ) {
       if (Date.now() - t0 > STEP_TIMEOUT_MS)
         throw new Error(
           "evolution: the previous account's message stayed in the list",

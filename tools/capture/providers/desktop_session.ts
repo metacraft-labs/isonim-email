@@ -40,14 +40,14 @@
 // not filesystem ones, so the session also has a mount namespace of its
 // own, in which the host directories that hold filesystem sockets are
 // covered by empty tmpfs mounts (coveredDirs(): /run, a separate
-// /var/run, /tmp, /var/tmp, /dev/shm, the caller's home directory, and
+// /var/run, /tmp, /var/tmp, the caller's home directory, and
 // the Nix daemon's socket directories). That hides, among others, the host's
 // journal (/run/systemd/journal), its system bus (/run/dbus), systemd's
 // private sockets, nscd, the caller's own user runtime directory
 // (/run/user/<uid>: the host session bus, ssh and gpg agents), tmux and
 // other sockets under /tmp, ssh-agent sockets under the home directory
 // and the Nix daemon; the session's POSIX shared memory (/dev/shm) is
-// its own too. Bound back on top, and nothing else: the
+// its own too (see Host devices). Bound back on top, and nothing else: the
 // session's own runtime and state directories, the directory of the
 // bridge's inside half, and /run/opengl-driver (a Nix store path the
 // graphics libraries look in). The rest of the host filesystem stays
@@ -56,6 +56,20 @@
 // (bash) looks its own uid up through the host's nscd as it starts,
 // before its first line runs; nothing started after the covering, and
 // so no client, reaches it.
+//
+// Host devices. The same mount namespace replaces /dev, before any
+// other covering, by an empty tmpfs holding only the pseudo-devices
+// (SESSION_DEVICES, bound from the host's), a devpts instance of its
+// own, an empty /dev/shm, and the fd/stdin/stdout/stderr links. No GPU,
+// DRM render node, input, sound or other host device is visible, so the
+// clients render in software, as the compositor does. Measured before:
+// every client and helper opened the host's GPU device nodes through the
+// vendor libraries in /run/opengl-driver, and a killed client's exit then
+// waited in the GPU driver's close path for a lock the driver holds for
+// the whole host; with two runs at once it waited there, blocked, for
+// longer than stopLaunched() waits for a teardown that does not move.
+// The GPU is a host resource every concurrent run would share; a
+// session holds no host device that another run contends for.
 //
 // Name resolution. With /run covered, the host's nscd cannot resolve
 // names for the session (which would be a real DNS query by the host);
@@ -144,6 +158,31 @@ export const SESSION_BINARIES = [
   "dbus-run-session",
   "ip",
   "mount",
+  "umount",
+  "ln",
+] as const;
+// The host devices a session sees: the pseudo-devices only, each bound
+// from the host's /dev into the session's own (devScript()).
+export const SESSION_DEVICES = [
+  "null",
+  "zero",
+  "full",
+  "random",
+  "urandom",
+  "tty",
+] as const;
+// Everything in a session's /dev: the devices above, its own devpts
+// (pts, and ptmx linking into it), its own POSIX shared memory (shm),
+// and the links to the calling process's descriptors.
+export const SESSION_DEV_ENTRIES = [
+  ...SESSION_DEVICES,
+  "pts",
+  "ptmx",
+  "shm",
+  "fd",
+  "stdin",
+  "stdout",
+  "stderr",
 ] as const;
 // The host directories covered by an empty tmpfs inside a session,
 // with the tmpfs mode: each that exists as a directory of its own (not
@@ -154,7 +193,6 @@ export const COVERED_DIRS: readonly (readonly [string, string])[] = [
   ["/var/run", "0755"],
   ["/tmp", "1777"],
   ["/var/tmp", "1777"],
-  ["/dev/shm", "1777"],
   ["/nix/var/nix/daemon-socket", "0755"],
   ["/nix/var/nix/gc-socket", "0755"],
 ];
@@ -529,6 +567,7 @@ export class DesktopSession {
     // bridge's inside half, and sway.
     const sh = this.bins.sh!;
     const q = (argv: string[]): string => argv.map(shQuote).join(" ");
+    const devScript = this.devScript(stateDir, q);
     const coverScript = this.coverScript(stateDir, q);
     writeFileSync(
       join(stateDir, "init.sh"),
@@ -538,6 +577,8 @@ set -e
 # Name resolution: localhost only, no nameserver.
 if [ -e /etc/hosts ]; then ${q([this.bins.mount!, "--bind", join(stateDir, "hosts"), "/etc/hosts"])}; fi
 if [ -e /etc/resolv.conf ]; then ${q([this.bins.mount!, "--bind", join(stateDir, "resolv.conf"), "/etc/resolv.conf"])}; fi
+# Host devices: none but the pseudo-devices.
+${devScript}
 # Host sockets: the directories that hold them covered, the session's
 # own directories bound back (through descriptors opened before).
 ${coverScript}
@@ -639,6 +680,55 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
       swept,
       timingMs: { start: performance.now() - t0 },
     };
+  }
+
+  // The init script's part that replaces /dev by the session's own: an
+  // empty tmpfs, the pseudo-devices bound from the host's /dev (reached
+  // through a recursive bind of it, made first and detached last), a
+  // devpts instance of its own, an empty /dev/shm and the descriptor
+  // links. Runs before coverScript(), while the state directory (under
+  // the covered home directory) is still reachable by its path.
+  private devScript(stateDir: string, q: (argv: string[]) => string): string {
+    const mount = this.bins.mount!;
+    const ln = this.bins.ln!;
+    const stage = join(stateDir, "host-dev");
+    mkdirSync(stage, { mode: 0o700 });
+    const lines = [
+      q([mount, "--rbind", "/dev", stage]),
+      q([mount, "-t", "tmpfs", "-o", "mode=0755,nosuid", "ie-dev", "/dev"]),
+    ];
+    for (const d of SESSION_DEVICES)
+      lines.push(
+        `: >${shQuote(`/dev/${d}`)}`,
+        q([mount, "--bind", join(stage, d), `/dev/${d}`]),
+      );
+    lines.push(
+      q([
+        mount,
+        "-t",
+        "devpts",
+        "-o",
+        "X-mount.mkdir,newinstance,ptmxmode=0666,mode=0620",
+        "ie-devpts",
+        "/dev/pts",
+      ]),
+      q([ln, "-s", "pts/ptmx", "/dev/ptmx"]),
+      q([
+        mount,
+        "-t",
+        "tmpfs",
+        "-o",
+        "X-mount.mkdir,mode=1777,nosuid,nodev",
+        "ie-cover",
+        "/dev/shm",
+      ]),
+      q([ln, "-s", "/proc/self/fd", "/dev/fd"]),
+      q([ln, "-s", "/proc/self/fd/0", "/dev/stdin"]),
+      q([ln, "-s", "/proc/self/fd/1", "/dev/stdout"]),
+      q([ln, "-s", "/proc/self/fd/2", "/dev/stderr"]),
+      q([this.bins.umount!, "--lazy", stage]),
+    );
+    return lines.join("\n");
   }
 
   // The init script's part that covers the host directories holding
@@ -866,24 +956,47 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
     return this.launched.has(name);
   }
 
-  // Ends the process group launch(name) started (SIGKILL), and waits
-  // until its leader is gone.
-  async stopLaunched(name: string, timeoutMs = 10000): Promise<void> {
+  // Ends the process group launch(name) started (SIGKILL), and returns
+  // once every process of it is gone (see teardownVerdict: the wait
+  // lasts while the kernel tears them down, and fails when the teardown
+  // has stalled for `stallMs`, or has not finished within `capMs` in
+  // all). The kill and the wait are done from outside, on the host's
+  // pids of the session's processes, so neither depends on sway starting
+  // a command under load. The group is found by its id inside the
+  // session, so its members are ended even when its leader has exited.
+  async stopLaunched(
+    name: string,
+    stallMs = 10000,
+    capMs = 60000,
+  ): Promise<void> {
     const pidFile = join(this.stateDir, `${name}.pid`);
     if (!existsSync(pidFile)) return;
     const pid = readFileSync(pidFile, "utf8").trim();
     rmSync(pidFile, { force: true });
     this.launched.delete(name);
-    if (!/^\d+$/.test(pid)) return;
-    await this.runInside(
-      `stop-${name}`,
-      [
-        "sh",
-        "-c",
-        `kill -KILL -- -${pid} 2>/dev/null; kill -KILL ${pid} 2>/dev/null; while kill -0 ${pid} 2>/dev/null; do sleep 0.02; done; exit 0`,
-      ],
-      timeoutMs,
-    );
+    if (!/^\d+$/.test(pid) || this.child?.pid === undefined) return;
+    const group = hostGroupOf(Number(pid), this.child.pid);
+    if (group === null) return;
+    try {
+      process.kill(-group, "SIGKILL");
+    } catch {
+      // the group is already gone
+    }
+    const t0 = Date.now();
+    let last = teardownSample(groupPids(group));
+    let lastChange = t0;
+    for (;;) {
+      const now = teardownSample(groupPids(group));
+      const v = teardownVerdict(last, now, Date.now() - lastChange, stallMs, {
+        elapsedMs: Date.now() - t0,
+        capMs,
+      });
+      if (v.state === "gone") return;
+      if (v.state === "stalled") throw new Error(`stop-${name}: ${v.reason}`);
+      if (v.state === "progress") lastChange = Date.now();
+      last = now;
+      await new Promise((r) => setTimeout(r, 20));
+    }
   }
 
   // Runs `argv` inside the session to completion; its exit status and
@@ -1012,6 +1125,164 @@ exec ${q([this.bins.sway!, "-c", join(stateDir, "sway.conf")])}
     this.runtimeDirPath = null;
     process.off("exit", this.onExit);
   }
+}
+
+// --- Ending a launched process group. --------------------------------
+//
+// SIGKILL cannot be refused, but a killed process is not gone at once:
+// the kernel first tears it down (its threads exit, its memory is
+// unmapped, its descriptors closed), and that takes CPU time the process
+// competes for like any other. On a loaded host it took KMail with its
+// QtWebEngine processes several seconds. A fixed deadline would fail a
+// stop that is merely slow; no deadline at all would hang on a teardown
+// that waits on something that never comes. So the wait follows the
+// teardown: it lasts while the remaining processes still run (a task
+// runnable or using CPU time, or the set of tasks shrinking), and fails,
+// naming where each task waits, once nothing has moved for the bound,
+// or once the teardown has lasted longer than any measured one by far
+// (the overall cap), whatever it is doing.
+
+// The host id of the process group whose id inside the session's PID
+// namespace is `inner`, among the descendants of `root` (the session's
+// launcher); null when no process of it is left.
+export function hostGroupOf(inner: number, root: number): number | null {
+  for (const p of descendants(root)) {
+    const ns = /^NSpgid:\s+(.*)$/m
+      .exec(readProc(`/proc/${p}/status`) ?? "")?.[1]
+      ?.trim()
+      .split(/\s+/);
+    if (ns !== undefined && ns.length > 1 && Number(ns.at(-1)) === inner)
+      return Number(ns[0]);
+  }
+  return null;
+}
+
+function readProc(path: string): string | null {
+  try {
+    return readFileSync(path, "latin1");
+  } catch {
+    return null;
+  }
+}
+
+// /proc/<pid>/stat's fields after the command name (field 3 first).
+function statFields(text: string): string[] {
+  return text.slice(text.lastIndexOf(")") + 2).split(" ");
+}
+
+function descendants(root: number): number[] {
+  const children = new Map<number, number[]>();
+  for (const e of readdirSync("/proc")) {
+    if (!/^\d+$/.test(e)) continue;
+    const st = readProc(`/proc/${e}/stat`);
+    if (st === null) continue;
+    const ppid = Number(statFields(st)[1]);
+    children.set(ppid, [...(children.get(ppid) ?? []), Number(e)]);
+  }
+  const out: number[] = [];
+  const queue = [root];
+  while (queue.length > 0) {
+    const p = queue.shift()!;
+    out.push(p);
+    queue.push(...(children.get(p) ?? []));
+  }
+  return out;
+}
+
+// Every process in the process group `group` (host pids).
+function groupPids(group: number): number[] {
+  const out: number[] = [];
+  for (const e of readdirSync("/proc")) {
+    if (!/^\d+$/.test(e)) continue;
+    const st = readProc(`/proc/${e}/stat`);
+    if (st !== null && Number(statFields(st)[2]) === group) out.push(Number(e));
+  }
+  return out;
+}
+
+// One task of a process being torn down.
+export interface TeardownTask {
+  // "pid/tid".
+  id: string;
+  // The scheduler state letter (R, S, D, Z, ...).
+  state: string;
+  // utime + stime, in clock ticks.
+  cpu: number;
+  // Where it sleeps (/proc/<pid>/task/<tid>/wchan), "" when running.
+  wchan: string;
+}
+
+// The tasks of the given processes that still have work to do: a
+// zombie whose threads are all gone has nothing left to tear down (it
+// only waits for its parent to collect its status).
+export function teardownSample(pids: number[]): TeardownTask[] {
+  const out: TeardownTask[] = [];
+  for (const pid of pids) {
+    let tids: string[];
+    try {
+      tids = readdirSync(`/proc/${pid}/task`);
+    } catch {
+      continue;
+    }
+    for (const tid of tids) {
+      const st = readProc(`/proc/${pid}/task/${tid}/stat`);
+      if (st === null) continue;
+      const f = statFields(st);
+      const state = f[0] ?? "";
+      if (state === "Z" || state === "X") continue;
+      out.push({
+        id: `${pid}/${tid}`,
+        state,
+        cpu: Number(f[11]) + Number(f[12]),
+        wchan: (readProc(`/proc/${pid}/task/${tid}/wchan`) ?? "").trim(),
+      });
+    }
+  }
+  return out;
+}
+
+// What two consecutive samples of a teardown say: "gone" when no task
+// is left; "progress" when a task finished, used CPU time or is
+// runnable (waiting for a CPU, which it will get); otherwise "waiting",
+// or "stalled" once nothing has moved for `stallMs` (the reason names
+// each task's state and wait channel). Progress extends the wait only
+// up to `cap.capMs` after the kill: a teardown still not finished then
+// is "stalled" too, however busy its tasks look, so no stop waits
+// longer than that.
+export function teardownVerdict(
+  prev: TeardownTask[],
+  now: TeardownTask[],
+  sinceChangeMs: number,
+  stallMs: number,
+  cap: { elapsedMs: number; capMs: number } = {
+    elapsedMs: 0,
+    capMs: Infinity,
+  },
+):
+  | { state: "gone" | "progress" | "waiting" }
+  | { state: "stalled"; reason: string } {
+  if (now.length === 0) return { state: "gone" };
+  const tasks = now
+    .map((t) => `${t.id} ${t.state}${t.wchan === "" ? "" : ` in ${t.wchan}`}`)
+    .join(", ");
+  if (cap.elapsedMs >= cap.capMs)
+    return {
+      state: "stalled",
+      reason: `the killed processes were not gone ${cap.capMs / 1000} s after the kill (${tasks})`,
+    };
+  const before = new Map(prev.map((t) => [t.id, t]));
+  const moved =
+    now.length < prev.length ||
+    now.some((t) => {
+      const b = before.get(t.id);
+      return b === undefined || t.cpu !== b.cpu || t.state === "R";
+    });
+  if (moved) return { state: "progress" };
+  if (sinceChangeMs < stallMs) return { state: "waiting" };
+  return {
+    state: "stalled",
+    reason: `the killed processes made no progress for ${stallMs / 1000} s (${tasks})`,
+  };
 }
 
 // The part of an RGBA image inside a device-pixel rectangle (clamped

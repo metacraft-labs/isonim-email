@@ -42,6 +42,11 @@
 // what wtype typed into it: the session's input path is what is under
 // test there, and the client offers no other way to read a keystroke
 // back.
+// One test records the requests the accessibility client sends to
+// Evolution during a real capture (its request method wrapped, each
+// request passed on unchanged), because what must be shown is what the
+// driver never asks Evolution: the cells of its lists, whose answers
+// crash it while a list changes.
 //
 // Some tests deliver a small hand-written message instead of a story:
 // a stale asset hash, a foreign image, a message whose colours follow
@@ -85,6 +90,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -92,6 +98,7 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { readPng, type RgbaImage } from "../contact_sheet.ts";
 import { AssetsService } from "./assets_service.ts";
+import { A11yClient, type A11yNode } from "./desktop_a11y.ts";
 import {
   calibrationPath,
   checkCalibration,
@@ -103,6 +110,7 @@ import {
   cropImage,
   DESKTOP_SOCKET_PREFIX,
   DesktopSession,
+  SESSION_DEV_ENTRIES,
 } from "./desktop_session.ts";
 import {
   assessProviders,
@@ -174,11 +182,12 @@ interface Proc {
 
 function procStat(
   pid: number,
-): { ppid: number; start: string; comm: string } | null {
+): { ppid: number; start: string; comm: string; state: string } | null {
   try {
     const s = readFileSync(`/proc/${pid}/stat`, "latin1");
     const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
     return {
+      state: f[0]!,
       ppid: Number(f[1]),
       start: f[19]!,
       comm: s.slice(s.indexOf("(") + 1, s.lastIndexOf(")")),
@@ -1162,6 +1171,61 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
   );
 
   it(
+    "Evolution is never asked anything about a cell of its lists: every search skips them, and the list is counted and selected as a table",
+    { skip: !CLIENTS.includes("evolution") },
+    async () => {
+      // Every request the accessibility client makes during a real
+      // capture (and the calibration before it), recorded on its way
+      // out; nothing is changed.
+      const asked: Record<string, unknown>[] = [];
+      const answered: unknown[] = [];
+      const request = A11yClient.prototype.request;
+      A11yClient.prototype.request = async function (
+        this: A11yClient,
+        req: Record<string, unknown>,
+      ): Promise<unknown> {
+        asked.push(req);
+        const r = await request.call(this, req);
+        answered.push(r);
+        return r;
+      };
+      let rows: Row[];
+      try {
+        ({ rows } = await runDesktop([receipt], {
+          clients: ["evolution"],
+          schemes: ["light", "dark"],
+        }));
+      } finally {
+        A11yClient.prototype.request = request;
+      }
+      for (const r of rows)
+        assert.equal(r.entry.status, "done", r.reason ?? "");
+      const finds = asked.filter((q) => q.op === "find");
+      assert.ok(finds.length > 0);
+      for (const q of finds) {
+        assert.ok(
+          Array.isArray(q.prune) && q.prune.includes("tree table"),
+          `a search that enters Evolution's lists: ${JSON.stringify(q)}`,
+        );
+        assert.notEqual(q.role, "table cell", JSON.stringify(q));
+      }
+      // No node any search returned lies inside a list, so no later
+      // request (focus, act, set_text) can address one of its cells.
+      for (const a of answered)
+        if (Array.isArray(a))
+          for (const n of a as A11yNode[])
+            assert.ok(
+              !(n.ancestors ?? []).some((x) => x.role === "tree table"),
+              `a node inside a list: ${JSON.stringify(n.path)} ${n.role} ${n.name}`,
+            );
+      // The message was found and selected through the list itself.
+      assert.ok(asked.some((q) => q.op === "table_rows"));
+      assert.ok(asked.some((q) => q.op === "select_row"));
+      assert.ok(!asked.some((q) => q.op === "focus"));
+    },
+  );
+
+  it(
     "Claws Mail: an 'Open in new window' request the client does not take is made again, and the provenance counts the requests",
     { skip: !CLIENTS.includes("claws-mail") },
     async () => {
@@ -1525,6 +1589,145 @@ describe("linux desktop", { skip: process.platform !== "linux" }, () => {
         await new Promise<void>((ok) => probe.close(() => ok()));
         rmSync(probeDir, { recursive: true, force: true });
       }
+    });
+
+    it("reaches no host device: /dev holds only the pseudo-devices, and no session process has another device open", async () => {
+      // Positive control: the host's /dev has devices a session must
+      // not see (on any real host at least its console and kernel log;
+      // on a host with a GPU, its render nodes).
+      const hostOnly = readdirSync("/dev").filter(
+        (e) => !(SESSION_DEV_ENTRIES as readonly string[]).includes(e),
+      );
+      assert.ok(hostOnly.length > 0, readdirSync("/dev").join(" "));
+      const ls = await session.runInside("dev-listing", ["ls", "-A", "/dev"]);
+      assert.equal(ls.status, 0, ls.output);
+      assert.deepEqual(
+        ls.output.trim().split(/\s+/).sort(),
+        [...SESSION_DEV_ENTRIES].sort(),
+        ls.output,
+      );
+      // What is there works: the pseudo-devices are the real ones, a
+      // pseudo-terminal opens, and /dev/shm takes a file.
+      const works = await session.runInside("dev-works", [
+        "sh",
+        "-c",
+        'set -e; echo x >/dev/null; test "$(head -c 16 /dev/urandom | wc -c)" = 16; test "$(head -c 4 /dev/zero | wc -c)" = 4; test -c /dev/pts/ptmx; echo s >/dev/shm/ie-probe; rm /dev/shm/ie-probe',
+      ]);
+      assert.equal(works.status, 0, works.output);
+      // No process of the session (Thunderbird and its helpers, sway,
+      // the bus) holds a character or block device open other than the
+      // memory devices (major 1), /dev/tty and ptmx (major 5) and its
+      // own pseudo-terminals (majors 136-143): no GPU (DRM 226, NVIDIA
+      // 195), no input, no sound.
+      const held: string[] = [];
+      for (const p of tree(session.pid!)) {
+        let fds: string[];
+        try {
+          fds = readdirSync(`/proc/${p.pid}/fd`);
+        } catch {
+          continue;
+        }
+        for (const fd of fds) {
+          let st;
+          try {
+            st = statSync(`/proc/${p.pid}/fd/${fd}`);
+          } catch {
+            continue;
+          }
+          if (!st.isCharacterDevice() && !st.isBlockDevice()) continue;
+          const major = Math.floor(st.rdev / 256) & 0xfff;
+          const pseudo =
+            st.isCharacterDevice() &&
+            (major === 1 || major === 5 || (major >= 136 && major <= 143));
+          if (!pseudo)
+            held.push(
+              `${p.comm} ${p.pid} fd ${fd}: ${readlinkSync(`/proc/${p.pid}/fd/${fd}`)} (major ${major})`,
+            );
+        }
+      }
+      assert.deepEqual(held, []);
+    });
+
+    it("stopLaunched ends a launched process and its children, and returns once they are gone", async () => {
+      session.launch("stop-probe", [
+        "sh",
+        "-c",
+        "sleep 1000 & sleep 1000 & wait",
+      ]);
+      const pidFile = join(session.stateDir, "stop-probe.pid");
+      assert.ok(
+        await waitFor(() => existsSync(pidFile), 20000),
+        "not launched",
+      );
+      const inner = Number(readFileSync(pidFile, "utf8").trim());
+      let procs: Proc[] = [];
+      assert.ok(
+        await waitFor(() => {
+          procs = tree(outerPid(inner, session.pid!));
+          return procs.filter((p) => p.comm === "sleep").length === 2;
+        }, 20000),
+        JSON.stringify(procs),
+      );
+      await session.stopLaunched("stop-probe");
+      // Gone (or a zombie only its parent has yet to collect) the moment
+      // the call returns.
+      const left = procs.filter((p) => {
+        const st = procStat(p.pid);
+        return st !== null && st.start === p.start && st.state !== "Z";
+      });
+      assert.deepEqual(left, []);
+      assert.equal(session.hasLaunched("stop-probe"), false);
+    });
+
+    it("stopLaunched ends the rest of a launched process group whose leader has already exited", async () => {
+      session.launch("stop-orphans", [
+        "sh",
+        "-c",
+        "sleep 1003 & sleep 1003 & exit 0",
+      ]);
+      const pidFile = join(session.stateDir, "stop-orphans.pid");
+      assert.ok(
+        await waitFor(() => existsSync(pidFile), 20000),
+        "not launched",
+      );
+      const inner = readFileSync(pidFile, "utf8").trim();
+      // The two sleeps, left in the leader's group once it is gone.
+      const orphans = (): Proc[] =>
+        tree(session.pid!).filter((p) => {
+          if (p.comm !== "sleep") return false;
+          try {
+            const pgid = /^NSpgid:\s+(.*)$/m
+              .exec(readFileSync(`/proc/${p.pid}/status`, "latin1"))?.[1]
+              ?.trim()
+              .split(/\s+/)
+              .at(-1);
+            return pgid === inner;
+          } catch {
+            return false;
+          }
+        });
+      const leaderGone = (): boolean => {
+        try {
+          outerPid(Number(inner), session.pid!);
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      let procs: Proc[] = [];
+      assert.ok(
+        await waitFor(() => {
+          procs = orphans();
+          return procs.length === 2 && leaderGone();
+        }, 20000),
+        JSON.stringify(procs),
+      );
+      await session.stopLaunched("stop-orphans");
+      const left = procs.filter((p) => {
+        const st = procStat(p.pid);
+        return st !== null && st.start === p.start && st.state !== "Z";
+      });
+      assert.deepEqual(left, []);
     });
 
     it("sets the output mode and scale through swaymsg and captures it with grim", () => {

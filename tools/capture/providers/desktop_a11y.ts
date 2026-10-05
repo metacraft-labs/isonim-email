@@ -177,6 +177,23 @@ export class A11yClient {
     await this.request({ op: "focus", path: node.path });
   }
 
+  // The number of rows of a table node (-1 when the table is gone),
+  // through the table itself: none of its cells is asked anything.
+  async tableRows(node: A11yNode): Promise<number> {
+    return (await this.request({
+      op: "table_rows",
+      path: node.path,
+    })) as number;
+  }
+
+  // Selects a table node's row through the table's own selection (what
+  // focusing one of its cells does), without asking any cell anything.
+  async selectRow(node: A11yNode, row: number): Promise<boolean> {
+    return (
+      (await this.request({ op: "select_row", path: node.path, row })) === true
+    );
+  }
+
   async waitName(name: string, timeoutMs: number): Promise<void> {
     await this.request({ op: "wait_name", name, timeout_ms: timeoutMs });
   }
@@ -215,19 +232,28 @@ export class A11yClient {
 // echoed), then its confirming button is pressed. Returns false when
 // no prompt is showing, or when the toolkit refused the press (the
 // button not yet sensitive): the caller asks again.
+// `prune`: roles whose subtrees the search skips (a client whose
+// accessibility of some widget must not be queried, Evolution's lists).
 export async function answerPasswordPrompt(
   a11y: A11yClient,
   app: string,
   password: string,
   button: string,
+  prune?: string[],
 ): Promise<boolean> {
-  const [field] = await a11y.find({ app, role: "password text", limit: 1 });
+  const [field] = await a11y.find({
+    app,
+    role: "password text",
+    prune,
+    limit: 1,
+  });
   if (field === undefined) return false;
   await a11y.setText(field, password);
   const [ok] = await a11y.find({
     app,
     role: ["button", "push button"],
     name: button,
+    prune,
     limit: 1,
   });
   if (ok === undefined)
