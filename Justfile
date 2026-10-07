@@ -271,6 +271,15 @@ email-credentials-check *args:
 email-credentials-template *providers:
     node tools/capture/email-credentials.ts template {{providers}}
 
+# One live delivery for a credential set: its account sends a small
+# message to itself through its provider's submission server (or to the
+# set named by `--to`), finds it over IMAP by Message-ID, prints the
+# timings and where it arrived, and removes every copy. Uses only the
+# account file's `app_password`, and stops before connecting (exit 3)
+# when there is none. Never prints an address or a secret.
+email-selfsend-smoke set *args:
+    node tools/capture/email-selfsend-smoke.ts {{set}} {{args}}
+
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
 # when a Nim source or a story fixture or reference-email image (compiled
@@ -473,6 +482,7 @@ lint-ts:
     node tools/capture/email-shots.ts --help >/dev/null
     node tools/capture/email-calibrate.ts --help >/dev/null
     node tools/capture/email-credentials.ts --help >/dev/null
+    node tools/capture/email-selfsend-smoke.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"

@@ -261,7 +261,7 @@ describe("credentials directory contract", () => {
     assert.match(o.out, /credentials directory .*: mode 0755/);
     assert.match(
       o.out,
-      /mailgun: UNAVAILABLE: credentials directory .* has mode 0755; it must be 0700/,
+      /mailgun \(optional\): UNAVAILABLE: credentials directory .* has mode 0755; it must be 0700/,
     );
     const openHealth = await assessProvider(
       credentialProvider("mailgun"),
@@ -315,15 +315,15 @@ describe("credentials directory contract", () => {
     );
     assert.match(
       r.out,
-      /microsoft: UNAVAILABLE: .*microsoft\/qa-1\.json does not have "schema": "isonim-email\.credentials\.v1"/,
+      /microsoft \(optional\): UNAVAILABLE: .*microsoft\/qa-1\.json does not have "schema": "isonim-email\.credentials\.v1"/,
     );
     assert.match(
       r.out,
-      /mailgun: UNAVAILABLE: .*mailgun\/sending\.json is not valid JSON/,
+      /mailgun \(optional\): UNAVAILABLE: .*mailgun\/sending\.json is not valid JSON/,
     );
     assert.match(
       r.out,
-      /outlook-com \(optional\): UNAVAILABLE: .*outlook-com\/qa-1\.json has an empty address/,
+      /outlook-com: UNAVAILABLE: .*outlook-com\/qa-1\.json has an empty address/,
     );
     assert.match(r.out, /gmail-workspace: ok/);
     assert.equal(run(["check", "--strict"], dir).status, 1);
@@ -369,6 +369,75 @@ describe("credentials directory contract", () => {
     assert.equal(readFileSync(filled, "utf8"), "kept");
     assert.equal(modeOf(join(dir, "inspect")), 0o700);
     assert.equal(run(["template", "nope"], dir).status, 2);
+  });
+
+  it("requires an app password for the sending sets, keeps the insert route's keys optional, and does not list the verification file", () => {
+    const dir = goodDir("selfsend");
+    // The verification file a team's tooling places: not listed as
+    // undeclared, while another undeclared file still is.
+    writePrivate(
+      join(dir, "seam-check.json"),
+      JSON.stringify({ purpose: "verification", nonce: "n" }),
+    );
+    // A Gmail account with an app password and no gmail_api is complete.
+    writePrivate(
+      join(dir, "gmail-workspace", "qa-1.json"),
+      JSON.stringify({
+        schema: CREDENTIALS_SCHEMA,
+        address: `${SENTINEL}-a`,
+        password: `${SENTINEL}-p`,
+        app_password: `${SENTINEL}-ap`,
+      }),
+    );
+    const ok = run(["check", "--strict"], dir);
+    assert.equal(ok.status, 0, ok.out);
+    assert.match(ok.out, /\n  gmail-workspace: ok /);
+    assert.doesNotMatch(ok.out, /seam-check\.json/);
+    assert.match(ok.out, /verification\.json \(mode 0600\)/);
+    // The optional sets say so; the account sets do not.
+    for (const id of ["microsoft", "mailgun"])
+      assert.match(ok.out, new RegExp(`\\n  ${id} \\(optional\\): ok `));
+    for (const id of ["gmail-workspace", "yahoo", "aol", "outlook-com"])
+      assert.match(ok.out, new RegExp(`\\n  ${id}: ok `));
+
+    // An account with only its own password cannot send: Gmail, Yahoo
+    // and AOL need app_password; Outlook.com (it only receives) does not.
+    for (const id of ["gmail-workspace", "yahoo", "aol", "outlook-com"])
+      writePrivate(
+        join(dir, id, "qa-1.json"),
+        JSON.stringify({
+          schema: CREDENTIALS_SCHEMA,
+          address: `${SENTINEL}-a`,
+          password: `${SENTINEL}-p`,
+        }),
+      );
+    const r = run(["check"], dir);
+    for (const id of ["gmail-workspace", "yahoo", "aol"])
+      assert.match(
+        r.out,
+        new RegExp(
+          `\\n  ${id}: UNAVAILABLE: .*${id}/qa-1\\.json lacks app_password`,
+        ),
+      );
+    assert.match(r.out, /\n  outlook-com: ok /);
+
+    // A world-readable verification file is still refused.
+    chmodSync(join(dir, "seam-check.json"), 0o644);
+    const leaky = run(["check"], dir);
+    assert.equal(leaky.status, 1);
+    assert.match(leaky.out, /seam-check\.json is group- or world-readable/);
+
+    // The template carries the optional keys, marked as optional.
+    const tdir = join(scratch, "selfsend-template");
+    run(["template", "gmail-workspace"], tdir);
+    const body = JSON.parse(
+      readFileSync(join(tdir, "gmail-workspace", "example.json"), "utf8"),
+    );
+    assert.match(body.app_password, /^REPLACE: an app password/);
+    assert.match(
+      body.gmail_api.mode,
+      /^OPTIONAL: .*delete this key if unused$/,
+    );
   });
 
   it("never prints a value: a sentinel seeded in every file appears in no output and no written file", () => {

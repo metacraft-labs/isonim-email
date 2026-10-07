@@ -148,12 +148,13 @@ export interface ImapHandle extends ServiceHandle {
   tls: "none";
   // A fresh user with a generated password and an empty INBOX.
   createAccount(): Promise<ImapAccount>;
-  // Injects one message into the account's INBOX. With `assets`, the
-  // story's asset URLs are rewritten to that service first.
+  // Injects one message into the account's INBOX (or `mailbox`). With
+  // `assets`, the story's asset URLs are rewritten to that service
+  // first.
   deliver(
     account: ImapAccount,
     mime: Uint8Array,
-    opts?: { assets?: AssetsHandle },
+    opts?: { assets?: AssetsHandle; mailbox?: string },
   ): Promise<Delivery>;
   // createAccount() + deliver(): the one-message mailbox of a capture.
   mailboxFor(

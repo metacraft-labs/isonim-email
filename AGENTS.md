@@ -306,4 +306,10 @@ a device-farm service, each as one more provider. `--backends b|c|d` and `--asyn
 are refused today, naming what lands later. Providers that need accounts read their
 credentials from one directory on the machine running the captures
 (`$ISONIM_EMAIL_CREDENTIALS_DIR`); the directory must be mode 0700 and
-no file in it group- or world-readable.
+no file in it group- or world-readable. Hosted webmail gets each message
+by real delivery: the QA account sends it to itself through its
+provider's submission server with an app password, and it is found and
+removed over IMAP (`tools/capture/providers/hosted_delivery.ts`;
+Outlook.com, which accepts no app password, receives from another
+account). `just email-selfsend-smoke <set>` does one such delivery live;
+its tests run against Mailpit and Dovecot on loopback.

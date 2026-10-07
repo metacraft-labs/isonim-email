@@ -46,7 +46,11 @@ export interface CredentialSet {
   // Keys every matching file must carry, and what to put in each, for
   // the template.
   keys: Record<string, unknown>;
-  // A provider that is optional for the hosted family it serves.
+  // Keys a file may carry for an optional route, written into the
+  // template (each saying it may be deleted) but never required.
+  optionalKeys?: Record<string, unknown>;
+  // A set the hosted webmail does not need (the check marks it
+  // "(optional)").
   optional?: boolean;
 }
 
@@ -54,30 +58,64 @@ const REPLACE = (what: string): string => `REPLACE: ${what}`;
 
 const ACCOUNT = {
   address: REPLACE("the account's email address"),
-  password: REPLACE("the account's password"),
+  password: REPLACE(
+    "the account's password (for the person who signs the webmail in; never sent over SMTP or IMAP)",
+  ),
 };
+
+const APP_PASSWORD = REPLACE(
+  "an app password for SMTP and IMAP (the provider issues it once 2-Step Verification is on); delivery sends with it",
+);
+
+const OPTIONAL = (what: string): string =>
+  `OPTIONAL: ${what}; delete this key if unused`;
 
 export const CREDENTIAL_SETS: CredentialSet[] = [
   {
+    // Any Gmail account, consumer or Workspace (the directory keeps its
+    // name).
     id: "gmail-workspace",
-    usedBy: "hosted webmail (Gmail, a Google Workspace user)",
+    usedBy:
+      "hosted webmail (Gmail, a consumer or Workspace account; delivery sends with its app password)",
     entry: "gmail-workspace/*.json",
-    keys: {
-      ...ACCOUNT,
+    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+    optionalKeys: {
       gmail_api: {
-        mode: REPLACE('"service-account-dwd" or "oauth"'),
-        key_file: REPLACE(
+        mode: OPTIONAL(
+          'only for the Gmail API insert route: "service-account-dwd" or "oauth"',
+        ),
+        key_file: OPTIONAL(
           'with service-account-dwd: "keys/sa.json", the key file beside the accounts',
         ),
-        client_id: REPLACE("with oauth: the OAuth client id"),
-        client_secret: REPLACE("with oauth: the OAuth client secret"),
-        refresh_token: REPLACE("with oauth: the refresh token"),
+        client_id: OPTIONAL("with oauth: the OAuth client id"),
+        client_secret: OPTIONAL("with oauth: the OAuth client secret"),
+        refresh_token: OPTIONAL("with oauth: the refresh token"),
       },
     },
   },
   {
+    id: "yahoo",
+    usedBy: "hosted webmail (Yahoo Mail; delivery sends with its app password)",
+    entry: "yahoo/*.json",
+    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+  },
+  {
+    id: "aol",
+    usedBy: "hosted webmail (AOL Mail; delivery sends with its app password)",
+    entry: "aol/*.json",
+    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+  },
+  {
+    id: "outlook-com",
+    usedBy:
+      "hosted webmail (Outlook.com, a consumer account; it receives from another account, so it needs no app password)",
+    entry: "outlook-com/*.json",
+    keys: { ...ACCOUNT },
+  },
+  {
     id: "microsoft",
-    usedBy: "hosted webmail (Outlook on the web, a Microsoft 365 tenant user)",
+    usedBy:
+      "hosted webmail (Outlook on the web, a Microsoft 365 tenant user; optional, for the injection route)",
     entry: "microsoft/*.json",
     keys: {
       ...ACCOUNT,
@@ -85,44 +123,23 @@ export const CREDENTIAL_SETS: CredentialSet[] = [
       client_id: REPLACE("the app registration's client id"),
       client_secret: REPLACE("the app registration's client secret"),
     },
-  },
-  {
-    id: "yahoo",
-    usedBy: "hosted webmail (Yahoo Mail)",
-    entry: "yahoo/*.json",
-    keys: {
-      ...ACCOUNT,
-      app_password: REPLACE("an app password for IMAP"),
-    },
-  },
-  {
-    id: "aol",
-    usedBy: "hosted webmail (AOL Mail)",
-    entry: "aol/*.json",
-    keys: {
-      ...ACCOUNT,
-      app_password: REPLACE("an app password for IMAP"),
-    },
-  },
-  {
-    id: "outlook-com",
-    usedBy: "hosted webmail (Outlook.com, a consumer account)",
-    entry: "outlook-com/*.json",
-    keys: { ...ACCOUNT },
     optional: true,
   },
   {
     id: "mailgun",
-    usedBy: "sending real messages to hosted mailboxes (Mailgun)",
+    usedBy:
+      "sending from a domain of our own (Mailgun; optional: hosted webmail delivery sends from the QA accounts themselves)",
     entry: "mailgun/sending.json",
     keys: {
       domain: REPLACE("the sending domain"),
       api_key: REPLACE("a sending key scoped to that domain only"),
     },
+    optional: true,
   },
   {
     id: "inspect",
-    usedBy: "the device-farm service (Inspect)",
+    usedBy:
+      "the device-farm service (Inspect; that backend only, not needed for hosted webmail)",
     entry: "inspect/api.json",
     keys: {
       api_key: REPLACE("the API key"),
@@ -130,6 +147,12 @@ export const CREDENTIAL_SETS: CredentialSet[] = [
     },
   },
 ];
+
+// A file a team's tooling may place at the top of the directory to
+// prove that its secrets decrypt there: not a credential and no
+// provider's, so the check does not list it as undeclared (its mode is
+// still checked, like every file's).
+export const VERIFICATION_FILE = "seam-check.json";
 
 export function credentialSet(id: string): CredentialSet {
   const set = CREDENTIAL_SETS.find((s) => s.id === id);
@@ -178,7 +201,7 @@ export function credentialsReport(host: HostEnv): CredentialsReport {
       status: checkRequirement(credentialRequirement(set.id), host),
     })),
     undeclared: state.files
-      .filter((f) => !declared.has(f.path))
+      .filter((f) => !declared.has(f.path) && f.path !== VERIFICATION_FILE)
       .map((f) => ({ path: f.path, mode: f.mode })),
   };
 }
@@ -269,6 +292,7 @@ export function writeTemplates(ids: string[], host: HostEnv): TemplateResult {
         ? `a placeholder: fill in every REPLACE value, remove "${TEMPLATE_MARKER}", and rename the file to <account>.json`
         : `a placeholder: fill in every REPLACE value and remove "${TEMPLATE_MARKER}"`,
       ...set.keys,
+      ...(set.optionalKeys ?? {}),
     };
     // wx: never replace a file that appeared since the check above.
     writeFileSync(full, `${JSON.stringify(body, null, 2)}\n`, {

@@ -190,6 +190,10 @@ export interface DovecotServiceOptions {
   // Start Dovecot under a parent-death signal (Linux; default true).
   // Off only in the test that shows what the signal prevents.
   parentDeathSignal?: boolean;
+  // Dovecot settings appended to the generated config, for a caller
+  // that needs more of the server than the captures do (the hosted
+  // delivery tests: special-use mailboxes, logins by address).
+  extraConfig?: string;
 }
 
 export class DovecotService implements LocalService {
@@ -206,6 +210,7 @@ export class DovecotService implements LocalService {
   private readonly stateRoot: string;
   private readonly env: Record<string, string | undefined>;
   private readonly parentDeathSignal: boolean;
+  private readonly extraConfig: string;
   private stopping = false;
   private swept: string[] = [];
   // process.exit() runs no async teardown: kill and remove synchronously.
@@ -219,6 +224,7 @@ export class DovecotService implements LocalService {
     this.stateRoot = opts.stateRoot ?? MAIL_STATE_ROOT;
     this.env = opts.env ?? process.env;
     this.parentDeathSignal = opts.parentDeathSignal ?? true;
+    this.extraConfig = opts.extraConfig ?? "";
   }
 
   // A failed start leaves nothing behind: no process, no directory.
@@ -308,7 +314,7 @@ export class DovecotService implements LocalService {
           gid: me.gid,
           port,
           passwdDir: this.passwdDir,
-        }),
+        }) + this.extraConfig,
         { mode: 0o600 },
       );
       if (this.stopping) throw new Error("stopped while starting");
@@ -401,7 +407,7 @@ export class DovecotService implements LocalService {
     const deliver = async (
       account: ImapAccount,
       mime: Uint8Array,
-      opts: { assets?: AssetsHandle } = {},
+      opts: { assets?: AssetsHandle; mailbox?: string } = {},
     ): Promise<Delivery> => {
       if (this.users[account.user] !== account.password)
         throw new Error(`no account ${account.user} on this imap service`);
@@ -420,7 +426,15 @@ export class DovecotService implements LocalService {
       const t0 = performance.now();
       const r = spawnSync(
         this.doveadm,
-        ["-c", this.configPath, "save", "-u", account.user, "-m", "INBOX"],
+        [
+          "-c",
+          this.configPath,
+          "save",
+          "-u",
+          account.user,
+          "-m",
+          opts.mailbox ?? "INBOX",
+        ],
         { input: bytes, encoding: "utf8", env: { PATH: this.env.PATH ?? "" } },
       );
       if (r.status !== 0)

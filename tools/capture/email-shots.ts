@@ -313,7 +313,9 @@ function parseArgs(argv: string[]): Options {
     if (arg === "--async" || arg === "--follow")
       failUsage(`${arg} is for backend-D async requests, which land later`);
     if (arg === "--via")
-      failUsage(`--via (inject/smtp delivery choice) lands with backend B`);
+      failUsage(
+        `--via (how hosted webmail gets the message: sent, or injected) lands with backend B`,
+      );
     if (!arg.startsWith("--")) {
       stories.push(arg);
       continue;
