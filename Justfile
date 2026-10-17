@@ -305,6 +305,15 @@ email-workspace-send-smoke to-set *args: email-shots-build
 email-webmail-signin set *args:
     node tools/capture/email-webmail-signin.ts {{set}} {{args}}
 
+# What a person does, in order, before hosted-webmail captures
+# (`just email-shots --backends b`) can run on this machine: unlock the
+# QA credential set, the Workspace sender, a sign-in per QA account, a
+# smoke send per set, the first capture. Checks the first three from
+# local state only (contacts nothing, prints no address or secret);
+# exits 3 while something is pending.
+email-webmail-checklist:
+    node tools/capture/email-webmail-checklist.ts
+
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
 # when a Nim source or a story fixture or reference-email image (compiled
@@ -510,6 +519,7 @@ lint-ts:
     node tools/capture/email-selfsend-smoke.ts --help >/dev/null
     node tools/capture/email-workspace-send-smoke.ts --help >/dev/null
     node tools/capture/email-webmail-signin.ts --help >/dev/null
+    node tools/capture/email-webmail-checklist.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"

@@ -5,7 +5,9 @@
 // - routing: a request (story × family × viewport × scheme × images) is
 //   served by every AVAILABLE provider with a client of that family (and,
 //   with --clients, of that client id); --backends narrows the providers
-//   by their backend label;
+//   by their backend label; an opt-in provider joins only when named
+//   (its backend label, or one of its clients), and a named-only client
+//   only when --clients names it;
 // - availability: a provider's declared requirements are checked first,
 //   then its health; an unavailable provider is reported in the run
 //   summary with its reason, and a request no available provider can
@@ -257,10 +259,22 @@ function candidatesFor(
   for (const provider of providers) {
     if (spec.backends !== null && !spec.backends.includes(provider.backend))
       continue;
+    // An opt-in provider joins only when named: by the backend list,
+    // or by a client of its in --clients.
+    if (
+      spec.backends === null &&
+      provider.optIn === true &&
+      !provider
+        .clients()
+        .some((d) => spec.clients?.includes(d.clientId) === true)
+    )
+      continue;
     for (const descriptor of provider.clients()) {
       if (descriptor.family !== family) continue;
       if (spec.clients !== null && !spec.clients.includes(descriptor.clientId))
         continue;
+      // A named-only client is routed only when --clients names it.
+      if (descriptor.namedOnly === true && spec.clients === null) continue;
       out.push({ provider, descriptor });
     }
   }

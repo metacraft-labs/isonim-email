@@ -70,7 +70,12 @@ import type {
 import { servedFamilies } from "./providers/harness.ts";
 import { registeredProviders } from "./providers/registry.ts";
 
-const SERVED_FAMILIES = servedFamilies(registeredProviders());
+// The families of the providers a run routes to by default: an opt-in
+// provider (hosted webmail) joins only when named, so its families
+// (yahoo) have no rows in a run that does not name it.
+const SERVED_FAMILIES = servedFamilies(
+  registeredProviders().filter((p) => p.optIn !== true),
+);
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -313,8 +318,9 @@ describe("--affected over a dirtied working tree (scratch clone)", () => {
     const r4 = bareRun("run4");
     assert.equal(r4.status, 0, `fallback run failed:\n${r4.stderr}`);
     assert.doesNotMatch(r4.stderr, /empty request matrix/);
-    // Every family any registered provider serves: the backend-a
-    // families and the webmail verification clients.
+    // Every family the default providers serve: the backend-a
+    // families and the webmail verification clients (not the opt-in
+    // hosted webmail's).
     assert.deepEqual(families(r4.dir), [...SERVED_FAMILIES].sort());
     const stories = new Set(
       readJson<Entry[]>(join(r4.dir, "index.json")).map((e) => e.story),

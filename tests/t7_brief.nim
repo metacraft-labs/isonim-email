@@ -304,6 +304,39 @@ suite "real-client briefs":
     check "### Expected: alert — thunderbird (thunderbird) — desktop " &
       "800 — dark — linux-desktop (real client)" in tb
 
+  test "test_client_brief_hosted_webmail_clients":
+    # Backend b's real clients: the audience family, the sanitiser,
+    # the images that cannot load until they are published, Outlook.com's
+    # own recolouring in dark only, and a list row that is the row (the
+    # preheader as its preview line), not the body.
+    let gmail = clientExpectedBlock(getStory("receipt"), "gmail-web",
+      "desktop", "light")
+    check "### Expected: receipt — gmail-web (gmailWeb) — desktop 800 — " &
+      "light — b (real client)" in gmail
+    check "This is the real client of the `gmailWeb` audience family" in
+      gmail
+    check "rewrites its class names" in gmail
+    check "Heading \"Receipt #1234\" (largest text)." in gmail
+    check "cannot load" in gmail
+    let yahoo = clientExpectedBlock(getStory("receipt"), "yahoo-web",
+      "desktop", "light")
+    check "real client of the `yahoo` audience family" in yahoo
+    let olLight = clientExpectedBlock(getStory("receipt"), "outlook-web",
+      "desktop", "light")
+    let olDark = clientExpectedBlock(getStory("receipt"), "outlook-web",
+      "desktop", "dark")
+    check "data-ogsc" notin olLight
+    check "recolours the body itself" in olDark
+    check "prefixed `x_`" in olDark
+    let row = clientExpectedBlock(getStory("canary"), "gmail-list",
+      "desktop", "light")
+    check "(real client, inbox list row)" in row
+    check "starting with the preheader \"The canary sings at noon.\"" in
+      row
+    check "Heading" notin row
+    check briefClientMismatch("b", "gmailWeb", "gmail-list") == ""
+    check briefClientMismatch("b", "outlookWeb", "gmail-web").len > 0
+
   test "test_client_brief_unknown_or_drifted_client_fails":
     var raised = false
     try:

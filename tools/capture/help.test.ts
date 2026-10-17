@@ -42,10 +42,12 @@ const VALUES: Record<string, string> = {
   "--out": "build/no-such-run",
   "--driver": missing,
   "--brief-driver": missing,
+  "--via": "submit",
 };
 
-// Named by the help as not served yet: refused with a reason.
-const REFUSED = new Set(["--async", "--follow", "--via"]);
+// Named by the help as not served yet: refused with a reason. (--via
+// is served: submit is accepted, inject refused, below.)
+const REFUSED = new Set(["--async", "--follow"]);
 
 describe("email-shots --help", () => {
   const help = run(["--help"]);
@@ -71,6 +73,18 @@ describe("email-shots --help", () => {
         assert.match(r.err, /story driver not found/, `${flag}: ${r.err}`);
       }
     }
+  });
+
+  it("accepts --via submit and refuses --via inject, saying why", () => {
+    const inject = run(["--via", "inject", "--driver", missing]);
+    assert.equal(inject.status, 2, inject.err);
+    assert.match(
+      inject.err,
+      /--via inject: no hosted-webmail adapter has an injection route whose captures matched delivered ones/,
+    );
+    const other = run(["--via", "carrier-pigeon", "--driver", missing]);
+    assert.equal(other.status, 2, other.err);
+    assert.match(other.err, /unknown --via 'carrier-pigeon'/);
   });
 
   it("every flag the parser knows is in the help", () => {

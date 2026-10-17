@@ -58,6 +58,7 @@ import {
   webmailLaunchOptions,
   writeSigninRecord,
 } from "./providers/webmail_profiles.ts";
+import { clearNeedsLogin } from "./providers/webmail_accounts.ts";
 
 const USAGE = `usage: email-webmail-signin SET [--account NAME] [--check-only]
                             [--dir DIR] [--timeout SECONDS]
@@ -292,6 +293,8 @@ async function main(): Promise<number> {
     process.stdout.write(`NOT SIGNED IN: ${result.reason}\n`);
     return 1;
   }
+  // A lost session's marker goes: the account is back in selection.
+  clearNeedsLogin(profile);
   writeSigninRecord(profile, {
     set,
     account_file: acct.file,

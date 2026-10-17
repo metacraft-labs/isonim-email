@@ -53,6 +53,9 @@ export interface ClientDescriptor {
   // True for emulations: the capture approximates a client, it is not
   // one.
   approximation: boolean;
+  // Routed only when --clients names it (hosted webmail's inbox-list
+  // rows: asking for message bodies does not also capture rows).
+  namedOnly?: boolean;
 }
 
 interface RequirementBase {
@@ -277,6 +280,11 @@ export interface CaptureProvider {
   // How captures reach the client, recorded as `via` in every provenance
   // and in run.json; "local" when unset.
   via?: string;
+  // Joins a run only when named: by --backends (its label) or by
+  // --clients (one of its clients). For a provider whose captures cost
+  // something outside the machine (hosted webmail sends real mail and
+  // spends an account's daily budget).
+  optIn?: boolean;
   // Static: answering needs no tool, so routing and --help work on a
   // host where the provider is unavailable.
   clients(): ClientDescriptor[];

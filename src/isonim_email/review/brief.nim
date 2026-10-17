@@ -141,6 +141,13 @@ proc familyLintFamily*(family: string): tuple[found: bool;
   of "wordApprox": (true, cfOutlookWord)
   else: (false, cfApple)
 
+proc audienceLintFamily(family: string): tuple[found: bool;
+    fam: ClientFamily] =
+  ## As `familyLintFamily`, for a real client's audience family too:
+  ## `yahoo` has real clients (hosted Yahoo Mail) but no backend-A
+  ## emulation.
+  if family == "yahoo": (true, cfYahoo) else: familyLintFamily(family)
+
 proc viewportWidth*(viewport: string): int =
   ## The layout width: named widths from `NAMED_VIEWPORTS`, else the
   ## leading number of a custom viewport (`600@2x` → 600), else the
@@ -1058,7 +1065,7 @@ proc degradationLines(family: string; doc: EmailNode;
       result.add("\"" & (if alt.len > 0: alt else: "(no alt)") &
         "\" shown as alt text (images off)")
   else:
-    let (found, fam) = familyLintFamily(family)
+    let (found, fam) = audienceLintFamily(family)
     if found:
       for d in declaredDegradations():
         if fam in d.families and declarationApplies(doc, d):
@@ -1208,6 +1215,8 @@ type
     rtlDegradation*: string    ## an extra expected difference for a
                                ## right-to-left story ("" = none)
     notExpected*: seq[string]  ## what a reviewer must not expect here
+    listRow*: bool             ## the capture is the message's row in the
+                               ## inbox list, not its body
 
 const verificationNote = "This client stands in for no audience " &
   "family: it shows how a real, independent sanitiser and engine " &
@@ -1217,7 +1226,32 @@ const darkTextDefect = "Every text keeps its own colour: text that " &
   "turns light on the message's light background (invisible or " &
   "faint) is a defect (R-TXT-02), not dark mode."
 
-const realClients*: array[7, RealClient] = [
+const gmailSanitiser = "Gmail keeps the message's head `<style>` (up " &
+  "to its size limit) and rewrites its class names; width media queries " &
+  "apply, other media features do not."
+
+const gmailClip = "A message over about 102 KB is clipped behind " &
+  "\"[Message clipped] View entire message\" (R-SIZE-01)."
+
+const hostedImages = "Images load through the webmail's image proxy from " &
+  "a public address only; until the story's images are published at " &
+  "one, they cannot load (the capture's provenance says so)."
+
+const hostedImagesDegradation = "the story's images do not load until " &
+  "they are published at a public address: empty or broken image boxes " &
+  "with their alt text, the layout around them unchanged"
+
+const outlookSanitiser = "Outlook.com keeps the message's `<style>` " &
+  "blocks with every class name prefixed `x_`; its media-query support " &
+  "is partial."
+
+const outlookDark = "Dark: Outlook.com's dark theme recolours the body " &
+  "itself (light backgrounds darkened, dark text lightened) and marks " &
+  "what it changed with `data-ogsc`/`data-ogsb`, which the message's " &
+  "dark copies key on (R-DRK-03); the light capture is the same message " &
+  "with the per-message background toggle on (a light body)."
+
+const realClients*: array[15, RealClient] = [
   RealClient(id: "roundcube", display: "Roundcube 1.6 (Elastic skin)",
     backend: "selfhosted-webmail", family: "verification",
     engine: "Chromium, behind Roundcube's washtml sanitiser",
@@ -1382,6 +1416,86 @@ const realClients*: array[7, RealClient] = [
       "(this client stands in for none of them)",
       "dark colours in a message without a designed dark palette (Claws " &
         "Mail is captured in light only)"]),
+  RealClient(id: "gmail-web", display: "Gmail (web, desktop)",
+    backend: "b", family: "gmailWeb",
+    engine: "Chromium, behind Gmail's sanitiser, after real delivery",
+    audience: "gmailWeb", headCss: true, darkRules: false,
+    shows: @[gmailSanitiser, gmailClip, hostedImages,
+      "The crop is the opened message's body only: no Gmail header, " &
+        "toolbar or sender line."],
+    dark: @[],
+    degradations: @[hostedImagesDegradation],
+    notExpected: @["the message's dark palette (Gmail web applies no " &
+      "`prefers-color-scheme` rule)"]),
+  RealClient(id: "gmail-mobile-web", display: "Gmail mobile web (a " &
+      "phone's browser, not the Gmail app)",
+    backend: "b", family: "gmailWeb",
+    engine: "Chromium as an iPhone browser, behind Gmail's sanitiser, " &
+      "after real delivery",
+    audience: "gmailWeb", headCss: true, darkRules: false,
+    shows: @[gmailSanitiser, gmailClip, hostedImages,
+      "This is the web UI Gmail serves a phone's browser; the Gmail apps " &
+        "render on their own and are not this capture.",
+      "The crop is the opened message's body only."],
+    dark: @[],
+    degradations: @[hostedImagesDegradation],
+    notExpected: @["the message's dark palette (Gmail's web UI applies " &
+      "no `prefers-color-scheme` rule)", "the Gmail app's rendering"]),
+  RealClient(id: "gmail-list", display: "Gmail (web, desktop), inbox list",
+    backend: "b", family: "gmailWeb", engine: "Chromium, Gmail's inbox list",
+    audience: "gmailWeb", headCss: false, darkRules: false, listRow: true,
+    shows: @["Gmail's row: the sender's display name, then the subject " &
+      "and, after a dash, the preview line, cut where the row ends."],
+    dark: @[], degradations: @[], notExpected: @[]),
+  RealClient(id: "yahoo-web", display: "Yahoo Mail (web, desktop)",
+    backend: "b", family: "yahoo",
+    engine: "Chromium, behind Yahoo Mail's sanitiser, after real delivery",
+    audience: "yahoo", headCss: true, darkRules: false,
+    shows: @["Yahoo Mail keeps the message's `<style>` blocks and " &
+      "rewrites its class names; `screen` and width/height media " &
+      "queries apply, other media features do not.", hostedImages,
+      "The crop is the opened message's body only: no Yahoo header or " &
+        "toolbar."],
+    dark: @[],
+    degradations: @[hostedImagesDegradation],
+    notExpected: @["the message's dark palette (Yahoo Mail does not " &
+      "apply `prefers-color-scheme`)"]),
+  RealClient(id: "yahoo-list", display: "Yahoo Mail (web), inbox list",
+    backend: "b", family: "yahoo", engine: "Chromium, Yahoo Mail's inbox list",
+    audience: "yahoo", headCss: false, darkRules: false, listRow: true,
+    shows: @["Yahoo Mail's row: the sender's display name, the subject " &
+      "and the preview line under or after it."],
+    dark: @[], degradations: @[], notExpected: @[]),
+  RealClient(id: "outlook-web", display: "Outlook.com (web, desktop)",
+    backend: "b", family: "outlookWeb",
+    engine: "Chromium, behind Outlook.com's sanitiser, after real delivery",
+    audience: "outlookWeb", headCss: true, darkRules: true,
+    shows: @[outlookSanitiser, hostedImages,
+      "The crop is the element named \"Message body\": no Outlook " &
+        "header, toolbar or reading-pane chrome."],
+    dark: @[outlookDark],
+    degradations: @[hostedImagesDegradation],
+    notExpected: @[]),
+  RealClient(id: "outlook-mobile-web", display: "Outlook.com mobile web " &
+      "(a phone's browser, not the Outlook app)",
+    backend: "b", family: "outlookWeb",
+    engine: "Chromium as an iPhone browser, behind Outlook.com's " &
+      "sanitiser, after real delivery",
+    audience: "outlookWeb", headCss: true, darkRules: true,
+    shows: @[outlookSanitiser, hostedImages,
+      "This is the web UI served to a phone's browser; the Outlook apps " &
+        "are not this capture.",
+      "The crop is the element named \"Message body\"."],
+    dark: @[outlookDark],
+    degradations: @[hostedImagesDegradation],
+    notExpected: @["the Outlook app's rendering"]),
+  RealClient(id: "outlook-list", display: "Outlook.com (web), inbox list",
+    backend: "b", family: "outlookWeb",
+    engine: "Chromium, Outlook.com's message list",
+    audience: "outlookWeb", headCss: false, darkRules: false, listRow: true,
+    shows: @["Outlook.com's row: the sender's display name, the subject " &
+      "and the preview line under it."],
+    dark: @[], degradations: @[], notExpected: @[]),
 ]
 
 proc realClient*(id: string): RealClient =
@@ -1433,6 +1547,38 @@ proc thunderbirdDarkLine(mode: DarkModeStrategy): string =
       "(raw colours, and text over a background image) keep their light " &
       "values."
 
+proc listRowBlock(story: Story; c: RealClient; viewport,
+    scheme: string): string =
+  ## The expected block of an inbox-list row capture: the row's sender,
+  ## subject and preview line (the preheader, R-PRE-02), not the body.
+  let (doc, _, _) = renderedTree(story)
+  let pre = attrValue(doc, "preheader")
+  result = "### Expected: " & story.name & " — " & c.id & " (" &
+    c.family & ") — " & viewportLabel(viewport) & " — " & scheme &
+    " — " & c.backend & " (real client, inbox list row)\n"
+  result.add("\nClient: " & c.display & ".\n")
+  result.add("This is the real client of the `" & c.audience &
+    "` audience family, not an emulation. The capture is the message's " &
+    "row in the inbox list, taken before the message is opened.\n")
+  result.add("\nPresent, left to right:\n")
+  result.add("1. The sender: the display name of the story's From (the " &
+    "address behind it is the test sender's).\n")
+  result.add("2. The subject, after the capture's run token `[es:…]` " &
+    "(the harness's, not part of the design).\n")
+  if pre.len > 0:
+    result.add("3. The preview line, starting with the preheader \"" & pre &
+      "\" (R-PRE-02).\n")
+  else:
+    result.add("3. The preview line: the body's first text (the story " &
+      "sets no preheader).\n")
+  result.add("\nWhat this client is expected to show:\n")
+  for line in c.shows:
+    result.add("- " & line & "\n")
+  result.add("\nExpected degradations in this client:\n- (none)\n")
+  result.add("\nNot expected here: the message body; after the " &
+    "preheader, any mark of its hidden padding (a visible `͏`, a box or " &
+    "a run of odd spaces) is a defect (R-PRE-02).\n")
+
 proc clientExpectedBlock*(story: Story; id, viewport,
     scheme: string): string =
   ## The expected-screenshot block for one real-client capture: the
@@ -1441,6 +1587,8 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   ## crop), its expected degradations and what is not expected there.
   ## Ends with a newline (file-ready).
   let c = realClient(id)
+  if c.listRow:
+    return listRowBlock(story, c, viewport, scheme)
   let width = viewportWidth(viewport)
   let breakpoint = defaultTarget().breakpoint
   let (doc, dark, swaps) = renderedTree(story)
@@ -1448,7 +1596,7 @@ proc clientExpectedBlock*(story: Story; id, viewport,
   var images: seq[string] = @[]
   var firstH1 = false
   let (aud, audFam) =
-    if c.audience.len > 0: familyLintFamily(c.audience)
+    if c.audience.len > 0: audienceLintFamily(c.audience)
     else: (false, cfApple)
   let view = BriefView(client: c.id, audience: aud, family: audFam,
     headCss: c.headCss, mediaQueries: c.headCss and not c.noMediaQueries,

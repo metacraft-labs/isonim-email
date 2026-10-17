@@ -276,7 +276,7 @@ disposed; a service that fails to start makes those providers
 unavailable with the reason. Providers keep clients warm only within one
 run; `--cold` asks for a fresh client per capture.
 
-Three providers are registered: `browser-emulation` (backend `a`), the
+Four providers are registered: `browser-emulation` (backend `a`), the
 dev shell's pinned Chromium, WebKit and Firefox, raw or through the
 client emulations (gmailWeb, ganga, outlookWeb, imagesOff, wordApprox);
 `selfhosted-webmail`, real Roundcube and SnappyMail on php-fpm and
@@ -301,15 +301,36 @@ with a square in each corner whenever its build changes (recorded under
 check on demand. `just test-desktop` (part of `just test`) runs the
 desktop end-to-end tests on Thunderbird and Claws Mail, and `just
 test-desktop-all` on all five clients (run it after changing the
-provider or a driver). Later: hosted webmail, clients in VM guests, and
-a device-farm service, each as one more provider. `--backends b|c|d` and `--async`
-are refused today, naming what lands later. Providers that need accounts read their
-credentials from one directory on the machine running the captures
-(`$ISONIM_EMAIL_CREDENTIALS_DIR`); the directory must be mode 0700 and
-no file in it group- or world-readable. Hosted webmail gets each message
-by real delivery: the QA account sends it to itself through its
-provider's submission server with an app password, and it is found and
-removed over IMAP (`tools/capture/providers/hosted_delivery.ts`;
-Outlook.com, which accepts no app password, receives from another
-account). `just email-selfsend-smoke <set>` does one such delivery live;
-its tests run against Mailpit and Dovecot on loopback.
+provider or a driver). And `hosted-webmail` (backend `b`,
+`tools/capture/providers/hosted_webmail.ts`): the real Gmail, Yahoo
+Mail and Outlook.com, in persistent Chromium profiles a person signs in
+once (`just email-webmail-signin <set>`; the harness never signs in).
+Each story is delivered for real: a Google Workspace sender sends it to
+a QA account through the Gmail API (`workspace_send.ts`), the adapter
+finds it in Inbox or Spam/Junk by its Message-ID or run token, captures
+its inbox-list row (`--clients gmail-list,yahoo-list,outlook-list`, only
+when named) and its body (`gmail-web`, `gmail-mobile-web`, `yahoo-web`,
+`outlook-web` and `outlook-mobile-web`, light, and dark on Outlook.com
+by its background toggle), then deletes it in the UI and from Trash.
+Backend `b` is opt-in: it runs only with `--backends b` or one of its
+`--clients`, because each capture sends real mail and spends the
+account's daily budget (`ISONIM_EMAIL_WEBMAIL_DAILY_BUDGET`, default
+300; an account drops out at 90%). Accounts are leased one run at a
+time (a lock file in the profile); a lost session marks the account
+needs-login and fails its captures naming the sign-in command; a
+locator that no longer matches the UI fails loudly and takes that
+webmail down for the run. The adapters' locators
+(`webmail_adapters.ts`) are marked unverified until a live capture has
+confirmed them. `just email-webmail-checklist` lists, in order, what a
+person does before the first capture and checks the local part; the
+tests run against stand-in webmails on loopback
+(`webmail_standin.ts`). Later: clients in VM guests and a device-farm
+service, each as one more provider; `--backends c|d` and `--async` are
+refused today, naming what lands later. Providers that need accounts
+read their credentials from one directory on the machine running the
+captures (`$ISONIM_EMAIL_CREDENTIALS_DIR`); the directory must be mode
+0700 and no file in it group- or world-readable. An optional route,
+self-send, has a QA account with an app password send to itself over
+SMTP and find and remove the copy over IMAP (`hosted_delivery.ts`;
+`just email-selfsend-smoke <set>`, tested against Mailpit and Dovecot
+on loopback).

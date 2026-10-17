@@ -90,6 +90,18 @@ const PROVIDERS = registeredProviders();
 const FAMILIES = servedFamilies(PROVIDERS);
 const CLIENTS = servedClients(PROVIDERS);
 const BACKENDS = servedBackends(PROVIDERS);
+// What --backends defaults to: every provider that is not opt-in (an
+// opt-in provider, hosted webmail, joins only when named).
+const DEFAULT_BACKENDS = servedBackends(
+  PROVIDERS.filter((p) => p.optIn !== true),
+);
+// The client ids of opt-in providers, by backend: naming one with
+// --clients adds its backend to the default set.
+const OPT_IN_CLIENTS = new Map<string, string>(
+  PROVIDERS.filter((p) => p.optIn === true).flatMap((p) =>
+    p.clients().map((c) => [c.clientId, p.backend] as [string, string]),
+  ),
+);
 const SERVED: ServedClient[] = PROVIDERS.flatMap((p) =>
   p.clients().map((c) => ({
     backend: p.backend,
@@ -132,15 +144,23 @@ declare, and dark added when a colour, token or image changed.
 
 options:
   --backends L,…         the capture providers to route to, by backend label
-                        (default: every registered provider): a, the local
-                        browser engines with the client emulations,
+                        (default: every registered provider but b): a, the
+                        local browser engines with the client emulations,
                         selfhosted-webmail, Roundcube and SnappyMail on a
-                        local mail stack, and linux-desktop, real desktop
+                        local mail stack, linux-desktop, real desktop
                         clients (Thunderbird, Evolution, Geary, KMail,
-                        Claws Mail) in a headless compositor (Linux); b, c
+                        Claws Mail) in a headless compositor (Linux), and
+                        b, hosted webmail: the real Gmail, Yahoo Mail and
+                        Outlook.com, each message sent to a QA account by
+                        a Workspace sender and captured in its signed-in
+                        webmail; b runs only when named here or by one of
+                        its --clients (it sends real mail and spends each
+                        account's daily budget), and needs what
+                        \`just email-webmail-checklist\` walks through; c
                         and d are refused naming the later backends
   --families F,…         apple,thunderbird,chromium-baseline,gmailWeb,ganga,
-                        outlookWeb,imagesOff,wordApprox, and verification
+                        outlookWeb,imagesOff,wordApprox,yahoo (b only), and
+                        verification
                         (the real verification clients: roundcube,
                         snappymail, evolution, geary, kmail, claws-mail)
                         (default: all, or the affected ones on an
@@ -151,7 +171,11 @@ options:
                         engines: chromium,webkit,firefox; the webmail
                         clients are roundcube,snappymail; the desktop
                         clients are thunderbird,evolution,geary,kmail,
-                        claws-mail. On an --affected
+                        claws-mail; backend b's are gmail-web,
+                        gmail-mobile-web,yahoo-web,outlook-web,
+                        outlook-mobile-web, and the inbox-list rows
+                        gmail-list,yahoo-list,outlook-list (captured only
+                        when named here). On an --affected
                         run a named client whose families the change did
                         not select gets all of them (so --clients
                         roundcube captures Roundcube after any change);
@@ -175,6 +199,10 @@ options:
   --no-cache             bypass the result cache (no reads, no writes)
   --assert               fail captures whose Tier-3 DOM assertions fail
                         (without it assertions are recorded, never gated)
+  --via submit|inject    how backend b gets the message: submit (default)
+                        delivers it; inject is refused: no adapter has an
+                        injection route whose captures matched delivered
+                        ones
   --cold                 a fresh client and profile for every capture;
                         without it providers keep their clients warm
                         between the captures of this run (never across
@@ -182,12 +210,13 @@ options:
                         capture either way, so it renders the same
   --help                 this text
 
-not yet served (refused with a reason): --async, --follow, --via.
+not yet served (refused with a reason): --async, --follow, --via inject.
 Each request goes to every available provider that serves its family.
 A provider that is unavailable (a missing tool, an unsupported host) is
 named in the run summary with its reason; a request no available
 provider serves fails with that reason.
-Captures never use the network: requests other than the story fixture
+Captures never use the network (backend b excepted: it is the real
+webmails after real delivery): requests other than the story fixture
 host and data: URIs (for a webmail: its own loopback origin and the
 local assets service) are blocked and listed in the run summary and in
 each capture's provenance (network.blocked); a desktop client runs in a
@@ -260,7 +289,7 @@ function parseArgs(argv: string[]): Options {
   const stories: string[] = [];
   const opt: Options = {
     stories,
-    backends: [...BACKENDS],
+    backends: [...DEFAULT_BACKENDS],
     backendsExplicit: false,
     families: [...FAMILIES],
     familiesExplicit: false,
@@ -288,6 +317,7 @@ function parseArgs(argv: string[]): Options {
     "--out",
     "--driver",
     "--brief-driver",
+    "--via",
   ]);
   // One iterator: a flag's value is the element after it.
   const args = argv.values();
@@ -312,10 +342,6 @@ function parseArgs(argv: string[]): Options {
     }
     if (arg === "--async" || arg === "--follow")
       failUsage(`${arg} is for backend-D async requests, which land later`);
-    if (arg === "--via")
-      failUsage(
-        `--via (how hosted webmail gets the message: sent, or injected) lands with backend B`,
-      );
     if (!arg.startsWith("--")) {
       stories.push(arg);
       continue;
@@ -354,6 +380,18 @@ function parseArgs(argv: string[]): Options {
       case "--brief-driver":
         opt.briefDriver = resolve(repoRoot, value);
         break;
+      case "--via":
+        // Hosted webmail delivers every message (submit). Injection is
+        // used for a provider only after its injected and delivered
+        // captures of the reference stories matched, and no adapter has
+        // an injection route that did.
+        if (value === "inject")
+          failUsage(
+            "--via inject: no hosted-webmail adapter has an injection route whose captures matched delivered ones, so every capture is delivered (--via submit)",
+          );
+        if (value !== "submit")
+          failUsage(`unknown --via '${value}' (want submit or inject)`);
+        break;
     }
   }
 
@@ -364,13 +402,19 @@ function parseArgs(argv: string[]): Options {
   const served = `served today: ${BACKENDS.join(", ")}`;
   for (const b of opt.backends) {
     if (BACKENDS.includes(b)) continue;
-    if (b === "b") failUsage(`backend B (webmail) lands later (${served})`);
     if (b === "c")
       failUsage(`backend C (native clients) lands later (${served})`);
     if (b === "d")
       failUsage(`backend D (Mailgun Inspect) lands later (${served})`);
-    failUsage(`unknown backend '${b}' (${served}; b, c and d land later)`);
+    failUsage(`unknown backend '${b}' (${served}; c and d land later)`);
   }
+  // A client of an opt-in provider named with --clients brings its
+  // backend along when --backends was not given.
+  if (!opt.backendsExplicit && opt.clients !== null)
+    for (const c of opt.clients) {
+      const b = OPT_IN_CLIENTS.get(c);
+      if (b !== undefined && !opt.backends.includes(b)) opt.backends.push(b);
+    }
   // Array membership, not `in`: an Object.prototype member name
   // ("constructor", "toString") is no family or client.
   for (const f of opt.families) {
