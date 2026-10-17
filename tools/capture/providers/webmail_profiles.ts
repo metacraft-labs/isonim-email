@@ -17,11 +17,27 @@
 // automation-controlled browser), with Playwright's cookie-store
 // switches, so the profile it leaves reads as signed in when Playwright
 // opens it afterwards (a profile whose cookies were sealed with the
-// desktop keyring would read as signed out).
+// desktop keyring would read as signed out). Both run the same
+// executable (Playwright opens the profile with `executablePath` set to
+// it, headed or headless), so the profile is never opened by a build
+// older than the one that wrote it.
+//
+// Both browsers load the real web, so both keep Chromium's sandbox on:
+// the sign-in browser is started without `--no-sandbox`, and Playwright
+// (which adds `--no-sandbox` unless told otherwise) with
+// `chromiumSandbox: true`. On Linux the pinned build sandboxes its
+// renderers with user and PID namespaces plus seccomp-bpf (its setuid
+// helper cannot be setuid in the Nix store), so it needs unprivileged
+// user namespaces; where those are refused, Chromium aborts with "No
+// usable sandbox!" rather than run unsandboxed, and the sign-in says
+// so and stops. `waitSandboxed` checks the running browser: one of its
+// renderers must be under a seccomp filter.
 
+import type { ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   chmodSync,
@@ -31,6 +47,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
 import { resolveDriver } from "./browser_emulation.ts";
+import { launchOptions, type LaunchOptions } from "../launch.ts";
 import type { HostEnv } from "./requirements.ts";
 
 export const PROFILES_ENV = "ISONIM_EMAIL_WEBMAIL_PROFILES_DIR";
@@ -223,4 +240,165 @@ export async function checkSignedIn(
       ? `the inbox loaded on ${host} but the mailbox marker (${w.marker}) did not appear within ${timeoutMs} ms`
       : `the inbox was redirected to ${host}, not ${w.mailHosts.join(" or ")}: the profile is not signed in`,
   };
+}
+
+// The command line of the sign-in browser: the pinned Chromium without
+// automation, on the account's profile, with Playwright's cookie-store
+// switches and the sandbox on. `unsafeNoSandbox` is the operator's
+// explicit override for a host without a usable sandbox (`--no-sandbox`:
+// a person then browses the web with renderers that are not confined).
+export function signinBrowserArgs(
+  userDataDir: string,
+  url: string,
+  opts: { headless?: boolean; unsafeNoSandbox?: boolean } = {},
+): string[] {
+  return [
+    `--user-data-dir=${userDataDir}`,
+    ...COOKIE_STORE_SWITCHES,
+    ...(opts.unsafeNoSandbox === true ? ["--no-sandbox"] : []),
+    ...(opts.headless === true ? ["--headless=new"] : []),
+    "--no-first-run",
+    "--no-default-browser-check",
+    url,
+  ];
+}
+
+// The Playwright launch options that open an account's profile: the
+// capture's Chromium options, the sign-in browser's executable, and
+// the sandbox on (unless the operator overrode it for the sign-in).
+export function webmailLaunchOptions(
+  env: Record<string, string | undefined>,
+  headless: boolean,
+  opts: { unsafeNoSandbox?: boolean } = {},
+): LaunchOptions & {
+  headless: boolean;
+  chromiumSandbox: boolean;
+  executablePath: string;
+} {
+  const chromium = pinnedChromium(env);
+  if ("reason" in chromium) throw new Error(chromium.reason);
+  return {
+    ...launchOptions("chromium", false, process.platform, env),
+    headless,
+    chromiumSandbox: opts.unsafeNoSandbox !== true,
+    executablePath: chromium.path,
+  };
+}
+
+function hasArg(cmdline: string, arg: string): boolean {
+  for (let i = cmdline.indexOf(arg); i >= 0; i = cmdline.indexOf(arg, i + 1)) {
+    const before = i === 0 ? " " : cmdline[i - 1]!;
+    const after = cmdline[i + arg.length] ?? " ";
+    if (/[\0 ]/.test(before) && /[\0 ]/.test(after)) return true;
+  }
+  return false;
+}
+
+// The renderers of the browser running on `userDataDir`, each with
+// whether it is under a seccomp filter (/proc/<pid>/status "Seccomp: 2").
+// Linux only: elsewhere there is no /proc and the list is empty.
+export function rendererSandboxes(
+  userDataDir: string,
+): { pid: number; seccomp: boolean }[] {
+  const out: { pid: number; seccomp: boolean }[] = [];
+  let pids: string[];
+  try {
+    pids = readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch {
+    return out;
+  }
+  for (const pid of pids) {
+    try {
+      // A renderer forked by the zygote carries its command line as its
+      // process title, space-separated rather than NUL-separated, so an
+      // argument ends at a space, a NUL or the end.
+      const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      if (
+        !hasArg(argv, "--type=renderer") ||
+        !hasArg(argv, `--user-data-dir=${userDataDir}`)
+      )
+        continue;
+      const status = readFileSync(`/proc/${pid}/status`, "utf8");
+      out.push({
+        pid: Number(pid),
+        seccomp: /^Seccomp:\s*2\s*$/m.test(status),
+      });
+    } catch {
+      continue; // exited meanwhile, or not ours to read
+    }
+  }
+  return out;
+}
+
+// Waits until the browser started on `userDataDir` (as `child`) runs a
+// renderer under a seccomp filter. Fails when the browser exits first
+// (Chromium's "No usable sandbox!" abort among them: `stderr` is what
+// it printed), when one renderer stays unconfined for `unconfinedMs`
+// (a renderer is confined moments after it starts, so one still
+// unconfined after that runs without the sandbox), or at the timeout.
+export async function waitSandboxed(
+  child: ChildProcess,
+  userDataDir: string,
+  stderr: () => string,
+  timeoutMs = 90_000,
+  unconfinedMs = 10_000,
+): Promise<{ ok: true; pid: number } | { ok: false; reason: string }> {
+  const firstSeen = new Map<number, number>();
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const now = Date.now();
+    for (const r of rendererSandboxes(userDataDir)) {
+      if (r.seccomp) return { ok: true, pid: r.pid };
+      const seen = firstSeen.get(r.pid) ?? now;
+      firstSeen.set(r.pid, seen);
+      if (now - seen >= unconfinedMs)
+        return {
+          ok: false,
+          reason: `renderer ${r.pid} has run for ${Math.round((now - seen) / 1000)} s without a seccomp filter: the browser is not sandboxed`,
+        };
+    }
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // What it printed last may still be in the pipe.
+      const err = child.stderr;
+      if (err != null && !err.readableEnded)
+        await new Promise<void>((r) => {
+          err.once("end", () => r());
+          setTimeout(r, 2000).unref();
+        });
+      const said = stderr()
+        .split("\n")
+        .filter((l) => /sandbox/i.test(l))
+        .slice(-2)
+        .join(" | ");
+      return {
+        ok: false,
+        reason: `the browser exited (${child.exitCode ?? child.signalCode}) before running a sandboxed renderer${said === "" ? "" : `: ${said}`}`,
+      };
+    }
+    if (now >= deadline)
+      return {
+        ok: false,
+        reason: `no sandboxed renderer within ${Math.round(timeoutMs / 1000)} s`,
+      };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+// Stops a browser started without Playwright: SIGINT, SIGKILL after
+// 15 s. Not SIGTERM: Chromium exits on SIGTERM without writing the
+// cookies of its last ~30 s to the profile (measured, Chromium 1217,
+// 2026-10-17, headed on Wayland and headless alike: a session cookie
+// set a second before SIGTERM was missing from the profile's Cookies
+// database, and present after SIGINT or SIGHUP), so a person who
+// pressed Enter as soon as the inbox showed would leave a profile that
+// reads as signed out.
+export const BROWSER_STOP_SIGNAL = "SIGINT";
+
+export async function stopBrowser(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((r) => child.once("exit", () => r()));
+  child.kill(BROWSER_STOP_SIGNAL);
+  const t = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  await exited;
+  clearTimeout(t);
 }

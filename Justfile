@@ -293,11 +293,15 @@ email-workspace-send-smoke to-set *args: email-shots-build
     node tools/capture/email-workspace-send-smoke.ts {{to-set}} {{args}}
 
 # The first sign-in of a QA account's webmail profile, by a person at
-# this machine's display: prints the address, offers to copy the
-# password to the clipboard (never printing it), opens the webmail in
-# the pinned Chromium without automation, waits for Enter, then checks
-# the profile under Playwright and records the sign-in. `--check-only`
-# only checks an existing profile. Never types into a page.
+# this machine's display: prints the address, opens the webmail in the
+# pinned Chromium without automation and with its sandbox (checked;
+# it stops, exit 4, when the sandbox is not running), offers to copy
+# the password to the clipboard (never printing it; taken off again on
+# Enter, after 60 s, or on Ctrl-C/SIGTERM/SIGHUP), waits for Enter,
+# then checks the profile under Playwright (same Chromium, sandboxed)
+# and records the sign-in. `--check-only` only checks an existing
+# profile; `--unsafe-no-sandbox` (unsafe) runs without the sandbox on a
+# host without unprivileged user namespaces. Never types into a page.
 email-webmail-signin set *args:
     node tools/capture/email-webmail-signin.ts {{set}} {{args}}
 

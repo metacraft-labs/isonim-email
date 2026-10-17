@@ -13,6 +13,12 @@
 // the cookie store to persist in the profile; a mail host without the
 // mailbox marker is not signed in either; the guided sign-in refuses to
 // run without a display and stops, pending, without an account file.
+// The sign-in browser (the pinned Chromium started without Playwright,
+// with the sign-in's own command line, headless here) runs its
+// renderers under a seccomp filter, and a session it was given by the
+// site is read back as signed in by Playwright opening the same profile
+// with the same executable, sandboxed too; a browser without the
+// sandbox, or one that aborts for want of one, is refused, naming why.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails cannot be signed in from a test (a sign-in is a
@@ -20,14 +26,17 @@
 // plays one: its inbox on 127.0.0.1 shows a search form to a browser
 // holding its session cookie and redirects any other browser to a
 // "sign-in" page on another host (localhost), which has a search box of
-// its own. Chromium, Playwright, the
-// persistent profile and the check are real.
+// its own; its /login sets the session cookie, as a sign-in does.
+// Chromium, Playwright, the persistent profile, the sandbox and the
+// check are real. One double more: a stand-in Chromium executable that
+// aborts as Chromium does without a usable sandbox (a host without
+// user namespaces cannot be made from inside a test).
 // Run with:
 //   node --test tools/capture/providers/webmail_profiles.test.ts
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -36,6 +45,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -47,9 +57,15 @@ import { CREDENTIALS_SCHEMA } from "./requirements.ts";
 import {
   accountProfile,
   checkSignedIn,
+  pinnedChromium,
   profilesRoot,
   readSigninRecord,
+  rendererSandboxes,
+  signinBrowserArgs,
+  stopBrowser,
+  waitSandboxed,
   type WebmailSignin,
+  webmailLaunchOptions,
   writeSigninRecord,
 } from "./webmail_profiles.ts";
 
@@ -107,11 +123,22 @@ describe("hosted-webmail browser profiles", () => {
     let server: Server;
     let port: number;
     let pw: typeof import("playwright-core");
+    // Requests for the inbox that carried the session cookie.
+    let signedInVisits = 0;
     before(async () => {
       server = createServer((req, res) => {
         const signedIn = /(?:^|; )session=yes(?:;|$)/.test(
           req.headers.cookie ?? "",
         );
+        if (req.url === "/login") {
+          // A sign-in: the site sets a persistent session cookie.
+          res.writeHead(302, {
+            "set-cookie": "session=yes; Max-Age=86400; Path=/",
+            location: "/mail/",
+          });
+          return res.end();
+        }
+        if (req.url === "/mail/" && signedIn) signedInVisits++;
         if (req.url === "/mail/") {
           if (!signedIn) {
             res.writeHead(302, { location: `http://localhost:${port}/signin` });
@@ -207,6 +234,115 @@ describe("hosted-webmail browser profiles", () => {
       } finally {
         await second.close();
       }
+    });
+
+    it("reads a profile signed in by the sandboxed sign-in browser back as signed in under Playwright, with the same executable", async () => {
+      const chromium = pinnedChromium(process.env);
+      if ("reason" in chromium) throw new Error(chromium.reason);
+      // The sign-in starts the executable Playwright drives, and opens
+      // the profile afterwards with it (headed or headless).
+      assert.equal(chromium.path, pw.chromium.executablePath());
+      const options = webmailLaunchOptions(process.env, true);
+      assert.equal(options.executablePath, chromium.path);
+      assert.equal(options.chromiumSandbox, true);
+
+      const host = {
+        env: { ISONIM_EMAIL_WEBMAIL_PROFILES_DIR: join(scratch, "signin") },
+        platform: "linux",
+      };
+      const p = accountProfile(host, "yahoo", "yahoo/qa1.json", true);
+      const before = signedInVisits;
+      let said = "";
+      const child = spawn(
+        chromium.path,
+        signinBrowserArgs(p.userDataDir, `http://127.0.0.1:${port}/login`, {
+          headless: true,
+        }),
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (d: string) => {
+        said = (said + d).slice(-8192);
+      });
+      try {
+        const sandboxed = await waitSandboxed(child, p.userDataDir, () => said);
+        assert.ok(sandboxed.ok, JSON.stringify(sandboxed));
+        const deadline = Date.now() + 60_000;
+        while (signedInVisits === before && Date.now() < deadline)
+          await sleep(250);
+        assert.ok(
+          signedInVisits > before,
+          "the sign-in browser reached the inbox signed in",
+        );
+      } finally {
+        await stopBrowser(child);
+      }
+
+      const context = await pw.chromium.launchPersistentContext(
+        p.userDataDir,
+        options,
+      );
+      try {
+        const r = await checkSignedIn(context, webmail(), 10_000);
+        assert.deepEqual(r, { signedIn: true, host: `127.0.0.1:${port}` });
+        // Playwright's browser on the profile is sandboxed as well.
+        assert.ok(
+          rendererSandboxes(p.userDataDir).some((x) => x.seccomp),
+          JSON.stringify(rendererSandboxes(p.userDataDir)),
+        );
+      } finally {
+        await context.close();
+      }
+    });
+
+    it("refuses a sign-in browser without the sandbox, and one that aborts for want of it, naming why", async () => {
+      const chromium = pinnedChromium(process.env);
+      if ("reason" in chromium) throw new Error(chromium.reason);
+      const dir = join(scratch, "unsandboxed", "chromium");
+      mkdirSync(dir, { recursive: true });
+      const child = spawn(
+        chromium.path,
+        signinBrowserArgs(dir, `http://127.0.0.1:${port}/nomarker/`, {
+          headless: true,
+          unsafeNoSandbox: true,
+        }),
+        { stdio: "ignore" },
+      );
+      try {
+        const r = await waitSandboxed(child, dir, () => "", 90_000, 3000);
+        assert.equal(r.ok, false);
+        assert.ok(!r.ok);
+        assert.match(
+          r.reason,
+          /without a seccomp filter: the browser is not sandboxed/,
+        );
+      } finally {
+        await stopBrowser(child);
+      }
+
+      // What Chromium does on a host without unprivileged user
+      // namespaces and without a setuid sandbox.
+      const fake = join(scratch, "no-usable-sandbox");
+      writeFileSync(
+        fake,
+        "#!/bin/sh\necho '[1:1:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:128] No usable sandbox! You are probably running on a system that does not have unprivileged user namespaces.' >&2\nexit 133\n",
+        { mode: 0o755 },
+      );
+      let said = "";
+      const aborts = spawn(fake, signinBrowserArgs(dir, "about:blank"), {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      aborts.stderr.setEncoding("utf8");
+      aborts.stderr.on("data", (d: string) => {
+        said += d;
+      });
+      const r = await waitSandboxed(aborts, dir, () => said, 30_000);
+      assert.equal(r.ok, false);
+      assert.ok(!r.ok);
+      assert.match(
+        r.reason,
+        /the browser exited \(133\) before running a sandboxed renderer: .*No usable sandbox!/,
+      );
     });
   });
 
