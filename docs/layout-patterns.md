@@ -1030,28 +1030,46 @@ and the reference emails in `examples/` build every row.
   (`*`, `_`, by CommonMark's delimiter-run rules: `snake_case` is no
   emphasis), `~~strikethrough~~` (GFM), autolinks (`<https://…>`,
   `<mailto:…>`), backslash escapes of ASCII punctuation, and character
-  references (`&amp;`, `&#169;`, the common named ones). Fenced code
-  and `:::` blocks are left as written.
+  references (`&amp;`, `&#169;`, the common named ones), nested lists
+  and a pipe table's column alignment (below). Fenced code and `:::`
+  blocks are left as written.
+- _Lists:_ list items are read before the AST is built, by CommonMark's
+  container rules: a bullet (`-`, `*`, `+`) or ordered (`1.`, `1)`)
+  marker; the item's content column is the marker's width plus the one
+  to four spaces after it; a line indented to that column, a blank line
+  followed by one, and a lazy continuation of the item's paragraph belong
+  to the item; a marker of another kind starts a new list. Each item's
+  content is read as Markdown again, so a sub-list of either kind, at any
+  depth, is a `ul`/`ol` inside its `li`. A list is _loose_ when a blank
+  line separates two of its items or two blocks of one item: its items
+  hold `p` elements; a _tight_ list's items hold their inline content
+  directly. An ordered list keeps its first number (`start`).
+- _Table alignment:_ a pipe table's delimiter row sets each column's
+  alignment, `:---` left, `:---:` centre, `---:` right, as GFM does (so
+  physical: `:---` is left in a right-to-left message too); it is the
+  `text-align` of the column's header and body cells, written as `align`
+  and `text-align` (R-TBL-14). A column without a colon keeps the
+  defaults (a header cell start-aligned, R-TBL-18).
 - _Built from:_ a `mailStack(gap = space.4)` (16px between blocks: a
   code block, a table, a callout and a quote have no margins of their
   own) holding, node by node:
 
-  | Markdown                                                      | Element                                                                                                                                                                                 |
-  | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | heading (ATX or setext)                                       | `h1`–`h6`: its level plus `heading_offset`, at most 6                                                                                                                                   |
-  | paragraph                                                     | `p`                                                                                                                                                                                     |
-  | emphasis, strong emphasis, strikethrough                      | `em`, `strong`, `s`                                                                                                                                                                     |
-  | hard line break                                               | `br`                                                                                                                                                                                    |
-  | code span                                                     | `codeInline`                                                                                                                                                                            |
-  | link, autolink                                                | `a` (a title in the target is its `title`)                                                                                                                                              |
-  | image                                                         | `mailImage` (`alt`, `fluid_on_mobile`, `image_width`; no alt: decorative), a block of its own: the text around it becomes the paragraphs before and after it                            |
-  | bullet / ordered list                                         | `ul` / `ol` of `li` (one level: the AST has no nesting, so an indented item is a sibling)                                                                                               |
-  | fenced code                                                   | `mailCodeBlock` (the info string is not used)                                                                                                                                           |
-  | block quote                                                   | `blockquote` holding the quote's own elements                                                                                                                                           |
-  | thematic break                                                | `mailDivider`                                                                                                                                                                           |
-  | pipe table                                                    | `mailTable` whose hidden caption is the header labels (joined with a comma; the Arabic comma in Arabic script languages), `thead` of `th`, `tbody` of `td`, each cell's inline Markdown |
-  | `:::note`, `tip`, `important`, `warning`, `caution`, `danger` | `mailCallout` in tone `info`, `success`, `primary`, `warning`, `danger`, `danger`, its word (`Note`, `Tip`, …) the label, its paragraphs the body                                       |
-  | `:::button href="…" variant="…"`                              | `mailButton` (`primary` → `solid`, `secondary` → `outline`)                                                                                                                             |
+  | Markdown                                                      | Element                                                                                                                                                                                                                       |
+  | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | heading (ATX or setext)                                       | `h1`–`h6`: its level plus `heading_offset`, at most 6                                                                                                                                                                         |
+  | paragraph                                                     | `p`                                                                                                                                                                                                                           |
+  | emphasis, strong emphasis, strikethrough                      | `em`, `strong`, `s`                                                                                                                                                                                                           |
+  | hard line break                                               | `br`                                                                                                                                                                                                                          |
+  | code span                                                     | `codeInline`                                                                                                                                                                                                                  |
+  | link, autolink                                                | `a` (a title in the target is its `title`)                                                                                                                                                                                    |
+  | image                                                         | `mailImage` (`alt`, `fluid_on_mobile`, `image_width`; no alt: decorative), a block of its own: the text around it becomes the paragraphs before and after it                                                                  |
+  | bullet / ordered list                                         | `ul` / `ol` of `li` (`start` when an ordered list does not start at 1); a sub-list is a `ul` / `ol` inside its item's `li`, at any depth; a loose list's items hold `p`                                                       |
+  | fenced code                                                   | `mailCodeBlock` (the info string is not used)                                                                                                                                                                                 |
+  | block quote                                                   | `blockquote` holding the quote's own elements                                                                                                                                                                                 |
+  | thematic break                                                | `mailDivider`                                                                                                                                                                                                                 |
+  | pipe table                                                    | `mailTable` whose hidden caption is the header labels (joined with a comma; the Arabic comma in Arabic script languages), `thead` of `th`, `tbody` of `td`, each cell's inline Markdown, each column's alignment on its cells |
+  | `:::note`, `tip`, `important`, `warning`, `caution`, `danger` | `mailCallout` in tone `info`, `success`, `primary`, `warning`, `danger`, `danger`, its word (`Note`, `Tip`, …) the label, its paragraphs the body                                                                             |
+  | `:::button href="…" variant="…"`                              | `mailButton` (`primary` → `solid`, `secondary` → `outline`)                                                                                                                                                                   |
 
 - _Special:_ never markup. Raw HTML (a tag, an end tag, a comment) and
   footnotes (`[^1]`) are written as the text the author typed, escaped,
@@ -1066,12 +1084,14 @@ and the reference emails in `examples/` build every row.
   `:::cards`, `:::hero`, `:::faq`, `:::video`, `:::form`, a component tag
   `<Name …/>`) are left out, `E-MARKDOWN-UNSUPPORTED`. Not read as
   Markdown, because the AST has no node for them (written as text,
-  without a diagnostic): indented code blocks (write a fence), nested
-  lists, reference-style links, and HTML entities outside the common set.
+  without a diagnostic): indented code blocks (write a fence),
+  reference-style links, and HTML entities outside the common set.
 - _Text:_ follows from the elements (the text rules above: headings
-  underlined, lists, code indented, the quote indented, the divider
-  `----`, the table as a `mailTable`, links `label (url)`); struck text
-  is written as is.
+  underlined, lists (a nested list indented under its item's text by
+  the marker's width, no blank line before it), code indented, the
+  quote indented, the divider `----`, the table as a `mailTable`, its
+  column alignment not written since no text column is aligned with
+  spaces, links `label (url)`); struck text is written as is.
 
 ### 4.8 Layouts
 

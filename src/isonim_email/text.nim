@@ -456,9 +456,34 @@ proc listBlock(st: var State; node: EmailNode) =
         items(c, acc)
   var lis: seq[EmailNode]
   items(node, lis)
+  proc isList(x: EmailNode): bool =
+    x.kind == enElement and x.tag.toLowerAscii() in ["ul", "ol"]
   for li in lis:
     let marker = if ordered: $n & ". " else: "- "
-    let lines = joined(st.blocksOf(li.children, st.width - marker.len))
+    let width = st.width - marker.len
+    # The item's blocks, a blank line between them, except before a
+    # nested list: it follows its item's text directly, as the items do
+    # one another.
+    var lines: Block
+    var run: seq[EmailNode]
+    var first = true
+    template flushRun(nodes: seq[EmailNode]; tight: bool) =
+      let bs = st.blocksOf(nodes, width)
+      if bs.len > 0:
+        if not first and not tight:
+          lines.add("")
+        lines.add(joined(bs))
+        first = false
+    for c in li.children:
+      if c.isList():
+        if run.len > 0:
+          flushRun(run, false)
+          run = @[]
+        flushRun(@[c], true)
+      else:
+        run.add(c)
+    if run.len > 0:
+      flushRun(run, false)
     if lines.len > 0:
       b.add(indented(lines, marker, repeat(' ', marker.len)))
     inc n

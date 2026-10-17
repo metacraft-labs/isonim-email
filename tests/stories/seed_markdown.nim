@@ -2,8 +2,11 @@
 ## (layout-patterns.md §5): `Minimal` (a paragraph), `Maximal` (every
 ## construct it reads, long unbroken words and a long URL), `Rtl`
 ## (Arabic), `ImagesOff` (a body with an image, captured with images
-## blocked), `Dark` (`darkMode = designed`) and `InContext` (between a
-## callout and a button group).
+## blocked), `Dark` (`darkMode = designed`), `InContext` (between a
+## callout and a button group) and `ListsTables` (nested lists of both
+## kinds three levels deep, a loose list, and pipe tables whose
+## delimiter rows align their columns, one of them wide enough to
+## stack on mobile).
 ##
 ## The image is the compile-time `photo-lake.png` placeholder.
 ##
@@ -147,6 +150,50 @@ proc markdownInContextDoc*(): EmailNode =
     "https://status.example.com/")], text = "Status page")
   r.footer(result)
 
+const listsTablesBody = """
+## Before you upgrade
+
+1. Back up the database
+   - with `acme backup`, or
+   - from the dashboard:
+     1. open **Settings**
+     2. choose *Backups*
+2. Read the [release notes](https://example.com/notes)
+3. Upgrade
+
+- **Tight** items hold their text directly.
+  - A nested list sits under its item.
+
+Loose items keep their paragraphs:
+
+- The first item's paragraph.
+
+  - and its sub-list, after a blank line.
+
+- The second item.
+
+| Plan | Seats | Price |
+|:-----|:-----:|------:|
+| *Hobby* | 1 | Free |
+| Team | `5` | **$20.00** |
+
+| Date | Item | Qty | Amount |
+|:--|---|:-:|--:|
+| 1 Oct | [Widget](https://example.com/w) | 2 | $20.00 |
+| 2 Oct | Gadget | 1 | $5.00 |
+"""
+
+proc markdownListsTablesDoc*(): EmailNode =
+  let r = EmailRenderer()
+  result = r.storyDoc("Lists and tables", "Nested Markdown lists and " &
+    "aligned table columns.")
+  r.intro(result, "Lists and tables", "Lists nested three levels deep, " &
+    "a loose list, and tables whose columns are aligned left, centre " &
+    "and right.")
+  let s = r.band(result)
+  discard r.markdown(s, listsTablesBody)
+  r.footer(result)
+
 proc story(name, description: string;
     build: proc(): EmailNode {.nimcall.}; dark: bool): KitStory =
   (name, description, build, dark)
@@ -164,6 +211,9 @@ let markdownStories*: seq[KitStory] = @[
     true),
   story("markdownInContext", "mailMarkdown between a callout and a button " &
     "group.", markdownInContextDoc, false),
+  story("markdownListsTables", "mailMarkdown: nested lists of both kinds, " &
+    "a loose list, and aligned table columns.", markdownListsTablesDoc,
+    false),
 ]
 
 proc markdownGroup(name: string): string =

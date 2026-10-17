@@ -91,6 +91,7 @@ type MdCtx = object
   n: EmailNode
   p: MarkdownProps
   warned: seq[string] ## the kinds already reported for this element
+  inItem: int ## > 0 while a list item's content is read
 
 proc warn(m: var MdCtx; kind, example: string) =
   ## One `W-MARKDOWN-UNSUPPORTED` per kind of construct and element.
@@ -115,10 +116,20 @@ proc refuse(m: var MdCtx; what: string) =
 # --- Source pass: quotes, breaks, setext headings, hard breaks ---------------------
 
 type
-  SegKind = enum skText, skQuote, skBreak
+  SegKind = enum skText, skQuote, skBreak, skList, skTable
   Segment = object
     kind: SegKind
     lines: seq[string]
+      ## skText, skQuote: the run's lines; skTable: the table's rows,
+      ## its delimiter row included
+    items: seq[seq[string]]
+      ## skList: each item's content lines, at its content column
+    ordered: bool ## skList
+    start: int ## skList: an ordered list's first number
+    loose: bool ## skList
+    aligns: seq[string]
+      ## skTable: each column's alignment ("left", "center", "right",
+      ## "" for none), from the delimiter row
 
 proc leadingSpaces(line: string): int =
   while result < line.len and line[result] == ' ':
@@ -165,7 +176,8 @@ proc startsBlock(s: string): bool =
   t.startsWith("```") or t.startsWith(":::") or t.startsWith("#") or
     t.startsWith("|") or t.startsWith(">") or
     (t.len >= 2 and t[0] in {'-', '*', '+'} and t[1] == ' ') or
-    (t.len >= 3 and t[0] in Digits and (t.find(". ") in 1 .. 9)) or
+    (t.len >= 3 and t[0] in Digits and (t.find(". ") in 1 .. 9 or
+      t.find(") ") in 1 .. 9)) or
     isBreakLine(t) or (t.len >= 2 and t[0] == '<' and t[1] in {'A'..'Z'})
 
 proc isParagraphLine(s: string): bool =
@@ -181,6 +193,187 @@ proc markHardBreak(line, next: string): string =
   if line.endsWith("\\") and not line.endsWith("\\\\"):
     return line[0 ..< ^1] & hardBreak
   line
+
+# --- Source pass: lists ------------------------------------------------------------
+
+type ListMarker = object
+  ok: bool
+  indent: int ## spaces before the marker
+  ordered: bool
+  ch: char ## the bullet, or an ordered marker's `.` or `)`
+  number: int
+  content: int ## the item's content column
+  text: string ## the item's first line, from its content column
+
+proc listMarker(line: string): ListMarker =
+  ## The list item marker `line` starts with (CommonMark's): a bullet
+  ## `-`, `*`, `+`, or one to nine digits and `.` or `)`, then a space
+  ## or the line's end. A thematic break is no item.
+  let ind = leadingSpaces(line)
+  if ind >= line.len or isBreakLine(line):
+    return
+  var j = ind
+  var r = ListMarker(indent: ind)
+  if line[j] in {'-', '*', '+'}:
+    r.ch = line[j]
+    inc j
+  elif line[j] in Digits:
+    while j < line.len and line[j] in Digits and j - ind < 9:
+      inc j
+    if j >= line.len or line[j] notin {'.', ')'} or j - ind > 9:
+      return
+    r.ordered = true
+    r.number = parseInt(line[ind ..< j])
+    r.ch = line[j]
+    inc j
+  else:
+    return
+  if j < line.len and line[j] != ' ':
+    return
+  var sp = 0
+  while j + sp < line.len and line[j + sp] == ' ':
+    inc sp
+  if j + sp >= line.len:
+    r.content = j + 1 # an empty first line
+    r.text = ""
+  elif sp > 4:
+    r.content = j + 1 # indented code in the item: one space is the gap
+    r.text = line[j + 1 .. ^1]
+  else:
+    r.content = j + sp
+    r.text = line[j + sp .. ^1]
+  r.ok = true
+  r
+
+proc sameList(a, b: ListMarker): bool =
+  ## Whether `b` continues the list `a` started: the same kind of
+  ## marker (the same bullet, or the same ordered delimiter).
+  a.ordered == b.ordered and a.ch == b.ch
+
+proc isBlank(s: string): bool = s.strip().len == 0
+
+proc fenceAt(lines: seq[string]; i: int): int
+proc listAt(lines: seq[string]; i: int; seg: var Segment): int
+
+proc hasLooseBlocks(lines: seq[string]): bool =
+  ## Whether a blank line separates two blocks of an item's content
+  ## (read at its top level: a nested list's and a fence's own blank
+  ## lines are theirs).
+  var i = 0
+  var seen = false # a block before the current position
+  var gap = false # a blank line since that block
+  while i < lines.len:
+    if isBlank(lines[i]):
+      gap = seen
+      inc i
+      continue
+    if gap:
+      return true
+    seen = true
+    var sub = Segment()
+    if lines[i].strip().startsWith("```"):
+      i = fenceAt(lines, i)
+    elif listMarker(lines[i]).ok:
+      i = listAt(lines, i, sub)
+    else:
+      inc i
+  false
+
+proc fenceAt(lines: seq[string]; i: int): int =
+  ## The line after the fence opening at `i` closes.
+  var k = i + 1
+  while k < lines.len and not lines[k].strip().startsWith("```"):
+    inc k
+  min(k + 1, lines.len)
+
+proc listAt(lines: seq[string]; i: int; seg: var Segment): int =
+  ## Reads the list starting at `lines[i]` (a list item marker) into
+  ## `seg`; the line after it. Blank lines after its last item are not
+  ## its own.
+  let first = listMarker(lines[i])
+  seg = Segment(kind: skList, ordered: first.ordered,
+    start: (if first.ordered: first.number else: 1))
+  var k = i
+  var blankBetween = false
+  while k < lines.len:
+    let mk = listMarker(lines[k])
+    if not mk.ok or not sameList(first, mk):
+      break
+    var item = @[mk.text]
+    inc k
+    var inFence = mk.text.strip().startsWith("```")
+    while k < lines.len:
+      let l = lines[k]
+      if isBlank(l):
+        item.add("")
+        inc k
+        continue
+      if leadingSpaces(l) >= mk.content:
+        let d = l[mk.content .. ^1]
+        if d.strip().startsWith("```"):
+          inFence = not inFence
+        item.add(d)
+        inc k
+        continue
+      # Not indented to the item: a lazy continuation of its paragraph
+      # (the item's last line is paragraph text, this line too), or the
+      # item's end. A setext underline is never lazy, and an empty item
+      # (`-` alone) is the next item.
+      let last = item[^1]
+      let lastMk = listMarker(last)
+      if not inFence and isParagraphLine(l) and isSetextLine(l) == '\0' and
+          not listMarker(l).ok and (isParagraphLine(last) or
+          lastMk.ok and isParagraphLine(lastMk.text)):
+        item.add(l.strip(trailing = false))
+        inc k
+        continue
+      break
+    var trailing = 0
+    while item.len > 1 and isBlank(item[^1]):
+      item.setLen(item.len - 1)
+      inc trailing
+    if hasLooseBlocks(item):
+      seg.loose = true
+    seg.items.add(item)
+    if k < lines.len and trailing > 0:
+      let next = listMarker(lines[k])
+      if next.ok and sameList(first, next):
+        blankBetween = true
+      else:
+        # The blank lines end the list: they are not its own.
+        k -= trailing
+        break
+  if blankBetween:
+    seg.loose = true
+  k
+
+# --- Source pass: table alignment ----------------------------------------------------
+
+proc isTableSeparator(line: string): bool =
+  ## The docs dialect's delimiter row: `|` first, then only `|`, `-`,
+  ## `:` and spaces.
+  let t = line.strip()
+  if not t.startsWith("|"):
+    return false
+  for ch in t:
+    if ch notin {'|', '-', ':', ' '}:
+      return false
+  true
+
+proc columnAligns(separator: string): seq[string] =
+  ## Each column's alignment in a delimiter row (GFM): `:---` left,
+  ## `:---:` center, `---:` right, `---` none ("").
+  var t = separator.strip()
+  if t.startsWith("|"):
+    t = t[1 .. ^1]
+  if t.endsWith("|"):
+    t = t[0 ..< ^1]
+  for cell in t.split('|'):
+    let c = cell.strip()
+    let l = c.startsWith(":")
+    let r = c.len > 0 and c.endsWith(":") and (c.len > 1 or not l)
+    result.add(if l and r and c.len > 1: "center" elif r: "right"
+      elif l: "left" else: "")
 
 proc segments(src: string): seq[Segment] =
   ## Splits the source into Markdown runs, block quotes and thematic
@@ -252,6 +445,24 @@ proc segments(src: string): seq[Segment] =
       flush()
       result.add(Segment(kind: skBreak))
       inc i
+      continue
+    if listMarker(line).ok:
+      # A list, read here: the docs AST's lists are flat.
+      flush()
+      var seg = Segment()
+      i = listAt(lines, i, seg)
+      result.add(seg)
+      continue
+    if t.startsWith("|") and i + 1 < lines.len and
+        isTableSeparator(lines[i + 1]):
+      # A table on its own, so its delimiter row's alignment goes with
+      # the AST's table (the AST has none).
+      flush()
+      var seg = Segment(kind: skTable, aligns: columnAligns(lines[i + 1]))
+      while i < lines.len and lines[i].strip().startsWith("|"):
+        seg.lines.add(lines[i])
+        inc i
+      result.add(seg)
       continue
     let next = if i + 1 < lines.len: lines[i + 1] else: ""
     cur.add(if isParagraphLine(line): markHardBreak(line, next) else: line)
@@ -631,7 +842,9 @@ proc paragraph(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
         result.add(p)
       run = @[]
   for s in spans:
-    if s.kind == ikImage:
+    if s.kind == ikImage and m.inItem == 0:
+      # In a list item an image stays inline: `inlineNodes` writes its
+      # alt text and reports it.
       flushRun()
       result.add(m.image(s))
     else:
@@ -657,7 +870,17 @@ proc withKids(m: MdCtx; tag: string; kids: seq[EmailNode]): EmailNode =
 
 proc blockNodes(m: var MdCtx; src: string): seq[EmailNode]
 
-proc mapBlock(m: var MdCtx; b: Block): seq[EmailNode] =
+proc aligned(m: MdCtx; cell: EmailNode; aligns: seq[string];
+    col: int): EmailNode =
+  ## `cell` with its column's alignment (the delimiter row's), as its
+  ## `text-align`: the style pass writes it as `align` and `text-align`
+  ## (catalogue R-TBL-14).
+  if col < aligns.len and aligns[col].len > 0:
+    m.ctx.r.setStyle(cell, "text-align", aligns[col])
+  cell
+
+proc mapBlock(m: var MdCtx; b: Block; aligns: seq[string] = @[]):
+    seq[EmailNode] =
   case b.kind
   of bkHeading:
     let level = min(6, b.level + m.p.heading_offset)
@@ -666,6 +889,8 @@ proc mapBlock(m: var MdCtx; b: Block): seq[EmailNode] =
   of bkParagraph:
     result.add(m.paragraph(b.spans))
   of bkList:
+    # Not reached: the source pass reads every list (`listAt`), so the
+    # AST's flat lists never form. Mapped as a one-level list anyway.
     let list = el(m.ctx, m.n, if b.listKind == lkOrdered: "ol" else: "ul")
     for item in b.items:
       m.ctx.r.appendChild(list, m.withKids("li",
@@ -684,17 +909,17 @@ proc mapBlock(m: var MdCtx; b: Block): seq[EmailNode] =
     let table = el(m.ctx, m.n, "table")
     let head = el(m.ctx, m.n, "thead")
     let hr = el(m.ctx, m.n, "tr")
-    for h in b.headers:
-      m.ctx.r.appendChild(hr, m.withKids("th",
-        m.inlineNodes(parseInlineSpans(h))))
+    for col, h in b.headers:
+      m.ctx.r.appendChild(hr, m.aligned(m.withKids("th",
+        m.inlineNodes(parseInlineSpans(h))), aligns, col))
     m.ctx.r.appendChild(head, hr)
     m.ctx.r.appendChild(table, head)
     let body = el(m.ctx, m.n, "tbody")
     for row in b.rows:
       let tr = el(m.ctx, m.n, "tr")
-      for cell in row:
-        m.ctx.r.appendChild(tr, m.withKids("td",
-          m.inlineNodes(parseInlineSpans(cell))))
+      for col, cell in row:
+        m.ctx.r.appendChild(tr, m.aligned(m.withKids("td",
+          m.inlineNodes(parseInlineSpans(cell))), aligns, col))
       m.ctx.r.appendChild(body, tr)
     m.ctx.r.appendChild(table, body)
     m.ctx.r.appendChild(t, table)
@@ -725,6 +950,32 @@ proc mapBlock(m: var MdCtx; b: Block): seq[EmailNode] =
   of bkForm: m.refuse("form (:::form)")
   of bkComponent: m.refuse("component tag <" & b.componentName & ">")
 
+proc list(m: var MdCtx; seg: Segment): EmailNode =
+  ## A list the source pass read: each item's content read as Markdown
+  ## again (a sub-list is a list inside the item). A tight list's items
+  ## hold their paragraphs' content directly, a loose one's the `p`s.
+  result = el(m.ctx, m.n, if seg.ordered: "ol" else: "ul")
+  if seg.ordered and seg.start != 1:
+    m.ctx.r.setAttribute(result, "start", $seg.start)
+  for item in seg.items:
+    inc m.inItem
+    let kids = m.blockNodes(item.join("\n"))
+    dec m.inItem
+    let li = el(m.ctx, m.n, "li")
+    var afterText = false # the last child is a paragraph's content
+    for k in kids:
+      if not seg.loose and k.kind == enElement and k.tag == "p":
+        if afterText:
+          m.ctx.r.appendChild(li, m.ctx.r.createElement("br"))
+        let inner = k.children
+        for c in inner:
+          m.ctx.r.appendChild(li, c)
+        afterText = true
+      else:
+        m.ctx.r.appendChild(li, k)
+        afterText = false
+    m.ctx.r.appendChild(result, li)
+
 proc blockNodes(m: var MdCtx; src: string): seq[EmailNode] =
   for seg in segments(src):
     case seg.kind
@@ -737,6 +988,11 @@ proc blockNodes(m: var MdCtx; src: string): seq[EmailNode] =
     of skText:
       for b in parseMarkdownBlocks(seg.lines.join("\n")):
         result.add(m.mapBlock(b))
+    of skTable:
+      for b in parseMarkdownBlocks(seg.lines.join("\n")):
+        result.add(m.mapBlock(b, seg.aligns))
+    of skList:
+      result.add(m.list(seg))
 
 # --- The pattern -------------------------------------------------------------------
 
@@ -768,6 +1024,14 @@ proc countTags(nodes: seq[EmailNode]; acc: var CountTable[string]) =
       acc.inc(x.tag)
       countTags(x.children, acc)
 
+proc nestedLists(nodes: seq[EmailNode]; inItem = false): int =
+  ## The lists inside a list item.
+  for x in nodes:
+    if x.kind == enElement:
+      if inItem and x.tag in ["ul", "ol"]:
+        inc result
+      result += nestedLists(x.children, inItem or x.tag == "li")
+
 proc markdownExpected(n: EmailNode; p: MarkdownProps;
     view: BriefView): seq[string] =
   ## What the body shows, counted from its own expansion.
@@ -796,8 +1060,11 @@ proc markdownExpected(n: EmailNode; p: MarkdownProps;
     "a bold or italic phrase", "bold or italic phrases")
   say(c.getOrDefault("s"), "a struck-through phrase", "struck-through phrases")
   say(c.getOrDefault("a"), "a link", "links")
-  say(c.getOrDefault("ul") + c.getOrDefault("ol"),
+  let nested = nestedLists(nodes)
+  say(c.getOrDefault("ul") + c.getOrDefault("ol") - nested,
     "a list (bullets or numbers, each item on its own line)", "lists")
+  say(nested, "a nested list, indented under its item", "nested lists, " &
+    "each indented under its item")
   say(c.getOrDefault("codeInline"), "an inline code span in a monospace " &
     "face on a grey tint", "inline code spans")
   say(c.getOrDefault("mailCodeBlock"), "a code block (monospace, on a " &
