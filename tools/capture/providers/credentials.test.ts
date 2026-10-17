@@ -309,9 +309,10 @@ describe("credentials directory contract", () => {
       r.out,
       /inspect: UNAVAILABLE: .*inspect\/api\.json is missing/,
     );
+    // app_password is optional (self-send only): not named as lacking.
     assert.match(
       r.out,
-      /aol: UNAVAILABLE: .*aol\/qa-1\.json lacks password, app_password/,
+      /aol \(optional\): UNAVAILABLE: .*aol\/qa-1\.json lacks password \(/,
     );
     assert.match(
       r.out,
@@ -371,7 +372,7 @@ describe("credentials directory contract", () => {
     assert.equal(run(["template", "nope"], dir).status, 2);
   });
 
-  it("requires an app password for the sending sets, keeps the insert route's keys optional, and does not list the verification file", () => {
+  it("requires the Workspace sender, keeps app passwords optional and names the accounts without self-send, and does not list the verification file", () => {
     const dir = goodDir("selfsend");
     // The verification file a team's tooling places: not listed as
     // undeclared, while another undeclared file still is.
@@ -379,29 +380,9 @@ describe("credentials directory contract", () => {
       join(dir, "seam-check.json"),
       JSON.stringify({ purpose: "verification", nonce: "n" }),
     );
-    // A Gmail account with an app password and no gmail_api is complete.
-    writePrivate(
-      join(dir, "gmail-workspace", "qa-1.json"),
-      JSON.stringify({
-        schema: CREDENTIALS_SCHEMA,
-        address: `${SENTINEL}-a`,
-        password: `${SENTINEL}-p`,
-        app_password: `${SENTINEL}-ap`,
-      }),
-    );
-    const ok = run(["check", "--strict"], dir);
-    assert.equal(ok.status, 0, ok.out);
-    assert.match(ok.out, /\n  gmail-workspace: ok /);
-    assert.doesNotMatch(ok.out, /seam-check\.json/);
-    assert.match(ok.out, /verification\.json \(mode 0600\)/);
-    // The optional sets say so; the account sets do not.
-    for (const id of ["microsoft", "mailgun"])
-      assert.match(ok.out, new RegExp(`\\n  ${id} \\(optional\\): ok `));
-    for (const id of ["gmail-workspace", "yahoo", "aol", "outlook-com"])
-      assert.match(ok.out, new RegExp(`\\n  ${id}: ok `));
-
-    // An account with only its own password cannot send: Gmail, Yahoo
-    // and AOL need app_password; Outlook.com (it only receives) does not.
+    // Accounts with only their own password: every receiving set is
+    // satisfied (they receive from the Workspace sender), and the check
+    // names the files that have no self-send route.
     for (const id of ["gmail-workspace", "yahoo", "aol", "outlook-com"])
       writePrivate(
         join(dir, id, "qa-1.json"),
@@ -411,15 +392,63 @@ describe("credentials directory contract", () => {
           password: `${SENTINEL}-p`,
         }),
       );
-    const r = run(["check"], dir);
-    for (const id of ["gmail-workspace", "yahoo", "aol"])
-      assert.match(
-        r.out,
-        new RegExp(
-          `\\n  ${id}: UNAVAILABLE: .*${id}/qa-1\\.json lacks app_password`,
-        ),
-      );
-    assert.match(r.out, /\n  outlook-com: ok /);
+    // One Gmail account with an app password: it keeps self-send.
+    writePrivate(
+      join(dir, "gmail-workspace", "qa-2.json"),
+      JSON.stringify({
+        schema: CREDENTIALS_SCHEMA,
+        address: `${SENTINEL}-a`,
+        password: `${SENTINEL}-p`,
+        app_password: `${SENTINEL}-ap`,
+      }),
+    );
+    const ok = run(["check", "--strict"], dir);
+    assert.equal(ok.status, 0, ok.out);
+    assert.doesNotMatch(ok.out, /seam-check\.json/);
+    assert.match(ok.out, /verification\.json \(mode 0600\)/);
+    // The optional sets say so; the required ones do not.
+    for (const id of ["aol", "microsoft", "mailgun"])
+      assert.match(ok.out, new RegExp(`\\n  ${id} \\(optional\\): ok `));
+    for (const id of [
+      "workspace-sender",
+      "gmail-workspace",
+      "yahoo",
+      "outlook-com",
+    ])
+      assert.match(ok.out, new RegExp(`\\n  ${id}: ok `));
+    // Which accounts have no self-send, by file; outlook-com has no
+    // such route at all.
+    assert.match(
+      ok.out,
+      /\n  gmail-workspace: ok [^\n]*\n    self-send: off for gmail-workspace\/qa-1\.json \(no app_password; optional\)\n/,
+    );
+    assert.match(
+      ok.out,
+      /\n  yahoo: ok [^\n]*\n    self-send: off for yahoo\/qa-1\.json, yahoo\/qa-2\.json \(no app_password; optional\)\n/,
+    );
+    assert.match(ok.out, /\n  outlook-com: ok [^\n]*\n  microsoft/);
+
+    // The Workspace sender is required, with every key.
+    rmSync(join(dir, "workspace-sender"), { recursive: true });
+    const none = run(["check", "--strict"], dir);
+    assert.equal(none.status, 1, none.out);
+    assert.match(
+      none.out,
+      /\n  workspace-sender: UNAVAILABLE: .*no account file matches workspace-sender\/\*\.json/,
+    );
+    writePrivate(
+      join(dir, "workspace-sender", "tests.json"),
+      JSON.stringify({
+        schema: CREDENTIALS_SCHEMA,
+        key: { private_key: SENTINEL },
+        from: `${SENTINEL}-f`,
+      }),
+    );
+    const partial = run(["check"], dir);
+    assert.match(
+      partial.out,
+      /\n  workspace-sender: UNAVAILABLE: .*workspace-sender\/tests\.json lacks subject, allowed_recipients/,
+    );
 
     // A world-readable verification file is still refused.
     chmodSync(join(dir, "seam-check.json"), 0o644);
@@ -427,13 +456,23 @@ describe("credentials directory contract", () => {
     assert.equal(leaky.status, 1);
     assert.match(leaky.out, /seam-check\.json is group- or world-readable/);
 
-    // The template carries the optional keys, marked as optional.
+    // The templates: the sender's keys to fill in; app_password and the
+    // insert route's keys marked optional.
     const tdir = join(scratch, "selfsend-template");
-    run(["template", "gmail-workspace"], tdir);
+    run(["template", "workspace-sender", "gmail-workspace"], tdir);
+    const sender = JSON.parse(
+      readFileSync(join(tdir, "workspace-sender", "example.json"), "utf8"),
+    );
+    assert.match(sender.key, /^REPLACE: .*gmail\.send ONLY/);
+    assert.ok(Array.isArray(sender.allowed_recipients));
+    for (const k of ["subject", "from"]) assert.match(sender[k], /^REPLACE: /);
     const body = JSON.parse(
       readFileSync(join(tdir, "gmail-workspace", "example.json"), "utf8"),
     );
-    assert.match(body.app_password, /^REPLACE: an app password/);
+    assert.match(
+      body.app_password,
+      /^OPTIONAL: an app password.*delete this key if unused$/,
+    );
     assert.match(
       body.gmail_api.mode,
       /^OPTIONAL: .*delete this key if unused$/,

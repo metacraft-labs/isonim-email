@@ -280,6 +280,27 @@ email-credentials-template *providers:
 email-selfsend-smoke set *args:
     node tools/capture/email-selfsend-smoke.ts {{set}} {{args}}
 
+# One live delivery through the Workspace sender (the primary route for
+# hosted webmail): a reference story (receiptTypical unless --story or
+# --mime says otherwise) sent to the QA account of TO-SET through the
+# Gmail API; prints the API message id, the Message-ID and the timings.
+# Arrival is checked in the webmail. Reads the credentials directory's
+# workspace-sender file; stops before connecting (exit 3) without one.
+# --verify-sent reads the Sent copy back (an operator's key only). Never
+# prints an address, a key or a token. See --help for the operator
+# override.
+email-workspace-send-smoke to-set *args: email-shots-build
+    node tools/capture/email-workspace-send-smoke.ts {{to-set}} {{args}}
+
+# The first sign-in of a QA account's webmail profile, by a person at
+# this machine's display: prints the address, offers to copy the
+# password to the clipboard (never printing it), opens the webmail in
+# the pinned Chromium without automation, waits for Enter, then checks
+# the profile under Playwright and records the sign-in. `--check-only`
+# only checks an existing profile. Never types into a page.
+email-webmail-signin set *args:
+    node tools/capture/email-webmail-signin.ts {{set}} {{args}}
+
 # Build the story→MIME driver (pipeline step 1) and the
 # review-brief driver (step 1b). Each rebuilds only
 # when a Nim source or a story fixture or reference-email image (compiled
@@ -483,6 +504,8 @@ lint-ts:
     node tools/capture/email-calibrate.ts --help >/dev/null
     node tools/capture/email-credentials.ts --help >/dev/null
     node tools/capture/email-selfsend-smoke.ts --help >/dev/null
+    node tools/capture/email-workspace-send-smoke.ts --help >/dev/null
+    node tools/capture/email-webmail-signin.ts --help >/dev/null
     for m in tools/capture/emulation/*.ts; do case "$m" in *.test.ts) continue;; esac; node --input-type=module -e "await import('./$m')"; done
     node --input-type=module -e "await import('./tools/capture/contact_sheet.ts')"
     node --input-type=module -e "await import('./tools/capture/dom_assertions.ts')"

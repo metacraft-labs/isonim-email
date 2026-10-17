@@ -18,6 +18,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -52,9 +53,16 @@ export interface CredentialSet {
   // A set the hosted webmail does not need (the check marks it
   // "(optional)").
   optional?: boolean;
+  // Optional keys that turn on a delivery route for an account: the
+  // check names the account files without them (the set itself stays
+  // satisfied).
+  routeKeys?: { key: string; route: string }[];
 }
 
 const REPLACE = (what: string): string => `REPLACE: ${what}`;
+
+const OPTIONAL = (what: string): string =>
+  `OPTIONAL: ${what}; delete this key if unused`;
 
 const ACCOUNT = {
   address: REPLACE("the account's email address"),
@@ -63,23 +71,49 @@ const ACCOUNT = {
   ),
 };
 
-const APP_PASSWORD = REPLACE(
-  "an app password for SMTP and IMAP (the provider issues it once 2-Step Verification is on); delivery sends with it",
+const APP_PASSWORD = OPTIONAL(
+  "an app password for SMTP and IMAP (the provider issues it once 2-Step Verification is on); only the optional self-send route uses it",
 );
 
-const OPTIONAL = (what: string): string =>
-  `OPTIONAL: ${what}; delete this key if unused`;
+const SELF_SEND = [{ key: "app_password", route: "self-send" }];
+
+export const WORKSPACE_SENDER_SET = "workspace-sender";
 
 export const CREDENTIAL_SETS: CredentialSet[] = [
+  {
+    // The sender of hosted-webmail deliveries: a service account of a
+    // Google Workspace tenant, delegated gmail.send and nothing else,
+    // impersonating one sender user (workspace_send.ts).
+    id: WORKSPACE_SENDER_SET,
+    usedBy:
+      "hosted webmail delivery (a Google Workspace sender sends each message to the QA account through the Gmail API)",
+    entry: `${WORKSPACE_SENDER_SET}/*.json`,
+    keys: {
+      key: REPLACE(
+        "the service account's JSON key, pasted as an object; its domain-wide delegation must grant https://www.googleapis.com/auth/gmail.send ONLY (never an administrative key)",
+      ),
+      subject: REPLACE("the Workspace user the service account acts as"),
+      from: REPLACE(
+        "the sender address: that user's address or one of its send-as aliases",
+      ),
+      allowed_recipients: [
+        REPLACE(
+          "every QA account address this sender may send to; any other recipient is refused",
+        ),
+      ],
+    },
+  },
   {
     // Any Gmail account, consumer or Workspace (the directory keeps its
     // name).
     id: "gmail-workspace",
     usedBy:
-      "hosted webmail (Gmail, a consumer or Workspace account; delivery sends with its app password)",
+      "hosted webmail (Gmail, a consumer or Workspace account; it receives from the Workspace sender)",
     entry: "gmail-workspace/*.json",
-    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+    keys: { ...ACCOUNT },
+    routeKeys: SELF_SEND,
     optionalKeys: {
+      app_password: APP_PASSWORD,
       gmail_api: {
         mode: OPTIONAL(
           'only for the Gmail API insert route: "service-account-dwd" or "oauth"',
@@ -95,20 +129,27 @@ export const CREDENTIAL_SETS: CredentialSet[] = [
   },
   {
     id: "yahoo",
-    usedBy: "hosted webmail (Yahoo Mail; delivery sends with its app password)",
+    usedBy:
+      "hosted webmail (Yahoo Mail; it receives from the Workspace sender)",
     entry: "yahoo/*.json",
-    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+    keys: { ...ACCOUNT },
+    routeKeys: SELF_SEND,
+    optionalKeys: { app_password: APP_PASSWORD },
   },
   {
     id: "aol",
-    usedBy: "hosted webmail (AOL Mail; delivery sends with its app password)",
+    usedBy:
+      "hosted webmail (AOL Mail, on Yahoo's platform; optional; it receives from the Workspace sender)",
     entry: "aol/*.json",
-    keys: { ...ACCOUNT, app_password: APP_PASSWORD },
+    keys: { ...ACCOUNT },
+    routeKeys: SELF_SEND,
+    optionalKeys: { app_password: APP_PASSWORD },
+    optional: true,
   },
   {
     id: "outlook-com",
     usedBy:
-      "hosted webmail (Outlook.com, a consumer account; it receives from another account, so it needs no app password)",
+      "hosted webmail (Outlook.com, a consumer account; it receives from the Workspace sender)",
     entry: "outlook-com/*.json",
     keys: { ...ACCOUNT },
   },
@@ -128,7 +169,7 @@ export const CREDENTIAL_SETS: CredentialSet[] = [
   {
     id: "mailgun",
     usedBy:
-      "sending from a domain of our own (Mailgun; optional: hosted webmail delivery sends from the QA accounts themselves)",
+      "sending from a Mailgun domain (optional: hosted webmail delivery sends from the Workspace sender)",
     entry: "mailgun/sending.json",
     keys: {
       domain: REPLACE("the sending domain"),
@@ -174,14 +215,53 @@ export function credentialRequirement(id: string): Requirement {
   };
 }
 
+export interface RouteGap {
+  route: string;
+  key: string;
+  // Account files (relative paths) without the key.
+  files: string[];
+}
+
 export interface CredentialsReport {
   dir: string;
   dirMode: string | null;
   // The directory itself is unusable or exposes a file.
   unsafe: boolean;
-  sets: { set: CredentialSet; status: RequirementStatus }[];
+  sets: {
+    set: CredentialSet;
+    status: RequirementStatus;
+    // Optional routes some account files cannot take.
+    routeGaps: RouteGap[];
+  }[];
   // Files present that no set declares, with their modes.
   undeclared: { path: string; mode: string | null }[];
+}
+
+// Which account files lack each route key. Reads only key names; a
+// file that cannot be read as a JSON object is left to the requirement
+// check, which names it.
+function routeGaps(
+  set: CredentialSet,
+  dir: string,
+  files: string[],
+): RouteGap[] {
+  const gaps: RouteGap[] = [];
+  for (const { key, route } of set.routeKeys ?? []) {
+    const lacking = files.filter((f) => {
+      let obj: unknown;
+      try {
+        obj = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      } catch {
+        return false;
+      }
+      if (obj === null || typeof obj !== "object" || Array.isArray(obj))
+        return false;
+      const v = (obj as Record<string, unknown>)[key];
+      return typeof v !== "string" || v === "";
+    });
+    if (lacking.length > 0) gaps.push({ route, key, files: lacking.sort() });
+  }
+  return gaps;
 }
 
 export function credentialsReport(host: HostEnv): CredentialsReport {
@@ -199,6 +279,10 @@ export function credentialsReport(host: HostEnv): CredentialsReport {
     sets: CREDENTIAL_SETS.map((set) => ({
       set,
       status: checkRequirement(credentialRequirement(set.id), host),
+      routeGaps:
+        state.problem === null
+          ? routeGaps(set, state.dir, entryMatches(set.entry, state))
+          : [],
     })),
     undeclared: state.files
       .filter((f) => !declared.has(f.path) && f.path !== VERIFICATION_FILE)
@@ -212,13 +296,17 @@ export function reportLines(r: CredentialsReport): string[] {
       r.dirMode === null ? "absent" : `mode ${r.dirMode}`
     }`,
   ];
-  for (const { set, status } of r.sets) {
+  for (const { set, status, routeGaps: gaps } of r.sets) {
     const name = `${set.id}${set.optional === true ? " (optional)" : ""}`;
     lines.push(
       status.met
         ? `  ${name}: ok (${status.detail})`
         : `  ${name}: UNAVAILABLE: ${status.detail}`,
     );
+    for (const g of gaps)
+      lines.push(
+        `    ${g.route}: off for ${g.files.join(", ")} (no ${g.key}; optional)`,
+      );
   }
   if (r.undeclared.length > 0) {
     lines.push("  files no provider declares:");

@@ -1,5 +1,8 @@
 // tools/capture/providers/hosted_delivery.ts — putting a rendered
-// message in front of a hosted webmail by sending it.
+// message in front of a hosted webmail by sending it from the account
+// itself (self-send), the optional route for an account that has an app
+// password. The primary route sends from a Workspace sender instead
+// (workspace_send.ts); both send the copy built by submittedCopy().
 //
 // The QA account submits the message to its own address through the
 // provider's own SMTP submission server, authenticated with an app
@@ -526,35 +529,68 @@ async function waitFor(
   }
 }
 
+export interface SubmittedCopy {
+  bytes: Uint8Array;
+  messageId: string;
+  subjectToken: string;
+  sha256: string;
+  assetRewrite: HostedAssetRewrite | null;
+}
+
+// The copy a delivery sends, whichever route sends it: the story's
+// assets rewritten to the public base (when there is one), then the
+// header block of prepareSubmission with a fresh Message-ID on the
+// sender's domain and the run token in the subject.
+export function submittedCopy(
+  mime: Uint8Array,
+  h: { run: string; fromAddress: string; to: string; assets?: PublicAssets },
+): SubmittedCopy {
+  const storyHash8 = createHash("sha256")
+    .update(mime)
+    .digest("hex")
+    .slice(0, 8);
+  const safeRun = h.run.replace(/[^A-Za-z0-9_-]/g, "-");
+  const subjectToken = `[es:${safeRun}:${storyHash8}]`;
+  const messageId = deliveryMessageId(h.run, storyHash8, h.fromAddress);
+
+  let body = mime;
+  let assetRewrite: HostedAssetRewrite | null = null;
+  if (h.assets !== undefined) {
+    const token = h.assets.token ? captureToken() : null;
+    const to = `${h.assets.baseUrl}${token === null ? "" : tokenPrefix(token)}`;
+    const r = rewriteAssetOrigin(mime, h.assets.from, to);
+    body = r.bytes;
+    assetRewrite = { from: h.assets.from, to, token, count: r.count };
+  }
+  const bytes = prepareSubmission(body, {
+    fromAddress: h.fromAddress,
+    to: h.to,
+    messageId,
+    subjectPrefix: subjectToken,
+  });
+  return {
+    bytes,
+    messageId,
+    subjectToken,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    assetRewrite,
+  };
+}
+
 export async function deliverHosted(
   mime: Uint8Array,
   route: Route,
   opts: DeliveryOptions,
 ): Promise<HostedDelivery> {
   const { sender, receiver } = route;
-  const storyHash8 = createHash("sha256")
-    .update(mime)
-    .digest("hex")
-    .slice(0, 8);
-  const safeRun = opts.run.replace(/[^A-Za-z0-9_-]/g, "-");
-  const subjectToken = `[es:${safeRun}:${storyHash8}]`;
-  const messageId = deliveryMessageId(opts.run, storyHash8, sender.address);
-
-  let body = mime;
-  let assetRewrite: HostedAssetRewrite | null = null;
-  if (opts.assets !== undefined) {
-    const token = opts.assets.token ? captureToken() : null;
-    const to = `${opts.assets.baseUrl}${token === null ? "" : tokenPrefix(token)}`;
-    const r = rewriteAssetOrigin(mime, opts.assets.from, to);
-    body = r.bytes;
-    assetRewrite = { from: opts.assets.from, to, token, count: r.count };
-  }
-  const submitted = prepareSubmission(body, {
+  const copy = submittedCopy(mime, {
+    run: opts.run,
     fromAddress: sender.address,
     to: receiver.address,
-    messageId,
-    subjectPrefix: subjectToken,
+    assets: opts.assets,
   });
+  const { messageId, subjectToken, assetRewrite } = copy;
+  const submitted = copy.bytes;
 
   const smtp = sender.profile.smtp;
   const pw = sender.appPassword;
@@ -596,7 +632,7 @@ export async function deliverHosted(
     },
     messageId,
     subjectToken,
-    submittedSha256: createHash("sha256").update(submitted).digest("hex"),
+    submittedSha256: copy.sha256,
     bytes: submitted.byteLength,
     assetRewrite,
     arrival,
