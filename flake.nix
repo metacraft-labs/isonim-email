@@ -310,6 +310,18 @@
             ISONIM_EMAIL_LOCALES =
               if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.glibcLocales}/lib/locale" else "";
 
+            # GSettings in memory: a host desktop session's dconf module
+            # (GIO_EXTRA_MODULES, inherited from a GNOME login) never
+            # reaches the processes the captures start. Firefox and
+            # WebKit are GTK programs: with dconf they read the user's
+            # desktop settings and create $XDG_RUNTIME_DIR/dconf/ (left
+            # in a run's private runtime directory). Without that
+            # module GIO falls back to the memory backend anyway, so
+            # this is what every host without a desktop session runs
+            # with. The desktop clients' drivers still set their own
+            # keyfile backend.
+            GSETTINGS_BACKEND = "memory";
+
             # Playwright must use the Nix-provided browsers, never download.
             PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
