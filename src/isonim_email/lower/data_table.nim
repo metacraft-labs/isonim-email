@@ -55,22 +55,6 @@ proc addClass(node: EmailNode; cls: string) =
   let old = node.attrs.getOrDefault("class", "").strip()
   node.attrs["class"] = if old.len > 0: old & " " & cls else: cls
 
-proc textOf(n: EmailNode): string =
-  if n.kind == enText:
-    return n.text
-  for c in n.children:
-    result.add(textOf(c))
-
-proc headerTexts(head: EmailNode): seq[string] =
-  ## The header text of each column, a spanning header repeated over
-  ## the columns it spans.
-  if head == nil:
-    return
-  for cell in cellsOf(head):
-    let t = splitWhitespace(textOf(cell)).join(" ")
-    for _ in 1 .. spanOf(cell):
-      result.add(t)
-
 proc framed(r: EmailRenderer; node, table: EmailNode): EmailNode =
   ## `table` in `<div style="overflow-x:auto;">`, itself in a one-cell
   ## presentation table with `width:100%;table-layout:fixed`: without

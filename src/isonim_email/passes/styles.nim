@@ -1021,10 +1021,12 @@ proc styleElementFor(node: EmailNode; theme: EmailTheme; target: EmailTarget;
     linkDefaults(node, theme, target, head, res)
   elif "color" notin res and (tag in textColorCarriers or
       (tag in ["td", "th", "div", "mailtext"] and holdsText(node)) or
+      getsStackLabel(node) or
       (tag == "mailcluster" and
         node.attrs.getOrDefault("separator", "").len > 0)):
     # R-TXT-02: a text element never relies on an inherited colour (a
-    # cluster's separators are text its lowering writes). A
+    # cluster's separators, and a stacked cell's label, are text its
+    # lowering writes). A
     # client whose dark scheme or theme supplies a light default text
     # colour (SnappyMail's dark themes, WebKit under `color-scheme:
     # light dark`) would otherwise paint it light on the message's own

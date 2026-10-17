@@ -268,6 +268,44 @@ suite "mailTable mobile modes":
     check plain.count("role=\"table\"") == 1
     check "e-tbl-t" in plain
 
+  test "test_a_stacked_link_only_cell_colours_its_label":
+    # rule: R-TBL-18, R-TXT-02
+    # A cell holding only a link holds no text of its own (the link
+    # carries its own colour), but stacked it starts with its column's
+    # label: text inheriting the cell's colour. Without one of its own
+    # under designed dark mode, a client's light default text colour
+    # paints the label on the cell's light background.
+    let r = EmailRenderer()
+    let (doc, s) = newDoc(r)
+    let mt = r.dataTable(s, ["Date", "Item", "Qty", "Receipt"],
+      [@["1 Oct", "Widget", "2", ""]])
+    let td = mt.children[0].children[1].children[0].children[3]
+    discard r.child(td, "a", attrs = [("href", "https://example.com/r/1")],
+      text = "View")
+    var t = defaultTarget()
+    t.darkMode = dmDesigned
+    t.outlookWord = false
+    let res = renderTree(doc, target = t)
+    check not hasErrors(res.diagnostics)
+    let html = body(res.html)
+    let at = html.find("<span class=\"e-tbl-lbl\" style=\"font-weight:700;\">" &
+      "Receipt: </span>")
+    require at > 0
+    let cell = html[html.rfind("<td", last = at) ..< at]
+    # The cell's colour inline, and its dark pairing on one of its
+    # classes in the dark-scheme block.
+    check "color:#111827;" in cell
+    let cls = between(cell, "class=\"", "\"").splitWhitespace()
+    let dark = between(head(res.html), "@media (prefers-color-scheme: dark){",
+      "}}")
+    var paired = false
+    for c in cls:
+      let rule = between(dark, "." & c & "{", "}")
+      if ("{color:#f3f4f6 !important" in "{" & rule) or
+          (";color:#f3f4f6 !important" in rule):
+        paired = true
+    check paired
+
   test "test_narrow_tables_keep_and_modes_are_chosen":
     # rule: R-TBL-18
     let r = EmailRenderer()

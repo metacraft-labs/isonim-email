@@ -122,6 +122,44 @@ proc tableMode*(dataTable: EmailNode): string =
     return m
   if columnCount(tableOf(dataTable)) > 3: "stack" else: "keep"
 
+proc textOf(n: EmailNode): string =
+  if n.kind == enText:
+    return n.text
+  for c in n.children:
+    result.add(textOf(c))
+
+proc headerTexts*(head: EmailNode): seq[string] =
+  ## The header text of each column, a spanning header repeated over
+  ## the columns it spans: a stacked body cell's label (R-TBL-18).
+  if head == nil:
+    return
+  for cell in cellsOf(head):
+    let t = splitWhitespace(textOf(cell)).join(" ")
+    for _ in 1 .. spanOf(cell):
+      result.add(t)
+
+proc getsStackLabel*(cell: EmailNode): bool =
+  ## True when the lowering starts `cell` with its column's label: a
+  ## body `td` of a stacking data table whose column has header text
+  ## (R-TBL-18). The label is text inheriting the cell's colour, so the
+  ## style pass treats such a cell as holding text (R-TXT-02).
+  if cell == nil or cell.kind != enElement or cell.tag != "td":
+    return false
+  let row = cell.parent
+  let dt = dataTableOf(cell)
+  if row == nil or dt == nil or tableMode(dt) != "stack":
+    return false
+  let table = tableOf(dt)
+  if row notin bodyRows(table):
+    return false
+  let labels = headerTexts(headerRow(table))
+  var col = 0
+  for c in cellsOf(row):
+    if c == cell:
+      return col < labels.len and labels[col].len > 0
+    col += spanOf(c)
+  false
+
 proc tableRtl(node: EmailNode): bool =
   var a = node
   while a != nil:
