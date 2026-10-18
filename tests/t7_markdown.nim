@@ -477,6 +477,139 @@ suite "mailMarkdown nests lists":
     check "a paragraph, 2 lists, a nested list, indented under its " &
       "item;" in lines[0]
 
+suite "mailMarkdown starts blocks where CommonMark does":
+  # A list interrupts a paragraph only when it is a bullet list or an
+  # ordered list starting at 1 whose first item is not empty; a line
+  # indented four or more spaces opens no block (indented code is not
+  # read: the line is paragraph text).
+  proc htmlBody(res: RenderedEmail): string =
+    ## The HTML after the heading, styles left out.
+    let h = bare(res.html)
+    let at = h.find("Markdown</h1>")
+    require at >= 0
+    h[at .. ^1]
+
+  proc textBody(res: RenderedEmail): string =
+    ## The text part after the heading and its rule.
+    let at = res.text.find("Markdown\n========\n")
+    require at >= 0
+    res.text[at + 18 .. ^1]
+
+  test "test_markdown_a_bullet_list_interrupts_a_paragraph":
+    check outlineOf("Text\n- item") == "p[Text] ul[li[item]]"
+    let res = md("Text\n- item")
+    check "<p>Text</p>" in htmlBody(res)
+    check "<ul><li>item</li></ul>" in htmlBody(res)
+    check textBody(res) == "\nText\n\n- item\n"
+
+  test "test_markdown_an_ordered_list_from_1_interrupts_a_paragraph":
+    check outlineOf("Text\n1. item") == "p[Text] ol[li[item]]"
+    let res = md("Text\n1. item")
+    check "<p>Text</p>" in htmlBody(res)
+    check "<ol><li>item</li></ol>" in htmlBody(res)
+    check textBody(res) == "\nText\n\n1. item\n"
+
+  test "test_markdown_an_ordered_list_from_2_does_not_interrupt":
+    check outlineOf("Text\n2. item") == "p[Text 2. item]"
+    let res = md("Text\n2. item")
+    check "<p>Text 2. item</p>" in htmlBody(res)
+    check "<ol" notin htmlBody(res)
+    check textBody(res) == "\nText 2. item\n"
+    # Hard-wrapped prose stays one paragraph.
+    let src = "Prices rose in\n2026. That year sales fell."
+    check outlineOf(src) == "p[Prices rose in 2026. That year sales fell.]"
+    let prose = md(src)
+    check "<p>Prices rose in 2026. That year sales fell.</p>" in
+      htmlBody(prose)
+    check "<ol" notin htmlBody(prose)
+    check "start=" notin htmlBody(prose)
+    check textBody(prose) == "\nPrices rose in 2026. That year sales fell.\n"
+    # The same line after a blank line starts the list, with its number.
+    check outlineOf("Text\n\n2026. was") == "p[Text] ol(start=2026)[li[was]]"
+    # A hard break before it and a setext underline under it still read.
+    check outlineOf("Text  \n2026. was") == "p[Textbr2026. was]"
+    check outlineOf("Text\n2026. was\n---") == "h2[Text 2026. was]"
+    # The same holds in a list item's and in a quote's paragraph.
+    check outlineOf("- Text\n  2026. was") == "ul[li[Text 2026. was]]"
+    check outlineOf("> Text\n> 2. no") == "blockquote[p[Text 2. no]]"
+    # Its text stays as typed, inside a code span the line above opens
+    # too.
+    check outlineOf("Text `a\n2. b` end") == "p[Text codeInline[a 2. b] end]"
+    let code = md("Text `a\n2. b` end")
+    check "<code dir=\"ltr\">a 2. b</code>" in htmlBody(code)
+    check "&#" notin textBody(code)
+
+  test "test_markdown_an_empty_item_does_not_interrupt":
+    check outlineOf("Text\n*\nmore") == "p[Text * more]"
+    check outlineOf("Text\n1.\nmore") == "p[Text 1. more]"
+    let res = md("Text\n*\nmore")
+    check "<p>Text * more</p>" in htmlBody(res)
+    check "<ul" notin htmlBody(res)
+    check textBody(res) == "\nText * more\n"
+    let ord = md("Text\n1.\nmore")
+    check "<ol" notin htmlBody(ord)
+    check textBody(ord) == "\nText 1. more\n"
+    # A `-` alone is still a setext underline.
+    check outlineOf("Text\n-\n\nmore") == "h2[Text] p[more]"
+
+  test "test_markdown_an_indented_line_opens_no_block":
+    # Not a list: a paragraph of its own, its lines kept.
+    let src = "Intro\n\n    - x\n    - y\nafter"
+    check outlineOf(src) == "p[Intro] p[- xbr- y] p[after]"
+    let res = md(src)
+    check "<p>- x<br>- y</p>" in htmlBody(res)
+    check "<ul" notin htmlBody(res)
+    check textBody(res) == "\nIntro\n\n- x\n- y\n\nafter\n"
+    check outlineOf("Intro\n\n    2. two") == "p[Intro] p[2. two]"
+    # Nor a heading, a quote or a break.
+    let blocks = md("Intro\n\n    # not\n    > no\n\n    ---\nafter")
+    check body(blocks) == "p[Intro] p[# notbr> no] p[---] p[after]"
+    check "<h1" notin htmlBody(blocks)
+    check "<blockquote" notin htmlBody(blocks)
+    check "<p># not<br>&gt; no</p>" in htmlBody(blocks)
+    check "<p>---</p>" in htmlBody(blocks)
+    check textBody(blocks) == "\nIntro\n\n# not\n> no\n\n---\n\nafter\n"
+    # Under a paragraph's line, the paragraph's next line.
+    check outlineOf("Para\n    - x") == "p[Para - x]"
+    let para = md("Para\n    - x")
+    check "<p>Para - x</p>" in htmlBody(para)
+    check textBody(para) == "\nPara - x\n"
+    check outlineOf("Para `a\n    - b` end") ==
+      "p[Para codeInline[a - b] end]"
+    let code = md("Para `a\n    - b` end")
+    check "<code dir=\"ltr\">a - b</code>" in htmlBody(code)
+    check "&#" notin textBody(code)
+
+  test "test_markdown_list_items_still_take_their_indented_lines":
+    # Indented to an item's content column, a line is the item's: a
+    # sub-list, a continuation, a later block after a blank line.
+    check outlineOf("- a\n    - b\n- c") == "ul[li[aul[li[b]]]li[c]]"
+    check outlineOf("- a\n  - b\n    more\n- c") ==
+      "ul[li[aul[li[b more]]]li[c]]"
+    check outlineOf("Intro\n\n- a\n\n    - b") ==
+      "p[Intro] ul[li[p[a]ul[li[b]]]]"
+    check outlineOf("- a\n\n      code\n- b") ==
+      "ul[li[p[a]p[code]]li[p[b]]]"
+    let res = md("- a\n  - b\n    more\n- c")
+    check "<ul><li>a<ul><li>b more</li></ul></li><li>c</li></ul>" in
+      htmlBody(res)
+    check textBody(res) == "\n- a\n  - b more\n- c\n"
+    # Four spaces past the item's column is an indented line in the
+    # item: no sub-list.
+    check outlineOf("1. a\n\n       - x\n2. b") ==
+      "ol[li[p[a]p[- x]]li[p[b]]]"
+    let deep = md("1. a\n\n       - x\n2. b")
+    check "<ul" notin htmlBody(deep)
+    check textBody(deep) == "\n1. a\n\n   - x\n2. b\n"
+    # Short of a wide item's column, four spaces are still no marker:
+    # the line is a lazy continuation of the item's paragraph.
+    check outlineOf("123456. a\n    - b") == "ol(start=123456)[li[a - b]]"
+    check outlineOf("123456. a `x\n    - b`") ==
+      "ol(start=123456)[li[a codeInline[x - b]]]"
+    # After a blank line it is no next item either: the list ends.
+    check outlineOf("123456. a\n\n    7. b") ==
+      "ol(start=123456)[li[a]] p[7. b]"
+
 suite "mailMarkdown aligns table columns":
   # The delimiter row's alignment: `:---` left, `:---:` centre, `---:`
   # right, `---` none; on every header and body cell of its column.

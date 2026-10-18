@@ -15,7 +15,11 @@
 ##   (`---`, `***`, `___`, spaces allowed: a `mailDivider`), setext
 ##   headings (a line of `=` or `-` under a paragraph's lines) and hard
 ##   line breaks (a paragraph line ending in two spaces or a backslash);
-##   fenced code and `:::` blocks are left as they are;
+##   fenced code and `:::` blocks are left as they are; as in
+##   CommonMark, a list interrupts a paragraph only when it is a bullet
+##   list or an ordered list from 1 whose first item is not empty, and a
+##   line indented four or more spaces opens no block (indented code is
+##   not read: the line is paragraph text);
 ## - in the AST's text spans: emphasis and strong emphasis (`*`, `_`,
 ##   CommonMark's delimiter-run rules), `~~strikethrough~~`, autolinks
 ##   (`<https://…>`, `<mailto:…>`), backslash escapes of ASCII
@@ -169,6 +173,18 @@ proc unquote(s: string): string =
     t = t[1 .. ^1]
   t
 
+proc orderedMarkerEnd(t: string): int =
+  ## The position of the delimiter of the ordered list marker `t`
+  ## starts with (one to nine digits, then `.` or `)`, then a space),
+  ## or 0.
+  var j = 0
+  while j < t.len and j < 10 and t[j] in Digits:
+    inc j
+  if j in 1 .. 9 and j + 1 < t.len and t[j] in {'.', ')'} and t[j + 1] == ' ':
+    j
+  else:
+    0
+
 proc startsBlock(s: string): bool =
   ## A line that starts a block of its own (so it is not a paragraph's
   ## next line).
@@ -176,17 +192,16 @@ proc startsBlock(s: string): bool =
   t.startsWith("```") or t.startsWith(":::") or t.startsWith("#") or
     t.startsWith("|") or t.startsWith(">") or
     (t.len >= 2 and t[0] in {'-', '*', '+'} and t[1] == ' ') or
-    (t.len >= 3 and t[0] in Digits and (t.find(". ") in 1 .. 9 or
-      t.find(") ") in 1 .. 9)) or
+    orderedMarkerEnd(t) > 0 or
     isBreakLine(t) or (t.len >= 2 and t[0] == '<' and t[1] in {'A'..'Z'})
 
 proc isParagraphLine(s: string): bool =
   s.strip().len > 0 and not startsBlock(s)
 
-proc markHardBreak(line, next: string): string =
+proc markHardBreak(line: string; continues: bool): string =
   ## A paragraph line ending in two spaces or a backslash, followed by
-  ## another line of the paragraph, ends in a hard break.
-  if not isParagraphLine(next):
+  ## another line of the paragraph (`continues`), ends in a hard break.
+  if not continues:
     return line
   if line.endsWith("  "):
     return line.strip(leading = false) & hardBreak
@@ -208,9 +223,10 @@ type ListMarker = object
 proc listMarker(line: string): ListMarker =
   ## The list item marker `line` starts with (CommonMark's): a bullet
   ## `-`, `*`, `+`, or one to nine digits and `.` or `)`, then a space
-  ## or the line's end. A thematic break is no item.
+  ## or the line's end, indented at most three spaces (four is an
+  ## indented line, never a marker). A thematic break is no item.
   let ind = leadingSpaces(line)
-  if ind >= line.len or isBreakLine(line):
+  if ind >= line.len or ind >= 4 or isBreakLine(line):
     return
   var j = ind
   var r = ListMarker(indent: ind)
@@ -251,6 +267,38 @@ proc sameList(a, b: ListMarker): bool =
   a.ordered == b.ordered and a.ch == b.ch
 
 proc isBlank(s: string): bool = s.strip().len == 0
+
+proc canInterrupt(mk: ListMarker): bool =
+  ## Whether the list item `mk` starts may start a list on a
+  ## paragraph's next line (CommonMark): a bullet item, or an ordered
+  ## one numbered 1, whose first line is not empty.
+  mk.text.strip().len > 0 and (not mk.ordered or mk.number == 1)
+
+proc continuesParagraph(next: string): bool =
+  ## Whether `next`, after a paragraph's line, is the paragraph's next
+  ## line: paragraph text, an indented line, or a list marker that may
+  ## not interrupt a paragraph.
+  let mk = listMarker(next)
+  isParagraphLine(next) or not isBlank(next) and leadingSpaces(next) >= 4 or
+    mk.ok and not canInterrupt(mk)
+
+proc asText(line: string): string =
+  ## `line`, without its indentation, as the first line of a paragraph:
+  ## a first character that would start a block here or in the AST (a
+  ## list marker, a heading, a quote, a table row, a fence, a `:::`
+  ## block, a break, a component tag) is written as its character
+  ## reference, which the inline pass reads back as the character.
+  let t = line.strip(trailing = false)
+  if startsBlock(t): "&#" & $ord(t[0]) & ";" & t[1 .. ^1] else: t
+
+proc joinLine(prev, line: string): string =
+  ## `line`, a paragraph's next line that would start a block here or
+  ## in the AST, joined to the paragraph's line `prev` (ending in its
+  ## hard break, if any): not at a line's start, it starts none, and it
+  ## stays as typed (a character reference in its place would be read
+  ## as typed inside a code span the line above opens).
+  markHardBreak(prev, true).strip(leading = false) & " " &
+    line.strip(trailing = false)
 
 proc fenceAt(lines: seq[string]; i: int): int
 proc listAt(lines: seq[string]; i: int; seg: var Segment): int
@@ -316,15 +364,20 @@ proc listAt(lines: seq[string]; i: int; seg: var Segment): int =
         inc k
         continue
       # Not indented to the item: a lazy continuation of its paragraph
-      # (the item's last line is paragraph text, this line too), or the
-      # item's end. A setext underline is never lazy, and an empty item
-      # (`-` alone) is the next item.
+      # (the item's last line is paragraph text, this line too, or a
+      # line indented four spaces, which opens no block), or the item's
+      # end. A setext underline is never lazy, and an empty item (`-`
+      # alone) is the next item.
       let last = item[^1]
       let lastMk = listMarker(last)
-      if not inFence and isParagraphLine(l) and isSetextLine(l) == '\0' and
-          not listMarker(l).ok and (isParagraphLine(last) or
+      if not inFence and (leadingSpaces(l) >= 4 or isParagraphLine(l) and
+          isSetextLine(l) == '\0' and not listMarker(l).ok) and
+          (isParagraphLine(last) or
           lastMk.ok and isParagraphLine(lastMk.text)):
-        item.add(l.strip(trailing = false))
+        if startsBlock(l):
+          item[^1] = joinLine(item[^1], l)
+        else:
+          item.add(l.strip(trailing = false))
         inc k
         continue
       break
@@ -402,6 +455,30 @@ proc segments(src: string): seq[Segment] =
         inDirective = false
       inc i
       continue
+    let paraOpen = cur.len > 0 and isParagraphLine(cur[^1])
+    if t.len > 0 and leadingSpaces(line) >= 4:
+      # An indented line opens no block (indented code is not read, and
+      # its marker is no list's). Under a paragraph's line it is the
+      # paragraph's next line; otherwise its run is a paragraph of its
+      # own, its lines kept as hard breaks.
+      if paraOpen:
+        let next = if i + 1 < lines.len: lines[i + 1] else: ""
+        cur[^1] = markHardBreak(joinLine(cur[^1], line),
+          continuesParagraph(next))
+        inc i
+        continue
+      var run: seq[string] = @[]
+      while i < lines.len and lines[i].strip().len > 0 and
+          leadingSpaces(lines[i]) >= 4:
+        # One line for the AST: only the first can start a block there.
+        run.add(lines[i].strip())
+        inc i
+      run[0] = asText(run[0])
+      if cur.len > 0 and not isBlank(cur[^1]):
+        cur.add("")
+      cur.add(run.join(hardBreak))
+      cur.add("")
+      continue
     if t.startsWith("```"):
       inFence = true
       cur.add(line)
@@ -446,6 +523,16 @@ proc segments(src: string): seq[Segment] =
       result.add(Segment(kind: skBreak))
       inc i
       continue
+    if paraOpen:
+      let mk = listMarker(line)
+      if mk.ok and not canInterrupt(mk):
+        # A list that may not interrupt a paragraph: the paragraph's
+        # next line (`… in` / `2026. That year …` is one paragraph).
+        let next = if i + 1 < lines.len: lines[i + 1] else: ""
+        cur[^1] = markHardBreak(joinLine(cur[^1], line),
+          continuesParagraph(next))
+        inc i
+        continue
     if listMarker(line).ok:
       # A list, read here: the docs AST's lists are flat.
       flush()
@@ -465,7 +552,8 @@ proc segments(src: string): seq[Segment] =
       result.add(seg)
       continue
     let next = if i + 1 < lines.len: lines[i + 1] else: ""
-    cur.add(if isParagraphLine(line): markHardBreak(line, next) else: line)
+    cur.add(if isParagraphLine(line): markHardBreak(line,
+      continuesParagraph(next)) else: line)
     inc i
   flush()
 

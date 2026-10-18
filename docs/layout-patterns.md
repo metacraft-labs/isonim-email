@@ -1043,7 +1043,12 @@ and the reference emails in `examples/` build every row.
   depth, is a `ul`/`ol` inside its `li`. A list is _loose_ when a blank
   line separates two of its items or two blocks of one item: its items
   hold `p` elements; a _tight_ list's items hold their inline content
-  directly. An ordered list keeps its first number (`start`).
+  directly. An ordered list keeps its first number (`start`). As in
+  CommonMark, a list starts on a paragraph's next line (no blank line
+  between) only when it is a bullet list or an ordered list starting at
+  1 whose first item is not empty: any other marker line continues the
+  paragraph, so hard-wrapped prose ("… in" over "2026. That year …")
+  stays one paragraph.
 - _Table alignment:_ a pipe table's delimiter row sets each column's
   alignment, `:---` left, `:---:` centre, `---:` right, as GFM does (so
   physical: `:---` is left in a right-to-left message too); it is the
@@ -1085,7 +1090,12 @@ and the reference emails in `examples/` build every row.
   `<Name …/>`) are left out, `E-MARKDOWN-UNSUPPORTED`. Not read as
   Markdown, because the AST has no node for them (written as text,
   without a diagnostic): indented code blocks (write a fence),
-  reference-style links, and HTML entities outside the common set.
+  reference-style links, and HTML entities outside the common set. A
+  line indented four or more spaces that is no list item's content
+  opens no block of any kind (no
+  list, heading, quote, break, table or fence): under a paragraph's
+  line it continues the paragraph, and anywhere else a run of such
+  lines is a paragraph of its own, its lines kept as hard line breaks.
 - _Text:_ follows from the elements (the text rules above: headings
   underlined, lists (a nested list indented under its item's text by
   the marker's width, no blank line before it), code indented, the
