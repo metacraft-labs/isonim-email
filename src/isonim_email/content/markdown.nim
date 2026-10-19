@@ -9,6 +9,11 @@
 ## Over the same AST this module adds the constructs a notification
 ## needs that the AST leaves as text:
 ##
+## - first, `src` is read as written (not stripped, as other props are)
+##   less a string literal's edges and indentation (`markdownSource`):
+##   leading blank lines and trailing white space dropped, the
+##   indentation every non-blank line shares removed, so indentation
+##   relative to the rest is kept;
 ## - before the AST is built, the source's lines are read once for
 ##   block quotes (`>` lines, lazy continuation included: each run is
 ##   read as Markdown again, inside a `blockquote`), thematic breaks
@@ -66,7 +71,8 @@ const affects*: set[ClientFamily] = allFamilies
 type
   MarkdownProps* = object
     ## `mailMarkdown` (layout-patterns.md §4.7).
-    src*: string
+    src* {.asWritten.}: string
+      ## As written: `markdownSource` drops its edges and indentation.
     heading_offset*: int
     image_width*: string ## px; "" = each image's intrinsic size
 
@@ -1084,6 +1090,50 @@ proc blockNodes(m: var MdCtx; src: string): seq[EmailNode] =
 
 # --- The pattern -------------------------------------------------------------------
 
+proc markdownSource*(src: string): string =
+  ## The Markdown `src` holds, as written less a string literal's edges
+  ## and indentation: leading blank lines (white space only) and
+  ## trailing white space dropped, and the indentation every other
+  ## non-blank line shares removed from each line (the longest run of
+  ## spaces and tabs they all start with, compared character by
+  ## character); a line of white space only is an empty line.
+  ## Indentation relative to the rest is kept: a line indented past the
+  ## others keeps the difference.
+  let lines = src.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+  var first = 0
+  while first < lines.len and isBlank(lines[first]):
+    inc first
+  var last = lines.len - 1
+  while last >= first and isBlank(lines[last]):
+    dec last
+  if first > last:
+    return ""
+  var common = ""
+  var seen = false
+  for i in first .. last:
+    let line = lines[i]
+    if isBlank(line):
+      continue
+    var w = 0
+    while w < line.len and line[w] in {' ', '\t'}:
+      inc w
+    if not seen:
+      common = line[0 ..< w]
+      seen = true
+    else:
+      var k = 0
+      while k < common.len and k < w and line[k] == common[k]:
+        inc k
+      common.setLen(k)
+  for i in first .. last:
+    if isBlank(lines[i]):
+      result.add("")
+    else:
+      result.add(lines[i][common.len .. ^1])
+    if i < last:
+      result.add('\n')
+  result = result.strip(leading = false)
+
 proc markdownNodes*(ctx: ExpandCtx; n: EmailNode; p: MarkdownProps):
     seq[EmailNode] =
   ## The elements `p.src` reads as, for `n`'s expansion.
@@ -1091,7 +1141,7 @@ proc markdownNodes*(ctx: ExpandCtx; n: EmailNode; p: MarkdownProps):
   if p.heading_offset < 0 or p.heading_offset > maxHeadingOffset:
     raise newException(PatternError, "mailMarkdown heading_offset = " &
       $p.heading_offset & " is not 0–" & $maxHeadingOffset)
-  m.blockNodes(p.src)
+  m.blockNodes(markdownSource(p.src))
 
 proc markdownExpand(n: EmailNode; p: MarkdownProps;
     ctx: ExpandCtx): EmailNode =

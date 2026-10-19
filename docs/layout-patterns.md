@@ -1013,7 +1013,14 @@ and the reference emails in `examples/` build every row.
 
 **`mailMarkdown`** (a body written in Markdown)
 
-- _Props:_ `src` (required: the Markdown; empty is `E-VOCAB-BAD-VALUE`),
+- _Props:_ `src` (required: the Markdown; empty is `E-VOCAB-BAD-VALUE`;
+  read as written, not stripped as other props are: its leading blank
+  lines and trailing white space are dropped, and the indentation every
+  non-blank line shares is removed, the longest run of spaces and tabs
+  they all start with, compared character by character, so a body
+  written as an indented string literal reads as it would at the margin
+  and a line indented past the rest stays indented; a line of white
+  space only is an empty line),
   `heading_offset: int = 0` (0–5: added to every heading's level, at most
   `h6`; a body under the template's own `h1` sets 1), `image_width` (px:
   the width of the body's images; by default each image's intrinsic

@@ -6,7 +6,8 @@
 ## what it never reads as markup (raw HTML, footnotes:
 ## `W-MARKDOWN-UNSUPPORTED`) and what it leaves out
 ## (`E-MARKDOWN-UNSUPPORTED`); relative links (`E-URL-SCHEME`); its
-## props; and the text part that follows from the elements.
+## props, `src` read as written less its edges and shared indentation;
+## and the text part that follows from the elements.
 ##
 ## Every test renders a hand-built tree through the full pipeline
 ## (`renderTree`) and reads the expansion in the semantic tree, written
@@ -771,3 +772,124 @@ suite "mailMarkdown aligns table columns":
     check not hasErrors(a.diagnostics)
     check a.text == md(plain).text
     check "Item | Qty | Amount\nw-1 | 2 | $20 (https://e.x/i)\n" in a.text
+
+proc literalBody(r: EmailRenderer): EmailNode =
+  ## The release notes as a template writes them: a triple-quoted `src`
+  ## indented with the code around it (its lines, and the closing
+  ## quotes' line, carry that indentation).
+  ui(r):
+    mailDocument(lang = "en", dir = "ltr", title = "Markdown"):
+      mailSection:
+        h1: text "Markdown"
+        mailMarkdown(src = """
+          ## Release notes
+
+          A paragraph
+          on two lines,\
+          then a hard break.
+
+          - one
+            - nested
+          - two
+
+          ```
+          make test
+            indented
+          ```
+          """)
+
+const marginBody = "## Release notes\n\nA paragraph\non two lines,\\\n" &
+  "then a hard break.\n\n- one\n  - nested\n- two\n\n```\nmake test\n" &
+  "  indented\n```"
+  ## The same body written at the margin.
+
+suite "mailMarkdown reads its source as written, less its indentation":
+  # `src` is not stripped as other props are: its leading blank lines
+  # and trailing white space are dropped and the indentation its
+  # non-blank lines share is removed, so indentation relative to the
+  # rest is kept, and a body indented as a whole reads as it would at
+  # the margin.
+  proc htmlBody(res: RenderedEmail): string =
+    ## The HTML after the heading, styles left out.
+    let h = bare(res.html)
+    let at = h.find("Markdown</h1>")
+    require at >= 0
+    h[at .. ^1]
+
+  proc textBody(res: RenderedEmail): string =
+    ## The text part after the heading and its rule.
+    let at = res.text.find("Markdown\n========\n")
+    require at >= 0
+    res.text[at + 18 .. ^1]
+
+  test "test_markdown_an_indented_first_line_stays_text":
+    # Indented four spaces past the rest, the first lines open no block:
+    # a paragraph of their own, their lines kept.
+    let src = "    - x\n    - y\nafter"
+    check outlineOf(src) == "p[- xbr- y] p[after]"
+    let res = md(src)
+    check "<p>- x<br>- y</p>" in htmlBody(res)
+    check "<ul" notin htmlBody(res)
+    check textBody(res) == "\n- x\n- y\n\nafter\n"
+    check outlineOf("    # not\n    > no\nText") == "p[# notbr> no] p[Text]"
+    check "<h2" notin htmlBody(md("    # not\nText"))
+    check outlineOf("    2. two\n\n1. one") == "p[2. two] ol[li[one]]"
+    # The same inside a body indented as a whole: the difference counts.
+    check outlineOf("  Intro\n\n      - x\n  after") ==
+      "p[Intro] p[- x] p[after]"
+    check outlineOf("\n      - x\n      - y\n  after\n  ") ==
+      "p[- xbr- y] p[after]"
+    # Less than four spaces past the rest, the line is read as usual.
+    check outlineOf("   - x\n- y") == "ul[li[x]li[y]]"
+
+  test "test_markdown_an_indented_literal_reads_as_at_the_margin":
+    let r = EmailRenderer()
+    let doc = literalBody(r)
+    let m = doc.find("mailMarkdown")
+    require m != nil
+    # The literal reaches the element as written.
+    check m.attrs["src"].startsWith("          ## Release notes\n")
+    check m.attrs["src"].endsWith("```\n          ")
+    let res = renderTree(doc)
+    check not hasErrors(res.diagnostics)
+    check mapped(m.attrs["src"]) == "h2[Release notes] p[A paragraph on " &
+      "two lines,brthen a hard break.] ul[li[oneul[li[nested]]]li[two]] " &
+      "mailCodeBlock[make test\n  indented]"
+    check mapped(m.attrs["src"]) == mapped(marginBody)
+    let margin = md(marginBody)
+    check res.html == margin.html
+    check res.text == margin.text
+    check textBody(res) == "\nRelease notes\n-------------\n\n" &
+      "A paragraph on two lines,\nthen a hard break.\n\n- one\n" &
+      "  - nested\n- two\n\n    make test\n      indented\n"
+
+  test "test_markdown_source_edges_and_blank_lines":
+    # Leading blank lines (white space only) and trailing white space go.
+    check outlineOf("\n   \n\t\n  Text\n  more\n \n  \n") == "p[Text more]"
+    let last = md("  Para" & "  " & "\n  ")
+    check "<p>Para</p>" in htmlBody(last)
+    check "<br" notin htmlBody(last)
+    # Inside, a line's trailing spaces stay: a hard break.
+    check outlineOf("  a" & "  " & "\n  b") == "p[abrb]"
+    # A line of white space only is blank, and does not count against
+    # the shared indentation.
+    check outlineOf("      a\n  \n      - b") == "p[a] ul[li[b]]"
+    check outlineOf("  a\r\n  - b\r\n") == "p[a] ul[li[b]]"
+    # White space only is no Markdown.
+    check "E-VOCAB-BAD-VALUE" in codesOf(md("  \n\t\n  ").diagnostics)
+    check markdownSource("\n \t\n  a\n  b") == "a\nb"
+    check markdownSource("  a\n     \n  b") == "a\n\nb"
+    check markdownSource("  ```\n  x\n      \n  ```") == "```\nx\n\n```"
+    check markdownSource("  a  \n  b  \n ") == "a  \nb"
+    check markdownSource("") == ""
+    check markdownSource(" \n\t") == ""
+
+  test "test_markdown_source_tabs_compare_character_by_character":
+    # A tab is not some number of spaces: only the prefix every line
+    # shares, character by character, goes.
+    check markdownSource("\t\t# A\n\t\t  b") == "# A\n  b"
+    check markdownSource("\t  A\n\t    B") == "A\n  B"
+    check markdownSource("\tA\n    B") == "\tA\n    B"
+    check markdownSource("  \tA\n   B") == "\tA\n B"
+    check outlineOf("\t\t## A\n\n\t\t- b\n\t\t  - c") ==
+      "h2[A] ul[li[bul[li[c]]]]"

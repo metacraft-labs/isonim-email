@@ -101,21 +101,42 @@ proc rawValueOf(node: EmailNode; hy, us: string): string =
   elif hy in node.attrs: node.attrs[hy].strip()
   else: ""
 
-proc rawValue*(node: EmailNode; name: string): string =
-  ## The authoring value of a layout prop: the style under its CSS
-  ## (hyphenated) name, then under the vocabulary's underscore spelling,
-  ## then a plain attribute under either. "" when absent.
-  # Each spelling is built only when it differs from `name`.
+proc writtenValueOf(node: EmailNode; hy, us: string): string =
+  ## `writtenValue` under its two spellings, in `rawValueOf`'s order.
+  if hy in node.styles: node.styles[hy]
+  elif us in node.styles: node.styles[us]
+  elif us in node.attrs: node.attrs[us]
+  elif hy in node.attrs: node.attrs[hy]
+  else: ""
+
+template bySpelling(name: string; lookup: untyped): string =
+  ## `lookup(hyphenated, underscored)` for prop `name`; each spelling is
+  ## built only when it differs from `name`.
   let hasUnderscore = '_' in name
   let hasHyphen = '-' in name
   if not hasUnderscore and not hasHyphen:
-    rawValueOf(node, name, name)
+    lookup(name, name)
   elif not hasUnderscore:
-    rawValueOf(node, name, name.replace("-", "_"))
+    lookup(name, name.replace("-", "_"))
   elif not hasHyphen:
-    rawValueOf(node, name.replace("_", "-"), name)
+    lookup(name.replace("_", "-"), name)
   else:
-    rawValueOf(node, name.replace("_", "-"), name.replace("-", "_"))
+    lookup(name.replace("_", "-"), name.replace("-", "_"))
+
+proc rawValue*(node: EmailNode; name: string): string =
+  ## The authoring value of a layout prop: the style under its CSS
+  ## (hyphenated) name, then under the vocabulary's underscore spelling,
+  ## then a plain attribute under either, stripped of white space at
+  ## both ends. "" when absent.
+  template lookup(hy, us: string): string = rawValueOf(node, hy, us)
+  bySpelling(name, lookup)
+
+proc writtenValue*(node: EmailNode; name: string): string =
+  ## `rawValue` as the author wrote it, its white space kept (the one
+  ## prop that needs it: `mailMarkdown`'s `src`, whose lines are
+  ## Markdown). "" when absent.
+  template lookup(hy, us: string): string = writtenValueOf(node, hy, us)
+  bySpelling(name, lookup)
 
 proc resolveTok(value: string; theme: EmailTheme): string =
   ## `tok:<key>` (the `tok"…"` sentinel) → the theme's light literal.

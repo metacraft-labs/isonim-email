@@ -34,12 +34,14 @@
 ## `float`, or an enum), read from the element's attributes and styles
 ## under the field's name (`background_color` or `background-color`);
 ## a field the element does not set keeps its declared default. A value
+## is stripped of white space at both ends, except a field marked
+## `asWritten` (`mailMarkdown`'s `src`), read as written. A value
 ## that does not parse, or an expansion that raises `PatternError`, is
 ## `E-VOCAB-BAD-VALUE` at the element.
 ##
 ## Pure tree building: identical on the C and JS targets.
 
-import std/[strutils, tables]
+import std/[macros, strutils, tables]
 import isonim/dsl/vocabulary
 import ./renderer
 import ./target
@@ -174,13 +176,25 @@ proc resolveProp*(ctx: ExpandCtx; value: string): string =
   ## literal.
   if value.startsWith("tok:"): ctx.theme.lightFor(value[4 .. ^1]) else: value
 
+template asWritten*() {.pragma.}
+  ## Marks a `string` prop read as the author wrote it, its white space
+  ## kept (`writtenValue`), where every other prop is stripped at both
+  ## ends: `mailMarkdown`'s `src`, whose lines are Markdown.
+
 proc readProps*[P](n: EmailNode): P =
   ## The element's props as a `P`: each field read under its own name,
-  ## defaults kept where unset. Raises `PatternError` on a value that
-  ## does not parse as the field's type.
+  ## stripped of white space at both ends (an `asWritten` field as
+  ## written), defaults kept where unset. Raises `PatternError` on a
+  ## value that does not parse as the field's type.
   result = default(P)
   for name, field in result.fieldPairs:
-    let raw = rawValue(n, name)
+    let raw =
+      when field.hasCustomPragma(asWritten):
+        when field isnot string:
+          {.error: "an asWritten prop is a string".}
+        writtenValue(n, name)
+      else:
+        rawValue(n, name)
     if raw.len > 0:
       try:
         when field is string:
