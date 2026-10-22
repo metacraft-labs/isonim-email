@@ -14,8 +14,8 @@
 # `git ls-remote`). These pins are the fallback, not the goal: once this
 # repo joins the workspace-lock cross-repo CI, delete the `=<sha>`
 # suffixes and let the lock pin them.
-isonim=acf1bd345d6c4a25d82e1de3dccd924fff6fd21e  # isonim@agents tip (resource registration with the owner, element hook at the tag position)
-nim-everywhere=fee7a232a337ded10932366626962b9b869a228e  # nim-everywhere@dev tip
+isonim=88ed60bba7bc515ba88b9d678bd7ffcf8ef49ffa  # shared Markdown prose, titles and label provenance
+nim-everywhere=95977e85e3aa9f3d8f54ecb42fdc9505ac3d3107  # time facade required by the pinned IsoNim core
 nim-faststreams=82c8c3edb5fa7a4fdfcdb5d8ab53bbe1830d4503  # nim-faststreams@dev tip
 nim-stew=cc405401637dc7a32bea708374e26e33f6deca44  # nim-stew@codetracer tip
-isonim-docs=4719b9820004fda250bc272877bd579e419b4783  # isonim-docs@dev tip (DTCG resolver)
+isonim-docs=03615aef0782a8a859c632e0dca616b1154a39d4  # shared Markdown and DTCG compatibility imports

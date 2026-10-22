@@ -188,6 +188,13 @@ suite "mailMarkdown maps each node to a leaf":
     check outlineOf("![](https://cdn.e.x/c.png)", [("image_width", "300")]) ==
       "mailImage(src=https://cdn.e.x/c.png,alt=,decorative=true)"
 
+  test "test_markdown_shared_code_spans_and_titles_preserve_literal_content":
+    # rule: R-TXT-13 — the shared parser supplies a destination and title
+    # separately; email still validates that destination in its normal pass.
+    check outlineOf("Use `` `tick` `` and [a](https://e.x/a_(b) \"A title\").") ==
+      "p[Use codeInline[`tick`] and a(href=https://e.x/a_(b),title=A title)[a].]"
+    check outlineOf("a `` b ``` c") == "p[a `` b ``` c]"
+
   test "test_markdown_emphasis_follows_the_delimiter_rules":
     # CommonMark's delimiter runs: `*` and `_` (intraword `_` is no
     # emphasis), nested strong and emphasis, the rule of three, escapes,
@@ -893,3 +900,27 @@ suite "mailMarkdown reads its source as written, less its indentation":
     check markdownSource("  \tA\n   B") == "\tA\n B"
     check outlineOf("\t\t## A\n\n\t\t- b\n\t\t  - c") ==
       "h2[A] ul[li[bul[li[c]]]]"
+
+suite "mailMarkdown link-label provenance":
+  test "test_markdown_explicit_mailto_labels_are_not_autolinks":
+    # rule: R-TXT-13 — an explicit link's label is authored text, independent
+    # of its destination. The historical angle-mailto display rule stays local
+    # to that syntax rather than stripping a matching prefix from every label.
+    check outlineOf("[mailto:help](https://example.test)") ==
+      "p[a(href=https://example.test)[mailto:help]]"
+    check outlineOf("[mailto:user@example.test](mailto:user@example.test)") ==
+      "p[a(href=mailto:user@example.test)[mailto:user@example.test]]"
+    check outlineOf("<mailto:user@example.test> <user@example.test>") ==
+      "p[a(href=mailto:user@example.test)[user@example.test] a(href=mailto:user@example.test)[user@example.test]]"
+    check outlineOf("<https://example.test/_literal_>") ==
+      "p[a(href=https://example.test/_literal_)[https://example.test/_literal_]]"
+
+  test "test_markdown_explicit_link_labels_preserve_escape_intent":
+    # rule: R-TXT-13 — formatting tokenization receives the original explicit
+    # label, so escaped punctuation and authored emphasis remain distinct.
+    check outlineOf("[literal \\*text\\*](https://example.test)") ==
+      "p[a(href=https://example.test)[literal *text*]]"
+    check outlineOf("[actual *text*](https://example.test)") ==
+      "p[a(href=https://example.test)[actual em[text]]]"
+    check outlineOf("[literal \\_text\\_ and **strong**](https://example.test)") ==
+      "p[a(href=https://example.test)[literal _text_ and strong[strong]]]"

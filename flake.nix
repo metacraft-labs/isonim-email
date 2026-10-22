@@ -14,11 +14,11 @@
     # .github/sibling-repos entry pins for CI, and the check refuses to
     # evaluate when the two disagree: a pin changes in both places.
     isonim = {
-      url = "github:metacraft-labs/isonim/acf1bd345d6c4a25d82e1de3dccd924fff6fd21e";
+      url = "github:metacraft-labs/isonim/88ed60bba7bc515ba88b9d678bd7ffcf8ef49ffa";
       flake = false;
     };
     nim-everywhere = {
-      url = "github:metacraft-labs/nim-everywhere/fee7a232a337ded10932366626962b9b869a228e";
+      url = "github:metacraft-labs/nim-everywhere/95977e85e3aa9f3d8f54ecb42fdc9505ac3d3107";
       flake = false;
     };
     nim-faststreams = {
@@ -30,7 +30,7 @@
       flake = false;
     };
     isonim-docs = {
-      url = "github:metacraft-labs/isonim-docs/4719b9820004fda250bc272877bd579e419b4783";
+      url = "github:metacraft-labs/isonim-docs/03615aef0782a8a859c632e0dca616b1154a39d4";
       flake = false;
     };
   };

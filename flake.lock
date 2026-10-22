@@ -2497,34 +2497,34 @@
     "isonim": {
       "flake": false,
       "locked": {
-        "lastModified": 1790764902,
-        "narHash": "sha256-O28Xw5sfCKgd1jiprxsskshkljP6q8lDRA0zMDtJ3Rs=",
+        "lastModified": 1792687492,
+        "narHash": "sha256-XfBNj3uBm8ZtLv7vCiaJGOBWQc1tMxoR/9JT3+2Mstk=",
         "owner": "metacraft-labs",
         "repo": "isonim",
-        "rev": "acf1bd345d6c4a25d82e1de3dccd924fff6fd21e",
+        "rev": "88ed60bba7bc515ba88b9d678bd7ffcf8ef49ffa",
         "type": "github"
       },
       "original": {
         "owner": "metacraft-labs",
         "repo": "isonim",
-        "rev": "acf1bd345d6c4a25d82e1de3dccd924fff6fd21e",
+        "rev": "88ed60bba7bc515ba88b9d678bd7ffcf8ef49ffa",
         "type": "github"
       }
     },
     "isonim-docs": {
       "flake": false,
       "locked": {
-        "lastModified": 1790455239,
-        "narHash": "sha256-prZe9poSURNFzEIhUBtinItaUq+rK5QtRXV0H7Ic+QU=",
+        "lastModified": 1792687797,
+        "narHash": "sha256-tvtQKGS8I+OS/AgFNrAnG5DkLyjLyh3q6IEV6s/nIBQ=",
         "owner": "metacraft-labs",
         "repo": "isonim-docs",
-        "rev": "4719b9820004fda250bc272877bd579e419b4783",
+        "rev": "03615aef0782a8a859c632e0dca616b1154a39d4",
         "type": "github"
       },
       "original": {
         "owner": "metacraft-labs",
         "repo": "isonim-docs",
-        "rev": "4719b9820004fda250bc272877bd579e419b4783",
+        "rev": "03615aef0782a8a859c632e0dca616b1154a39d4",
         "type": "github"
       }
     },
@@ -2673,17 +2673,17 @@
     "nim-everywhere": {
       "flake": false,
       "locked": {
-        "lastModified": 1790422976,
-        "narHash": "sha256-gieSeC+G1sTXd4K+iV+MOcwlynwfxxPY9vugDxVTPoM=",
+        "lastModified": 1792621522,
+        "narHash": "sha256-Y/1TWqAKkMT12jdPm0MoNxpg8xCyepst/DOuPEjxll0=",
         "owner": "metacraft-labs",
         "repo": "nim-everywhere",
-        "rev": "fee7a232a337ded10932366626962b9b869a228e",
+        "rev": "95977e85e3aa9f3d8f54ecb42fdc9505ac3d3107",
         "type": "github"
       },
       "original": {
         "owner": "metacraft-labs",
         "repo": "nim-everywhere",
-        "rev": "fee7a232a337ded10932366626962b9b869a228e",
+        "rev": "95977e85e3aa9f3d8f54ecb42fdc9505ac3d3107",
         "type": "github"
       }
     },

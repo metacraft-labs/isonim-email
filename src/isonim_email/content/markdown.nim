@@ -840,21 +840,6 @@ proc emphasise(m: var MdCtx; toks: seq[Tok]): seq[EmailNode] =
       result.add(it.node)
   flushLit()
 
-proc splitTitle(href: string): tuple[url, title: string] =
-  ## `url "title"` (the AST keeps a link's title in its target). A
-  ## `tel:` target comes back from the docs dialect as a site path
-  ## (`/tel:…`, the dialect knows no `tel:`), and is given back.
-  var h = href.strip()
-  if h.toLowerAscii().startsWith("/tel:"):
-    h = h[1 .. ^1]
-  let sp = h.find(' ')
-  if sp < 0:
-    return (h, "")
-  var t = h[sp + 1 .. ^1].strip()
-  if t.len >= 2 and t[0] in {'"', '\''} and t[^1] == t[0]:
-    t = t[1 ..< ^1]
-  (h[0 ..< sp], t)
-
 proc inlineNodes(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
   ## The elements of a run of inline spans. An image here (a heading, a
   ## list item, a table cell) is written as its alt text and reported:
@@ -863,7 +848,8 @@ proc inlineNodes(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
   for s in spans:
     case s.kind
     of ikText:
-      m.textTokens(s.text, toks)
+      if s.escaped: toks.add(Tok(text: s.text))
+      else: m.textTokens(s.text, toks)
     of ikCode, ikSymRef:
       let code = el(m.ctx, m.n, "codeInline", text = s.text)
       toks.add(Tok(node: code))
@@ -871,10 +857,19 @@ proc inlineNodes(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
       # The link's target is checked by P1 like every `a` (catalogue
       # R-TXT-13): the docs dialect resolves a relative target against
       # the docs site, which no mail client can follow.
-      let (url, title) = splitTitle(s.href)
-      let a = el(m.ctx, m.n, "a", attrs = [("href", url), ("title", title)])
+      let a = el(m.ctx, m.n, "a", attrs = [("href", s.href), ("title", s.title)])
       var inner: seq[Tok] = @[]
-      m.textTokens(s.text, inner)
+      case s.linkOrigin
+      of loExplicit:
+        # Only the parser knows which punctuation was escaped in the authored
+        # label. Preserve that source for email's own emphasis dialect.
+        m.textTokens(s.labelSource, inner)
+      of loAngleAutolink, loBareAutolink:
+        let label = if s.linkOrigin == loAngleAutolink and
+            s.text.toLowerAscii().startsWith("mailto:"): s.text[7 .. ^1] else: s.text
+        inner.add Tok(text: label)
+      of loUnspecified:
+        m.textTokens(s.text, inner)
       for c in m.emphasise(inner):
         m.ctx.r.appendChild(a, c)
       toks.add(Tok(node: a))
@@ -882,6 +877,12 @@ proc inlineNodes(m: var MdCtx; spans: seq[InlineSpan]): seq[EmailNode] =
       m.warn("image inside a heading, a list item or a table cell",
         "![" & s.text & "]")
       toks.add(Tok(text: s.text))
+    of ikStrike:
+      let node = el(m.ctx, m.n, "s")
+      for child in m.inlineNodes(s.children): m.ctx.r.appendChild(node, child)
+      toks.add(Tok(node: node))
+    of ikFootnoteRef:
+      m.textTokens("[^" & s.text & "]", toks)
   m.emphasise(toks)
 
 proc trimBreaks(nodes: seq[EmailNode]): seq[EmailNode] =
@@ -906,9 +907,8 @@ proc hasText(nodes: seq[EmailNode]): bool =
 # --- Blocks ------------------------------------------------------------------------
 
 proc image(m: var MdCtx; s: InlineSpan): EmailNode =
-  let (url, title) = splitTitle(s.href)
-  result = el(m.ctx, m.n, "mailImage", attrs = [("src", url),
-    ("alt", s.text), ("title", title), ("fluid_on_mobile", "true")])
+  result = el(m.ctx, m.n, "mailImage", attrs = [("src", s.href),
+    ("alt", s.text), ("title", s.title), ("fluid_on_mobile", "true")])
   if s.text.strip().len == 0:
     # No alt text: a decorative image (`alt=""`, R-IMG-04).
     m.ctx.r.setAttribute(result, "alt", "")
@@ -1036,6 +1036,16 @@ proc mapBlock(m: var MdCtx; b: Block; aligns: seq[string] = @[]):
     for k in m.emphasise(toks):
       m.ctx.r.appendChild(btn, k)
     result.add(btn)
+  of bkBlockquote:
+    let quote = el(m.ctx, m.n, "blockquote")
+    for child in b.quoteBlocks:
+      for node in m.mapBlock(child): m.ctx.r.appendChild(quote, node)
+    result.add quote
+  of bkFigure:
+    result.add m.image(b.figureImage)
+    result.add m.paragraph(b.caption)
+  of bkFootnotes: m.refuse("footnotes")
+  of bkExcerptBreak: discard
   of bkTabs: m.refuse("tabs (:::tabs)")
   of bkCardGrid: m.refuse("card grid (:::cards)")
   of bkHero: m.refuse("hero (:::hero)")
@@ -1080,10 +1090,10 @@ proc blockNodes(m: var MdCtx; src: string): seq[EmailNode] =
       if inner.len > 0:
         result.add(m.withKids("blockquote", inner))
     of skText:
-      for b in parseMarkdownBlocks(seg.lines.join("\n")):
+      for b in parseMarkdownBlocks(seg.lines.join("\n"), footnotes = false):
         result.add(m.mapBlock(b))
     of skTable:
-      for b in parseMarkdownBlocks(seg.lines.join("\n")):
+      for b in parseMarkdownBlocks(seg.lines.join("\n"), footnotes = false):
         result.add(m.mapBlock(b, seg.aligns))
     of skList:
       result.add(m.list(seg))
