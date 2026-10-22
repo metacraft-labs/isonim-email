@@ -335,26 +335,36 @@
             # /etc/fonts/conf.d; makeFontsConf still appends
             # dejavu_fonts.minimal, which is nixpkgs-pinned and therefore
             # deterministic too (recorded, not fought).
-            FONTCONFIG_FILE = "${pkgs.makeFontsConf {
-              fontDirectories = with pkgs; [
-                liberation_ttf
-                carlito
-                roboto
-                noto-fonts
-                # Chinese, Japanese and Korean: Noto Sans CJK (the
-                # reference emails' CJK stories; Noto Sans has no CJK).
-                noto-fonts-cjk-sans
-              ];
-              impureFontDirectories = [ ];
-              # Arabic prefers Noto Sans Arabic UI; the calligraphic Noto
-              # Nastaliq Urdu is removed (nix/fonts-arabic.conf says why).
-              # Courier New and monospace are Liberation Mono
-              # (nix/fonts-mono.conf says why).
-              includes = [
-                ./nix/fonts-arabic.conf
-                ./nix/fonts-mono.conf
-              ];
-            }}";
+            FONTCONFIG_FILE = "${pkgs.runCommand "capture-fonts.conf"
+              {
+                nativeBuildInputs = [ pkgs.xmlstarlet ];
+                baseFonts = pkgs.makeFontsConf {
+                  fontDirectories = with pkgs; [
+                    liberation_ttf
+                    carlito
+                    roboto
+                    noto-fonts
+                    # Chinese, Japanese and Korean: Noto Sans CJK (the
+                    # reference emails' CJK stories; Noto Sans has no CJK).
+                    noto-fonts-cjk-sans
+                  ];
+                  impureFontDirectories = [ ];
+                  # Arabic prefers Noto Sans Arabic UI; the calligraphic Noto
+                  # Nastaliq Urdu is removed (nix/fonts-arabic.conf says why).
+                  # Courier New and monospace are Liberation Mono
+                  # (nix/fonts-mono.conf says why).
+                  includes = [
+                    ./nix/fonts-arabic.conf
+                    ./nix/fonts-mono.conf
+                  ];
+                };
+              }
+              ''
+                # makeFontsConf always adds the user's XDG font directory.
+                # Capture rendering must use only this shell's pinned set.
+                xmlstarlet ed -d '/fontconfig/dir[@prefix="xdg"]' "$baseFonts" > "$out"
+              ''
+            }";
           };
 
           # The sibling pins CI clones (.github/sibling-repos:

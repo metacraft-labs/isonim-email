@@ -11,7 +11,7 @@
 ## (the t6_roundtrip precedent). A missing node, missing shell browsers,
 ## missing driver or missing/unpinned fonts fails loudly instead of
 ## skipping.
-import std/[algorithm, json, os, osproc, strutils, unittest]
+import std/[algorithm, json, os, osproc, strutils, unittest, tempfiles]
 
 const repoRoot = parentDir(parentDir(currentSourcePath()))
   ## Resolved at compile time, so the test works whatever the
@@ -112,6 +112,33 @@ proc pngPaths(outDir: string, index: JsonNode): seq[string] =
       result.add(png)
 
 suite "e2e local capture determinism":
+  test "capture fonts exclude a real font in the user XDG directory":
+    # Real fontconfig with a valid font copied outside the store. The
+    # control proves fontconfig sees the injected font when allowed.
+    let scratch = createTempDir("isonim-font-isolation-", "")
+    defer: removeDir(scratch)
+    createDir(scratch / "fonts")
+    let (fonts, fontsCode) = execCmdEx("fc-list --format='%{file}\\n'")
+    require fontsCode == 0
+    var source = ""
+    for font in fonts.splitLines():
+      if font.startsWith("/nix/store/"):
+        source = font
+        break
+    require source.len > 0
+    let injected = scratch / "fonts/host.ttf"
+    copyFile(source, injected)
+    let control = scratch / "fonts.conf"
+    writeFile(control, "<fontconfig><dir>" & scratch / "fonts" & "</dir></fontconfig>")
+    let (visible, controlCode) = execCmdEx("env FONTCONFIG_FILE=" & quoteShell(control) &
+      " fc-list --format='%{file}\\n'")
+    require controlCode == 0
+    check injected in visible.splitLines()
+    let (isolated, isolatedCode) = execCmdEx("env XDG_DATA_HOME=" & quoteShell(scratch) &
+      " fc-list --format='%{file}\\n'")
+    require isolatedCode == 0
+    check injected notin isolated.splitLines()
+
   test "test_e2e_local_capture_is_deterministic":
     discard requireTool("node",
       "Run under the dev shell (`nix develop` in isonim-email).")
