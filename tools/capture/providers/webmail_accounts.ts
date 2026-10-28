@@ -7,10 +7,10 @@
 // All of it lives in the account's profile directory
 // (webmail_profiles.ts, every level 0700), next to the Chromium profile
 // it describes, and none of it is a secret:
-// - signin.json: written by the guided sign-in when it verified the
+// - signin.json: written by the sign-in recipe when it verified the
 //   profile (webmail_profiles.ts);
 // - needs-login.json: written when a capture found the session gone;
-//   the account is out of selection until a person's sign-in passes
+//   the account is out of selection until a sign-in passes
 //   again (the sign-in removes it);
 // - budget.json: {day, count}, the UTC day and the deliveries made to
 //   the account that day; at 90% of the daily budget the account drops

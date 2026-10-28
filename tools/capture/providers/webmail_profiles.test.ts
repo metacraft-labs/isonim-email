@@ -1,5 +1,5 @@
 // tools/capture/providers/webmail_profiles.test.ts — the hosted-webmail
-// browser profiles: where they live, and the signed-in check the guided
+// browser profiles: where they live, and the signed-in check the
 // sign-in and the capture provider share.
 //
 // What is proven: a profile's directory is resolved from
@@ -11,18 +11,19 @@
 // session cookie was stored (as a person's sign-in leaves it) as signed
 // in after the browser is closed and the profile reopened, which needs
 // the cookie store to persist in the profile; a mail host without the
-// mailbox marker is not signed in either; the guided sign-in refuses to
-// run without a display and stops, pending, without an account file.
-// The sign-in browser (the pinned Chromium started without Playwright,
-// with the sign-in's own command line, headless here) runs its
-// renderers under a seccomp filter, and a session it was given by the
-// site is read back as signed in by Playwright opening the same profile
-// with the same executable, sandboxed too; a browser without the
+// mailbox marker is not signed in either; the sign-in recipe needs no
+// display of the operator's and stops, pending, without an account file.
+// The sign-in browser (the dev shell's webmail browser, Google Chrome,
+// started without Playwright, with the sign-in's own command line,
+// headless here) runs its renderers under a seccomp filter, and a
+// session it was given by the site is read back as signed in by
+// Playwright opening the same profile with the same executable (as the
+// hosted-webmail captures do), sandboxed too; a browser without the
 // sandbox, or one that aborts for want of one, is refused, naming why.
 //
 // Test doubles (justification, per the repository's mock policy): the
-// hosted webmails cannot be signed in from a test (a sign-in is a
-// person's, and automated sign-in is refused). A local HTTP server
+// hosted webmails cannot be signed in from a test (a test never signs in
+// to a real account). A local HTTP server
 // plays one: its inbox on 127.0.0.1 shows a search form to a browser
 // holding its session cookie and redirects any other browser to a
 // "sign-in" page on another host (localhost), which has a search box of
@@ -57,7 +58,7 @@ import { CREDENTIALS_SCHEMA } from "./requirements.ts";
 import {
   accountProfile,
   checkSignedIn,
-  pinnedChromium,
+  webmailBrowser,
   profilesRoot,
   readSigninRecord,
   rendererSandboxes,
@@ -117,6 +118,38 @@ describe("hosted-webmail browser profiles", () => {
     });
     assert.equal(mode(p.record), 0o600);
     assert.equal(readSigninRecord(p)?.host, "mail.yahoo.com");
+  });
+
+  it("finds the webmail browser through the dev shell's variables, and says what is missing", () => {
+    const exe = join(scratch, "webmail-browser");
+    writeFileSync(exe, "#!/bin/sh\n", { mode: 0o755 });
+    assert.deepEqual(
+      webmailBrowser({
+        ISONIM_EMAIL_WEBMAIL_BROWSER: exe,
+        ISONIM_EMAIL_WEBMAIL_BROWSER_LABEL: "Google Chrome 147.0.7727.137",
+      }),
+      { path: exe, label: "Google Chrome 147.0.7727.137" },
+    );
+    assert.deepEqual(webmailBrowser({ ISONIM_EMAIL_WEBMAIL_BROWSER: exe }), {
+      path: exe,
+      label: exe,
+    });
+    const unset = webmailBrowser({});
+    assert.ok("reason" in unset);
+    assert.match(unset.reason, /ISONIM_EMAIL_WEBMAIL_BROWSER is not set/);
+    const gone = webmailBrowser({
+      ISONIM_EMAIL_WEBMAIL_BROWSER: join(scratch, "no-such-browser"),
+    });
+    assert.ok("reason" in gone);
+    assert.match(gone.reason, /no-such-browser does not exist/);
+    // The captures open a profile with that same executable.
+    assert.equal(
+      webmailLaunchOptions(
+        { ...process.env, ISONIM_EMAIL_WEBMAIL_BROWSER: exe },
+        true,
+      ).executablePath,
+      exe,
+    );
   });
 
   describe("the signed-in check", () => {
@@ -237,11 +270,12 @@ describe("hosted-webmail browser profiles", () => {
     });
 
     it("reads a profile signed in by the sandboxed sign-in browser back as signed in under Playwright, with the same executable", async () => {
-      const chromium = pinnedChromium(process.env);
+      const chromium = webmailBrowser(process.env);
       if ("reason" in chromium) throw new Error(chromium.reason);
-      // The sign-in starts the executable Playwright drives, and opens
-      // the profile afterwards with it (headed or headless).
-      assert.equal(chromium.path, pw.chromium.executablePath());
+      // A regular release build, not Playwright's Chrome for Testing;
+      // Playwright opens the profile with that same executable.
+      assert.notEqual(chromium.path, pw.chromium.executablePath());
+      assert.match(chromium.label, /^(Google Chrome|Chromium) \d+\./);
       const options = webmailLaunchOptions(process.env, true);
       assert.equal(options.executablePath, chromium.path);
       assert.equal(options.chromiumSandbox, true);
@@ -296,7 +330,7 @@ describe("hosted-webmail browser profiles", () => {
     });
 
     it("refuses a sign-in browser without the sandbox, and one that aborts for want of it, naming why", async () => {
-      const chromium = pinnedChromium(process.env);
+      const chromium = webmailBrowser(process.env);
       if ("reason" in chromium) throw new Error(chromium.reason);
       const dir = join(scratch, "unsandboxed", "chromium");
       mkdirSync(dir, { recursive: true });
@@ -346,7 +380,7 @@ describe("hosted-webmail browser profiles", () => {
     });
   });
 
-  it("the guided sign-in needs a display and an account file, and says so", () => {
+  it("the sign-in recipe needs no display of the operator's, and stops, pending, without an account file", () => {
     const dir = join(scratch, "creds");
     mkdirSync(dir, { mode: 0o700 });
     chmodSync(dir, 0o700);
@@ -355,24 +389,17 @@ describe("hosted-webmail browser profiles", () => {
       ISONIM_EMAIL_CREDENTIALS_DIR: dir,
       ISONIM_EMAIL_WEBMAIL_PROFILES_DIR: join(scratch, "cli"),
     };
+    // It runs in a private session of its own: no DISPLAY needed.
     delete env.DISPLAY;
     delete env.WAYLAND_DISPLAY;
-    const noDisplay = spawnSync(process.execPath, [signinCli, "yahoo"], {
-      env,
-      encoding: "utf8",
-    });
-    assert.equal(noDisplay.status, 2, noDisplay.stderr);
-    assert.match(noDisplay.stderr, /needs the operator's display/);
-    const pending = spawnSync(
-      process.execPath,
-      [signinCli, "yahoo", "--check-only"],
-      {
-        env: { ...env, DISPLAY: ":99" },
+    for (const args of [["yahoo"], ["yahoo", "--check-only"]]) {
+      const pending = spawnSync(process.execPath, [signinCli, ...args], {
+        env,
         encoding: "utf8",
-      },
-    );
-    assert.equal(pending.status, 3, pending.stdout + pending.stderr);
-    assert.match(pending.stdout, /PENDING: no account file for yahoo/);
+      });
+      assert.equal(pending.status, 3, pending.stdout + pending.stderr);
+      assert.match(pending.stdout, /PENDING: no account file for yahoo/);
+    }
     // A filled account file but an unknown set is a usage error.
     mkdirSync(join(dir, "yahoo"), { mode: 0o700 });
     writeFileSync(
@@ -385,7 +412,7 @@ describe("hosted-webmail browser profiles", () => {
       { mode: 0o600 },
     );
     const unknown = spawnSync(process.execPath, [signinCli, "nope"], {
-      env: { ...env, DISPLAY: ":99" },
+      env,
       encoding: "utf8",
     });
     assert.equal(unknown.status, 2);

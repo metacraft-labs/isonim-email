@@ -303,8 +303,15 @@ desktop end-to-end tests on Thunderbird and Claws Mail, and `just
 test-desktop-all` on all five clients (run it after changing the
 provider or a driver). And `hosted-webmail` (backend `b`,
 `tools/capture/providers/hosted_webmail.ts`): the real Gmail, Yahoo
-Mail and Outlook.com, in persistent Chromium profiles a person signs in
-once (`just email-webmail-signin <set>`; the harness never signs in).
+Mail and Outlook.com, in persistent browser profiles that
+`just email-webmail-signin <set>` signs in (by itself, in the dev
+shell's webmail browser, Google Chrome rather than Playwright's Chrome
+for Testing, started without automation inside a private GuiAssert
+session, with OS-level input, and checked by reading the mailbox off
+the screen; it stops at any challenge, makes one attempt per account and
+then waits out a 24 h cool-down; runbook: `docs/webmail-signin.md`); a
+capture itself never signs in, and opens the profile under Playwright
+with that same browser.
 Each story is delivered for real: a Google Workspace sender sends it to
 a QA account through the Gmail API (`workspace_send.ts`), the adapter
 finds it in Inbox or Spam/Junk by its Message-ID or run token, captures
@@ -321,8 +328,8 @@ needs-login and fails its captures naming the sign-in command; a
 locator that no longer matches the UI fails loudly and takes that
 webmail down for the run. The adapters' locators
 (`webmail_adapters.ts`) are marked unverified until a live capture has
-confirmed them. `just email-webmail-checklist` lists, in order, what a
-person does before the first capture and checks the local part; the
+confirmed them. `just email-webmail-checklist` lists, in order, what
+has to happen before the first capture and checks the local part; the
 tests run against stand-in webmails on loopback
 (`webmail_standin.ts`). Later: clients in VM guests and a device-farm
 service, each as one more provider; `--backends c|d` and `--async` are

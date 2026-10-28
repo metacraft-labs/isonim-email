@@ -292,16 +292,20 @@ email-selfsend-smoke set *args:
 email-workspace-send-smoke to-set *args: email-shots-build
     node tools/capture/email-workspace-send-smoke.ts {{to-set}} {{args}}
 
-# The first sign-in of a QA account's webmail profile, by a person at
-# this machine's display: prints the address, opens the webmail in the
-# pinned Chromium without automation and with its sandbox (checked;
-# it stops, exit 4, when the sandbox is not running), offers to copy
-# the password to the clipboard (never printing it; taken off again on
-# Enter, after 60 s, or on Ctrl-C/SIGTERM/SIGHUP), waits for Enter,
-# then checks the profile under Playwright (same Chromium, sandboxed)
-# and records the sign-in. `--check-only` only checks an existing
-# profile; `--unsafe-no-sandbox` (unsafe) runs without the sandbox on a
-# host without unprivileged user namespaces. Never types into a page.
+# Signs a QA account's webmail profile in, by itself (every account of
+# SET, or the one named): a private off-screen GuiAssert session, the
+# dev shell's webmail browser (Google Chrome, a regular release build)
+# started normally in it (no automation; its sandbox checked, exit 4
+# without one), OCR of each screen that never answers a frame showing
+# the password, OS-level typing of the address and the password, each
+# only into its own field; then the check (the browser started again on
+# the inbox, the mailbox read off the screen, no input) and signin.json.
+# A challenge stops it (exit 5) and is never retried; one automated
+# attempt per account, then a 24 h cool-down (exit 6). `--vnc` to watch,
+# `--takeover` to finish a challenge over VNC, `--manual` for a person's
+# sign-in, `--check-only`, `--override-cooldown` (operator),
+# `--playwright-check` (also under Playwright; visible to the provider).
+# Runbook: docs/webmail-signin.md.
 email-webmail-signin set *args:
     node tools/capture/email-webmail-signin.ts {{set}} {{args}}
 

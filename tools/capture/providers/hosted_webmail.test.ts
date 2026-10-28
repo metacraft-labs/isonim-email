@@ -44,8 +44,8 @@
 //   cleanly with the remedy, and the checklist says what is pending.
 //
 // Test doubles (justification, per the repository's mock policy): the
-// hosted webmails need a person's sign-in and the Gmail API sends real
-// mail, so neither can be used from a test. webmail_standin.ts plays
+// hosted webmails need a real account signed in and the Gmail API sends
+// real mail, so neither can be used from a test. webmail_standin.ts plays
 // each webmail with the adapter's DOM contract on loopback, and Google's
 // token endpoint and Gmail send over TLS with a throwaway authority.
 // Chromium, Playwright, the persistent profiles, the provider, the
@@ -302,8 +302,8 @@ async function world(
   };
   delete env.ISONIM_EMAIL_WEBMAIL_DAILY_BUDGET;
   const host = { env, platform: process.platform };
-  // The person's sign-in, played by the test: a session cookie in each
-  // account's profile, then the record the guided sign-in writes.
+  // The sign-in, played by the test: a session cookie in each account's
+  // profile, then the record the sign-in recipe writes.
   if (opts.signIn !== false) {
     const p = await playwright();
     for (const set of Object.keys(QA) as SetId[])
@@ -589,7 +589,7 @@ describe("hosted-webmail session loss and UI drift", () => {
       assert.equal(results[0]!.status, "failed");
       assert.match(
         results[0]!.reason!,
-        /session lost: yahoo\/qa1 is not signed in any more \(.*\); the harness never signs in: a person runs `just email-webmail-signin yahoo --account qa1`/,
+        /session lost: yahoo\/qa1 is not signed in any more \(.*\); a capture never signs in: sign it in again with `just email-webmail-signin yahoo --account qa1`/,
       );
       assert.ok(
         w.logs.some((l) => /hosted-webmail: session lost: yahoo\/qa1/.test(l)),
@@ -1094,10 +1094,16 @@ describe("hosted-webmail variants", () => {
       const one = await run("c1");
       assert.deepEqual(one.rows, ["done"]);
       assert.equal(one.meta.cache, "miss");
-      assert.match(one.meta.client.build, /^ui-fp:none\+chromium-/);
+      assert.match(
+        one.meta.client.build,
+        /^ui-fp:none\+(google-chrome|chromium)-\d/,
+      );
       const two = await run("c2");
       assert.equal(two.meta.cache, "miss");
-      assert.match(two.meta.client.build, /^ui-fp:[0-9a-f]{12}\+chromium-/);
+      assert.match(
+        two.meta.client.build,
+        /^ui-fp:[0-9a-f]{12}\+(google-chrome|chromium)-\d/,
+      );
       assert.equal(w.api.sent.length, 2);
       const three = await run("c3");
       assert.deepEqual(three.rows, ["done"]);

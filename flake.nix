@@ -33,6 +33,17 @@
       url = "github:metacraft-labs/isonim-docs/03615aef0782a8a859c632e0dca616b1154a39d4";
       flake = false;
     };
+
+    # GuiAssert (https://github.com/metacraft-labs/GuiAssert), the desktop
+    # driver behind `just email-webmail-signin`: private off-screen
+    # sessions (Xvfb, Openbox, an owner-only x11vnc socket), OS-level
+    # input, OCR (tesseract) that refuses a frame showing a given secret,
+    # and the accessibility tree. A tool, not a source the Nim code
+    # compiles against, so it is a flake input pinned by revision (its
+    # contract is guiassert-desktop/1.1) and not a .github/sibling-repos
+    # entry. It keeps its own nixpkgs: the package is the build GuiAssert
+    # tests. To move the pin, change the revision and `nix flake lock`.
+    guiassert.url = "github:metacraft-labs/GuiAssert/230288166b7c41e17a875f750c4a3d91ed938d66";
   };
 
   outputs =
@@ -284,6 +295,55 @@
               package/axe.min.js package/LICENSE package/package.json
           '';
 
+          # The browser of the hosted-webmail profiles: the one
+          # `just email-webmail-signin` signs each QA account in with
+          # (started as an ordinary process, without automation) and the
+          # one the hosted-webmail captures open those profiles with
+          # (Playwright's `executablePath`), so a profile is only ever
+          # opened by the build that wrote it. It is a regular release
+          # build, not Playwright's: the Playwright build is Chrome for
+          # Testing, which shows an "only for automated testing" bar and
+          # reports itself as such, and the providers' sign-in pages may
+          # treat it as an automated browser.
+          # - x86_64-linux: Google Chrome (nixpkgs `google-chrome`, the
+          #   repackaged stable release). It is unfree, so this one
+          #   package, and nothing else, is allowed as unfree here.
+          # - elsewhere on Linux (nixpkgs packages Google Chrome for
+          #   x86_64 only): nixpkgs' Chromium, also a regular build.
+          # The nixpkgs Chrome wrapper sets FONTCONFIG_FILE to its own
+          # fonts.conf; that line is dropped so the browser sees the dev
+          # shell's pinned fonts (FONTCONFIG_FILE in captureEnv), as the
+          # other capture browsers do. Its other settings (library paths,
+          # `--simulate-outdated-no-au`, which only silences the
+          # "can't update" bubble a store copy would show) are kept.
+          webmailBrowser =
+            if system == "x86_64-linux" then
+              let
+                chrome =
+                  (import inputs.nixpkgs {
+                    inherit system;
+                    config.allowUnfreePredicate = p: pkgs.lib.getName p == "google-chrome";
+                  }).google-chrome;
+              in
+              pkgs.runCommand "webmail-google-chrome-${chrome.version}" { } ''
+                mkdir -p $out/bin
+                grep -v '^export FONTCONFIG_FILE=' ${chrome}/bin/google-chrome-stable \
+                  > $out/bin/google-chrome-stable
+                chmod +x $out/bin/google-chrome-stable
+                # The wrapper must still end by running Chrome.
+                grep -q 'exec "${chrome}/share/google/chrome/google-chrome"' $out/bin/google-chrome-stable
+              ''
+              // {
+                exe = "bin/google-chrome-stable";
+                label = "Google Chrome ${chrome.version}";
+              }
+            else
+              pkgs.chromium
+              // {
+                exe = "bin/chromium";
+                label = "Chromium ${pkgs.chromium.version}";
+              };
+
           captureEnv = {
             # The pinned axe-core (see axeCore above): the directory
             # holding axe.min.js, which backend a injects into every
@@ -492,7 +552,17 @@
                 ]
                 # Node, the Playwright browsers, the local mail stack and
                 # the desktop clients (see captureTools above).
-                ++ captureTools;
+                ++ captureTools
+                # The webmail sign-in's desktop driver (see the guiassert
+                # input). Its sessions are Linux ones.
+                ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                  inputs.guiassert.packages.${system}.guiassert
+                ];
+
+              # The hosted-webmail profiles' browser (see webmailBrowser):
+              # the executable, and the build it is, for signin.json.
+              ISONIM_EMAIL_WEBMAIL_BROWSER = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${webmailBrowser}/${webmailBrowser.exe}";
+              ISONIM_EMAIL_WEBMAIL_BROWSER_LABEL = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux webmailBrowser.label;
 
               # tsc's declaration tree (see tsTypes); `just lint-ts`
               # links build/ts-types to it.

@@ -13,8 +13,8 @@
 //
 // EVERY LOCATOR HERE IS UNVERIFIED-LIVE. They are written from the
 // webmails' public descriptions and long-standing knowledge of their
-// DOM, not measured against the live UIs (a sign-in is a person's, and
-// none had been made when they were written). Each carries its status
+// DOM, not measured against the live UIs (no sign-in had been made when
+// they were written). Each carries its status
 // (`status: "unverified-live"`), and the provenance of every capture
 // records the adapter's status, so a capture made with an unconfirmed
 // locator says so. The first live capture of each adapter confirms or

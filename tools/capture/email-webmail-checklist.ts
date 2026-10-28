@@ -40,8 +40,11 @@ what this machine shows of it now:
       acting as the sender user, sealed into the set as
       ${WORKSPACE_SENDER_SET}/<name>.json with subject, from and
       allowed_recipients (the QA addresses).
-  3. Sign in each QA account's webmail profile, once, by hand:
-      \`just email-webmail-signin <set> --account <name>\` (never automated).
+  3. Sign in each QA account's webmail profile:
+      \`just email-webmail-signin <set> --account <name>\` (automated: one
+      attempt per account, then a 24 h cool-down; a challenge stops it
+      for a person over VNC, --takeover; --manual for a person's sign-in;
+      docs/webmail-signin.md).
   4. One smoke send per set: \`just email-workspace-send-smoke <set>\`,
       then look for the message in that webmail (Inbox or Spam) by hand.
   5. The first capture:

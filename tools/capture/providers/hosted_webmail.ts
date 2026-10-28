@@ -1,6 +1,7 @@
 // tools/capture/providers/hosted_webmail.ts — the hosted-webmail
 // capture provider (backend b): the real Gmail, Yahoo Mail and
-// Outlook.com, signed in by a person once, captured after real delivery.
+// Outlook.com, in profiles the sign-in recipe signed in, captured after
+// real delivery.
 //
 // A capture, per story and QA account (the procedure is one
 // implementation over the adapters' data, webmail_adapters.ts):
@@ -92,7 +93,11 @@ import {
   type WebmailLocator,
   WINDOW_HEIGHT,
 } from "./webmail_adapters.ts";
-import { checkSignedIn, webmailLaunchOptions } from "./webmail_profiles.ts";
+import {
+  checkSignedIn,
+  webmailBrowser,
+  webmailLaunchOptions,
+} from "./webmail_profiles.ts";
 import {
   deliverWorkspace,
   loadWorkspaceSender,
@@ -394,20 +399,17 @@ export class HostedWebmailProvider implements CaptureProvider {
   // decide the pixels. A capture that sees another fingerprint records
   // it and updates it, so the next run's key differs.
   private build(adapter: WebmailAdapter, ui: "desktop" | "mobile"): string {
-    const driver = resolveDriver(this.env);
-    if ("reason" in driver) return "";
-    let rev = "unknown";
-    try {
-      const browsers = JSON.parse(
-        readFileSync(join(driver.dir, "browsers.json"), "utf8"),
-      ) as { browsers: { name: string; revision: string }[] };
-      rev =
-        browsers.browsers.find((b) => b.name === "chromium")?.revision ?? rev;
-    } catch {
-      // keep "unknown"
-    }
+    const browser = webmailBrowser(this.env);
+    // "Google Chrome 147.0.7727.137" -> "google-chrome-147.0.7727.137"
+    const name =
+      "reason" in browser
+        ? "unknown"
+        : browser.label
+            .toLowerCase()
+            .replace(/[^a-z0-9.]+/g, "-")
+            .replace(/^-|-$/g, "");
     const fp = readFingerprint(this.host, adapter.set, ui) ?? "none";
-    return `ui-fp:${fp}+chromium-${rev}`;
+    return `ui-fp:${fp}+${name}`;
   }
 
   requirements(): Requirement[] {
@@ -421,7 +423,7 @@ export class HostedWebmailProvider implements CaptureProvider {
       {
         kind: "env-dir",
         variable: "PLAYWRIGHT_BROWSERS_PATH",
-        why: "the dev shell's pinned Chromium, the build the webmail profiles were signed in with (run under `nix develop`)",
+        why: "the dev shell's Playwright driver, which opens the webmail profiles in the webmail browser they were signed in with (run under `nix develop`)",
       },
       { ...sender, why: `${sender.why}; ${REMEDY}` },
     ];
@@ -701,7 +703,7 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   private lostReason(a: PoolAccount, reason: string): string {
-    return `session lost: ${a.set}/${a.name} is not signed in any more (${reason}); the harness never signs in: a person runs \`${signinCommand(a.set, a.name)}\``;
+    return `session lost: ${a.set}/${a.name} is not signed in any more (${reason}); a capture never signs in: sign it in again with \`${signinCommand(a.set, a.name)}\``;
   }
 
   private sessionLost(a: PoolAccount, reason: string): void {

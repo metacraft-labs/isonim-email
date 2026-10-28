@@ -8,24 +8,29 @@
 // every level 0700: `chromium/` is the Chromium user data directory the
 // capture provider opens with launchPersistentContext, and
 // `signin.json` the non-secret record of the last verified sign-in.
-// Both the guided sign-in (email-webmail-signin.ts) and the provider
+// Both the sign-in recipe (email-webmail-signin.ts) and the provider
 // resolve the paths here, so they cannot disagree.
 //
-// A person signs each profile in, once: the harness never types into a
-// sign-in page. The sign-in browser is the shell's pinned Chromium
-// started without automation (Google refuses to sign in an
-// automation-controlled browser), with Playwright's cookie-store
-// switches, so the profile it leaves reads as signed in when Playwright
-// opens it afterwards (a profile whose cookies were sealed with the
-// desktop keyring would read as signed out). Both run the same
-// executable (Playwright opens the profile with `executablePath` set to
-// it, headed or headless), so the profile is never opened by a build
-// older than the one that wrote it.
+// The sign-in recipe signs each profile in (automated, with OS-level
+// input in a private GuiAssert session: webmail_signin.ts); the capture
+// provider never types into a sign-in page. Every browser on a profile
+// is the dev shell's webmail browser (`webmailBrowser`: Google Chrome,
+// or nixpkgs' Chromium where Google Chrome is not packaged), a regular
+// release build and not Playwright's Chrome for Testing, which shows an
+// "only for automated testing" bar and which the providers' sign-in
+// pages may treat as automated. The sign-in starts it without
+// automation (Google refuses to sign in an automation-controlled
+// browser), with Playwright's cookie-store switches, so the profile it
+// leaves reads as signed in when Playwright opens it afterwards (a
+// profile whose cookies were sealed with the desktop keyring would read
+// as signed out). Playwright opens the profile with `executablePath`
+// set to the same executable (headed or headless), so the profile is
+// never opened by a build other than the one that wrote it.
 //
 // Both browsers load the real web, so both keep Chromium's sandbox on:
 // the sign-in browser is started without `--no-sandbox`, and Playwright
 // (which adds `--no-sandbox` unless told otherwise) with
-// `chromiumSandbox: true`. On Linux the pinned build sandboxes its
+// `chromiumSandbox: true`. On Linux a store build sandboxes its
 // renderers with user and PID namespaces plus seccomp-bpf (its setuid
 // helper cannot be setuid in the Nix store), so it needs unprivileged
 // user namespaces; where those are refused, Chromium aborts with "No
@@ -46,7 +51,6 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
-import { resolveDriver } from "./browser_emulation.ts";
 import { launchOptions, type LaunchOptions } from "../launch.ts";
 import type { HostEnv } from "./requirements.ts";
 
@@ -152,9 +156,16 @@ export interface SigninRecord {
   set: string;
   account_file: string;
   signed_in_at: string;
-  // The host the inbox loaded on when it was checked.
+  // The host the inbox was checked on: the inbox URL's host when the
+  // mailbox was read off the screen (`ocr`), the host the page stayed
+  // on under Playwright (`ocr+playwright`).
   host: string;
   browser: string;
+  // How the sign-in was verified: by OCR of the mailbox in the webmail
+  // browser started without automation (always), and with
+  // `--playwright-check` also under Playwright. Absent in records
+  // written before 2026-10-28 (Playwright only).
+  verified_by?: "ocr" | "ocr+playwright";
 }
 
 export function writeSigninRecord(p: AccountProfile, r: SigninRecord): void {
@@ -170,27 +181,33 @@ export function readSigninRecord(p: AccountProfile): SigninRecord | null {
   }
 }
 
-// The pinned Chromium of the dev shell (PLAYWRIGHT_BROWSERS_PATH), the
-// build Playwright drives, for starting it without Playwright.
-export function pinnedChromium(
+// The variables the dev shell sets (flake.nix `webmailBrowser`): the
+// webmail browser's executable, and which build it is (for signin.json
+// and the captures' build key).
+export const BROWSER_ENV = "ISONIM_EMAIL_WEBMAIL_BROWSER";
+export const BROWSER_LABEL_ENV = "ISONIM_EMAIL_WEBMAIL_BROWSER_LABEL";
+
+export interface WebmailBrowser {
+  path: string;
+  /** e.g. "Google Chrome 147.0.7727.137"; the path when unknown. */
+  label: string;
+}
+
+// The webmail browser: the one executable every browser on a webmail
+// profile runs, the sign-in's (started without Playwright) and the
+// captures' (Playwright's `executablePath`).
+export function webmailBrowser(
   env: Record<string, string | undefined>,
-): { path: string } | { reason: string } {
-  const driver = resolveDriver(env);
-  if ("reason" in driver) return driver;
-  const browsers = JSON.parse(
-    readFileSync(join(driver.dir, "browsers.json"), "utf8"),
-  ) as { browsers: { name: string; revision: string }[] };
-  const rev = browsers.browsers.find((b) => b.name === "chromium")?.revision;
-  const root = env.PLAYWRIGHT_BROWSERS_PATH;
-  if (rev === undefined || root === undefined)
-    return { reason: "no pinned Chromium (run under `nix develop`)" };
-  for (const sub of ["chrome-linux64/chrome", "chrome-linux/chrome"]) {
-    const path = join(root, `chromium-${rev}`, sub);
-    if (existsSync(path)) return { path };
-  }
-  return {
-    reason: `no Chromium executable under ${join(root, `chromium-${rev}`)}`,
-  };
+): WebmailBrowser | { reason: string } {
+  const path = env[BROWSER_ENV];
+  if (path === undefined || path === "")
+    return {
+      reason: `no webmail browser: ${BROWSER_ENV} is not set (run under \`nix develop\` on Linux)`,
+    };
+  if (!existsSync(path))
+    return { reason: `${BROWSER_ENV}=${path} does not exist` };
+  const label = env[BROWSER_LABEL_ENV];
+  return { path, label: label === undefined || label === "" ? path : label };
 }
 
 export type SignedIn =
@@ -242,15 +259,21 @@ export async function checkSignedIn(
   };
 }
 
-// The command line of the sign-in browser: the pinned Chromium without
+// The command line of the sign-in browser: the webmail browser without
 // automation, on the account's profile, with Playwright's cookie-store
 // switches and the sandbox on. `unsafeNoSandbox` is the operator's
 // explicit override for a host without a usable sandbox (`--no-sandbox`:
-// a person then browses the web with renderers that are not confined).
+// the browser then loads the web with renderers that are not confined).
+// `extra` goes before the URL (the automated sign-in's own switches,
+// webmail_signin.ts `SIGNIN_SESSION_SWITCHES`).
 export function signinBrowserArgs(
   userDataDir: string,
   url: string,
-  opts: { headless?: boolean; unsafeNoSandbox?: boolean } = {},
+  opts: {
+    headless?: boolean;
+    unsafeNoSandbox?: boolean;
+    extra?: string[];
+  } = {},
 ): string[] {
   return [
     `--user-data-dir=${userDataDir}`,
@@ -259,12 +282,13 @@ export function signinBrowserArgs(
     ...(opts.headless === true ? ["--headless=new"] : []),
     "--no-first-run",
     "--no-default-browser-check",
+    ...(opts.extra ?? []),
     url,
   ];
 }
 
 // The Playwright launch options that open an account's profile: the
-// capture's Chromium options, the sign-in browser's executable, and
+// capture's Chromium options, the webmail browser's executable, and
 // the sandbox on (unless the operator overrode it for the sign-in).
 export function webmailLaunchOptions(
   env: Record<string, string | undefined>,
@@ -275,13 +299,13 @@ export function webmailLaunchOptions(
   chromiumSandbox: boolean;
   executablePath: string;
 } {
-  const chromium = pinnedChromium(env);
-  if ("reason" in chromium) throw new Error(chromium.reason);
+  const browser = webmailBrowser(env);
+  if ("reason" in browser) throw new Error(browser.reason);
   return {
     ...launchOptions("chromium", false, process.platform, env),
     headless,
     chromiumSandbox: opts.unsafeNoSandbox !== true,
-    executablePath: chromium.path,
+    executablePath: browser.path,
   };
 }
 
@@ -386,7 +410,7 @@ export async function waitSandboxed(
 
 // Stops a browser started without Playwright: SIGINT, SIGKILL after
 // 15 s. Not SIGTERM: Chromium exits on SIGTERM without writing the
-// cookies of its last ~30 s to the profile (measured, Chromium 1217,
+// cookies of its last ~30 s to the profile (measured, Playwright's Chromium 1217,
 // 2026-10-17, headed on Wayland and headless alike: a session cookie
 // set a second before SIGTERM was missing from the profile's Cookies
 // database, and present after SIGINT or SIGHUP), so a person who

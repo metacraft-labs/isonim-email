@@ -3,7 +3,7 @@
 // the hosted-webmail provider's tests (hosted_webmail.test.ts).
 //
 // Why stand-ins (the repository's mock policy): the real webmails need
-// a person's sign-in, the real Gmail API sends real mail, and neither
+// a real account signed in, the real Gmail API sends real mail, and neither
 // can be reached from a test. Each stand-in implements the DOM contract
 // of one adapter in webmail_adapters.ts (the same locators, the same
 // folder URLs, moved to loopback by rebaseAdapter) and the behaviour
