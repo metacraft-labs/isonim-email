@@ -44,6 +44,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
   chmodSync,
   writeFileSync,
@@ -257,6 +258,48 @@ export async function checkSignedIn(
       ? `the inbox loaded on ${host} but the mailbox marker (${w.marker}) did not appear within ${timeoutMs} ms`
       : `the inbox was redirected to ${host}, not ${w.mailHosts.join(" or ")}: the profile is not signed in`,
   };
+}
+
+// The profile preferences that turn off the browser's own sign-in (its
+// "Allow Chrome sign-in" setting), so Google Chrome never offers to sign
+// the browser in ("Make Chrome your own … Continue as …") over a page
+// once the web sign-in succeeds. Both keys: Chrome resets
+// `signin.allowed` at startup from `signin.allowed_on_next_startup`
+// (measured 2026-10-28, Google Chrome 147: with the first alone it was
+// true again after a start, with both it stayed false and the profile
+// menu offered no "Sign in to Chrome"). A user setting, not an
+// automation switch, and invisible to a page.
+export const SIGNIN_OFFER_PREFS = {
+  allowed: false,
+  allowed_on_next_startup: false,
+} as const;
+
+// Writes SIGNIN_OFFER_PREFS into the profile's Default/Preferences
+// before a browser starts on it (none may run on it then), keeping
+// everything else in the file; atomic, 0600. A file that is not a JSON
+// object is an error: it is never replaced.
+export function suppressBrowserSigninOffer(userDataDir: string): void {
+  const dir = join(userDataDir, "Default");
+  const path = join(dir, "Preferences");
+  let prefs: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    const v: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v))
+      throw new Error(`${path} is not a JSON object`);
+    prefs = v as Record<string, unknown>;
+  }
+  const signin = prefs.signin;
+  prefs.signin = {
+    ...(signin !== null && typeof signin === "object" && !Array.isArray(signin)
+      ? (signin as Record<string, unknown>)
+      : {}),
+    ...SIGNIN_OFFER_PREFS,
+  };
+  privateDir(dir);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(prefs), { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
 }
 
 // The command line of the sign-in browser: the webmail browser without

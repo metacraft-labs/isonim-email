@@ -20,12 +20,24 @@ account file's address and password:
   (the page's accessibility tree, as a screen reader turns it on),
   `--force-device-scale-factor=1`, `--lang=en-US` and a fixed window;
   none of them shows a bar or a warning, or is visible to a page as
-  automation;
+  automation. Before each start it turns the browser's own sign-in off
+  in the profile (Chrome's "Allow Chrome sign-in" setting:
+  `signin.allowed` and `signin.allowed_on_next_startup` false in
+  `Default/Preferences`), so Chrome never offers "Make Chrome your own
+  … Continue as …" over the provider's page; that is a user setting, not
+  an automation switch, and a page cannot see it;
 - it reads each screen by OCR, and types the address and the password
   through OS-level input, each only into the field meant for it (read
   from the browser's accessibility tree);
 - it stops at any challenge (a captcha, a code, a phone, a passkey,
   "verify it's you", ...) and never retries;
+- after the password, a provider may ask for more account data (Gmail's
+  "Set a home address", a recovery phone or email, "protect your
+  account", a passkey offer). The recipe only declines such a screen:
+  one click on a button or link named exactly `Skip`, `Skip for now`,
+  `Not now`, `Remind me later`, `Maybe later`, `No thanks` or `Cancel`.
+  It never types into it and never clicks `Save`, `Next`, `Continue` or
+  `Confirm`. A screen without such a control stops the attempt;
 - it closes the browser, starts it again on the inbox URL (still without
   automation, typing nothing) and reads the mailbox off the screen; on
   success it writes `signin.json` in the profile. `--playwright-check`
@@ -50,6 +62,13 @@ needs a person and days. So:
   attempt within 24 h of the last one's start is refused before any
   browser starts (exit 6), whatever the last result was. A run that was
   killed mid-attempt still counts.
+- **Only input counts.** An attempt starts when the first keystroke or
+  click is about to reach the provider's page. A run that ended before
+  that (a screen it did not recognise, a challenge already on the first
+  screen, a browser that would not start) showed the provider nothing,
+  records nothing and starts no cool-down; it says "no input reached the
+  provider: no attempt recorded". Declining an account-setup screen is
+  an input, and counts like any other.
 - **No retries.** A challenge, a wrong password or a screen the recipe
   does not recognise ends the attempt.
 - **The password is typed at most once per attempt**, and only into a
@@ -79,7 +98,7 @@ needs a person and days. So:
    - `signin.json`: the last verified sign-in (no secret);
    - `signin-attempt.json`: the last automated attempt (no secret);
    - `signin-screen.png`: the screen kept when an attempt stopped short
-     of the mailbox (checked not to show the password).
+     of the mailbox (checked not to show the password; 0600).
 
 ## Running it
 
@@ -136,8 +155,10 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   written. If it says the profile was still signed in, nothing was
   typed and no attempt was counted.
 - **1, `FAILED (wrong-password)`**: the provider refused the password.
-  Check the credential (see rotation below), and do not run it again
-  until the credential is fixed.
+  The account file does not hold the account's password. Do not run the
+  sign-in again until it is fixed: see
+  [Re-sealing a QA password](#re-sealing-a-qa-password), and confirm
+  with `--typing-check`.
 - **1, `FAILED (unknown-account)`**: the provider does not know the
   address. Check the account file.
 - **1, `FAILED (unknown-screen)`, `FAILED (stuck:<step>)`,
@@ -147,6 +168,11 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `signin-screen.png`, finish the sign-in with `--manual`, and report
   the screen so the provider's table
   (`tools/capture/providers/webmail_signin_steps.ts`) can learn it.
+  `field-not-found:interstitial:<name>` is an account-setup screen with
+  no control that declines it, and `stuck:interstitial:<name>` one that
+  stayed after it was declined: finish it with `--manual` (or run with
+  `--takeover`). The profile is usually signed in by then;
+  `--check-only` tells.
 - **1, `NOT SIGNED IN`**: the sign-in ended but the check did not find
   the mailbox on the inbox URL (it names the screen it saw instead, for
   example the provider's sign-in or a challenge). Read the reason;
@@ -168,6 +194,34 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   and no frame was kept. Look at what changed on the page with
   `--manual`; treat the password as exposed only if someone was
   watching the session.
+
+## Checking the typing: `--typing-check`
+
+Before a sign-in, and always after a credential was changed, check that
+the account's password reaches a page exactly as the account file holds
+it, without contacting any provider:
+
+```sh
+just email-webmail-signin outlook-com qa1 --typing-check
+```
+
+It starts the same private session and the same webmail browser (on a
+throw-away profile, removed afterwards) at a page on `127.0.0.1` with one
+password field, and types the password into it as the sign-in does. The
+page compares a salted SHA-256 of what it received with one the recipe
+computed from the account file; the password itself never reaches the
+page. The result is one line:
+
+```text
+TYPING CHECK MATCH: outlook-com/qa1 (length match: yes)
+```
+
+or `TYPING CHECK MISMATCH: … (length match: yes|no)` with exit 1: what
+reached the page differs from the file (a keyboard-layout or input
+problem on this machine, not a provider problem). A mismatch with
+`length match: no` means characters were lost or added. It is not an
+attempt: no record, no cool-down, and the account's profile is not
+opened, so it can run at any time. `--vnc` shows it.
 
 ## When a provider challenges
 
@@ -220,13 +274,40 @@ cool-down, if an attempt was made in the last 24 h). If that happens
 often, record it with the provider and the date: it is the signal to
 move the captures off Playwright too.
 
+## Re-sealing a QA password
+
+When a provider answers `FAILED (wrong-password)`, the account file does
+not hold the account's password. Fix the file at its source; never edit
+a materialised copy in place.
+
+1. **Find the right password.** If the account's owner knows it, use
+   that. If nobody does, reset it in the provider's "forgot password"
+   flow (in a `--manual` session or any browser), with a newly generated
+   password, never one chosen by hand; this needs the account's recovery
+   channel. Do not try passwords against the provider: each refusal
+   brings a lock closer.
+2. **Replace it at the source.** For a file you keep yourself, edit
+   `<set>/<account>.json` (`password`; mode 0600). For a team's sealed
+   credential set, use that team's sealing tool: the sealed file of the
+   account is removed and sealed again with the new password, typed at a
+   prompt that does not echo (or generated by the tool), the change goes
+   through review, and every machine re-materialises or re-unlocks the
+   set afterwards. Your team's credentials runbook has the exact
+   commands.
+3. **Check the file:** `just email-credentials-check`.
+4. **Check the typing:**
+   `just email-webmail-signin <set> <account> --typing-check` must say
+   `MATCH`.
+5. **Sign in again**, after the cool-down, or at once with
+   `--override-cooldown` (now the cause is known and fixed), watched:
+   `just email-webmail-signin <set> <account> --override-cooldown --takeover`.
+
 ## Rotating a password
 
 1. Change the password in the provider's own account settings (in a
-   `--manual` session, or on any browser).
-2. Update the account file through the credentials' source (a team's
-   sealed credential set, re-materialised), then run
-   `just email-credentials-check`.
+   `--manual` session, or on any browser), to a generated one.
+2. Replace it at the source as in
+   [Re-sealing a QA password](#re-sealing-a-qa-password) (steps 2 to 4).
 3. The signed-in profile usually stays signed in; check with
    `just email-webmail-signin <set> <account> --check-only`. If the
    provider signed it out, run the sign-in again after the cool-down.

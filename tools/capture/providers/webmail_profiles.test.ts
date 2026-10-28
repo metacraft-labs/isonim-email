@@ -42,6 +42,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -64,6 +65,7 @@ import {
   rendererSandboxes,
   signinBrowserArgs,
   stopBrowser,
+  suppressBrowserSigninOffer,
   waitSandboxed,
   type WebmailSignin,
   webmailLaunchOptions,
@@ -79,6 +81,17 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 const mode = (p: string): number => statSync(p).mode & 0o777;
 
 describe("hosted-webmail browser profiles", () => {
+  it("never replaces a Preferences file that is not a JSON object when it turns the browser's sign-in off", () => {
+    for (const body of ["[]", "null", "not json {"]) {
+      const dir = mkdtempSync(join(scratch, "prefs-"));
+      const prefs = join(dir, "Default", "Preferences");
+      mkdirSync(dirname(prefs));
+      writeFileSync(prefs, body);
+      assert.throws(() => suppressBrowserSigninOffer(dir), body);
+      assert.equal(readFileSync(prefs, "utf8"), body);
+    }
+  });
+
   it("resolves the profile directory from the variable, XDG_STATE_HOME or HOME, and creates it 0700 at every level", () => {
     const linux = (env: Record<string, string>) => ({ env, platform: "linux" });
     assert.equal(

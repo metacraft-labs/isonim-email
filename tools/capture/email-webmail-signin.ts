@@ -12,7 +12,9 @@
 // 3. The dev shell's webmail browser (Google Chrome; webmail_profiles.ts
 //    `webmailBrowser`) started normally in that session (no Playwright,
 //    no DevTools protocol, no automation switch), on the account's
-//    profile, its sandbox checked.
+//    profile, its sandbox checked, with the browser's own sign-in turned
+//    off in the profile first (`suppressBrowserSigninOffer`), so Chrome
+//    never offers to sign itself in over the provider's page.
 // 4. The sign-in (providers/webmail_signin.ts): OCR of the display read
 //    through the password guard, the provider's screens and challenges
 //    (providers/webmail_signin_steps.ts), OS-level input; a challenge or
@@ -25,13 +27,19 @@
 //    Playwright, which a provider can see as automation, so it is off by
 //    default.
 //
+// `--typing-check` contacts no provider: the same session and browser,
+// on a throw-away profile, at a loopback page that compares a salted
+// SHA-256 of what was typed with the account file's password
+// (providers/webmail_typing_check.ts). Not an attempt: no record, no
+// cool-down, no lease, the account's profile untouched.
+//
 // The password is read from the account file into memory and leaves it
 // only on a pipe to `guiassert` (`type --stdin`, `--secret-stdin`):
 // never on a command line, in an environment, on stdout or stderr, in a
 // record, or in a kept screenshot (each one passes GuiAssert's guard).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -89,20 +97,27 @@ import {
   profilesRoot,
   signinBrowserArgs,
   stopBrowser,
+  suppressBrowserSigninOffer,
   waitSandboxed,
+  type WebmailBrowser,
   WEBMAIL_SIGNIN,
   webmailBrowser,
   webmailLaunchOptions,
   writeSigninRecord,
 } from "./providers/webmail_profiles.ts";
+import {
+  runTypingCheck,
+  startTypingCheckServer,
+} from "./providers/webmail_typing_check.ts";
 import { installSignalCleanup } from "./signal_cleanup.ts";
 
 const SETS = Object.keys(PROVIDER_SIGNIN).filter((s) => s in WEBMAIL_SIGNIN);
 
 const USAGE = `usage: email-webmail-signin SET [ACCOUNT] [--account NAME]
                             [--vnc] [--takeover] [--manual] [--check-only]
-                            [--override-cooldown] [--dir DIR] [--timeout SECONDS]
-                            [--playwright-check] [--unsafe-no-sandbox]
+                            [--typing-check] [--override-cooldown] [--dir DIR]
+                            [--timeout SECONDS] [--playwright-check]
+                            [--unsafe-no-sandbox]
 
 Signs a hosted-webmail QA account's browser profile in, by itself, with
 the account file's address and password. Sets: ${SETS.join(", ")}.
@@ -131,6 +146,11 @@ signin.json.
                     focused password field on request (p, then Enter);
                     not an automated attempt
 --check-only        only check (and record) an existing profile
+--typing-check      contacts no provider: types the account's password
+                    the way the sign-in does into a loopback page, which
+                    compares a salted SHA-256 of what arrived with the
+                    account file's; prints MATCH or MISMATCH (and whether
+                    the lengths match), nothing else; not an attempt
 --playwright-check  also check the profile under Playwright (RISK: the
                     provider sees an automated browser on the account's
                     session: navigator.webdriver, --enable-automation)
@@ -143,8 +163,9 @@ signin.json.
 --unsafe-no-sandbox UNSAFE: run the browsers with Chromium's sandbox off,
                     on a host where it cannot run
 
-Exit status: 0 signed in (recorded); 1 not signed in, or failed (wrong
-password, unknown account, an unrecognised screen, ...); 2 usage; 3
+Exit status: 0 signed in (recorded), or the typing check matched; 1 not
+signed in, or failed (wrong password, unknown account, an unrecognised
+screen, a typing-check mismatch, ...); 2 usage; 3
 pending (no account file); 4 this host cannot run it (no usable sandbox,
 no GuiAssert session, no webmail browser); 5 challenged (a person must
 finish it); 6 refused (cool-down, or the account in use); 7 stopped: the
@@ -156,6 +177,7 @@ interface Options {
   set: string;
   account: string | undefined;
   checkOnly: boolean;
+  typingCheck: boolean;
   vnc: boolean;
   takeover: boolean;
   manual: boolean;
@@ -237,6 +259,164 @@ async function ask(rl: Interface | null, prompt: string): Promise<string> {
   }
 }
 
+/**
+ * The webmail browser started normally in the session (`env`) on
+ * `userDataDir` at `url`, the browser's own sign-in turned off in the
+ * profile first, its sandbox checked; `onChild` sees the process as soon
+ * as it exists (for the signal cleanup). Null, said why, when it cannot
+ * run sandboxed.
+ */
+async function launchWebmailBrowser(a: {
+  chrome: WebmailBrowser;
+  userDataDir: string;
+  url: string;
+  env: Record<string, string>;
+  unsafeNoSandbox: boolean;
+  label: string;
+  onChild: (c: ChildProcess) => void;
+}): Promise<ChildProcess | null> {
+  suppressBrowserSigninOffer(a.userDataDir);
+  let said = "";
+  const child = spawn(
+    a.chrome.path,
+    signinBrowserArgs(a.userDataDir, a.url, {
+      unsafeNoSandbox: a.unsafeNoSandbox,
+      extra: [...SIGNIN_SESSION_SWITCHES],
+    }),
+    { env: a.env, stdio: ["ignore", "ignore", "pipe"] },
+  );
+  a.onChild(child);
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (d: string) => {
+    said = (said + d).slice(-8192);
+  });
+  if (a.unsafeNoSandbox) {
+    say(
+      `WARNING: ${a.label}: --unsafe-no-sandbox: the browser runs WITHOUT Chromium's sandbox.`,
+    );
+    return child;
+  }
+  const sandboxed = await waitSandboxed(child, a.userDataDir, () => said);
+  if (sandboxed.ok) return child;
+  await stopBrowser(child);
+  say(
+    `CANNOT RUN: ${a.label}: Chromium's sandbox is not running (${sandboxed.reason}). ` +
+      "It needs unprivileged user namespaces (or a setuid sandbox named by CHROME_DEVEL_SANDBOX); --unsafe-no-sandbox runs without it, unsafely.",
+  );
+  return null;
+}
+
+/**
+ * `--typing-check`: the account's password typed the way the sign-in
+ * types it into a loopback page that compares digests. No provider, no
+ * attempt record, no lease, and the account's profile is not opened.
+ */
+async function typingCheckAccount(
+  o: Options,
+  host: HostEnv,
+  label: string,
+  password: Secret,
+  bin: string,
+): Promise<number> {
+  const chrome = webmailBrowser(host.env);
+  if ("reason" in chrome) throw new Error(chrome.reason);
+  const root = profilesRoot(host);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const work = mkdtempSync(join(root, ".typing-check-"));
+  const userDataDir = join(work, "chromium");
+  const framesDir = join(work, "frames");
+  mkdirSync(userDataDir, { mode: 0o700 });
+  mkdirSync(framesDir, { mode: 0o700 });
+  const stateDir = join(root, ".guiassert-state");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const ga = new GuiAssert({ bin, stateDir, env: host.env, timeoutMs: 60_000 });
+  const server = await startTypingCheckServer(password);
+  let session: GaSession | null = null;
+  let browser: ChildProcess | null = null;
+  const cleanup = (): void => {
+    if (
+      browser !== null &&
+      browser.exitCode === null &&
+      browser.signalCode === null
+    )
+      browser.kill("SIGINT");
+    if (session !== null) ga.sessionStopSync(session.id);
+    session = null;
+    rmSync(work, { recursive: true, force: true });
+  };
+  const removeCleanup = installSignalCleanup(cleanup);
+  try {
+    try {
+      session = await ga.sessionStart({
+        name: `typing-check-${o.set}-${process.pid}`,
+        width: SIGNIN_SCREEN.width,
+        height: SIGNIN_SCREEN.height,
+        vncSocket: o.vnc,
+      });
+    } catch (err) {
+      if (err instanceof GuiAssertError) {
+        say(`CANNOT RUN: ${label}: no private display session: ${err.message}`);
+        return EXIT.hostCannot;
+      }
+      throw err;
+    }
+    if (o.vnc) for (const l of vncHint(session)) say(l);
+    say(
+      `${label}: typing check: ${chrome.label} on a throw-away profile at a loopback page; no provider is contacted`,
+    );
+    const child = await launchWebmailBrowser({
+      chrome,
+      userDataDir,
+      url: server.url,
+      env: sessionEnv(host.env, session),
+      unsafeNoSandbox: o.unsafeNoSandbox,
+      label,
+      onChild: (c) => (browser = c),
+    });
+    if (child === null) return EXIT.hostCannot;
+    if (child.pid === undefined) throw new Error("the browser did not start");
+    let r;
+    try {
+      r = await runTypingCheck({
+        ga: ga.inSession(session.id),
+        browserPid: child.pid,
+        timings: { focusSettleMs: DEFAULT_TIMINGS.focusSettleMs },
+        server,
+        typed: password,
+        guard: password,
+        framesDir,
+        timeoutMs: o.timeoutS * 1000,
+        pollMs: 1000,
+        log: (l) => say(`${label}: ${l}`),
+      });
+    } finally {
+      await stopBrowser(child);
+    }
+    switch (r.result) {
+      case "match":
+        say(`TYPING CHECK MATCH: ${label} (length match: yes)`);
+        return EXIT.signedIn;
+      case "mismatch":
+        say(
+          `TYPING CHECK MISMATCH: ${label} (length match: ${r.lengthMatch ? "yes" : "no"}): what reached the page is not the account file's password.`,
+        );
+        return EXIT.failed;
+      case "secret-visible":
+        say(
+          `STOPPED (secret-visible): ${label}: the password was legible on the check page's screen; no frame kept.`,
+        );
+        return EXIT.secretVisible;
+      case "failed":
+        say(`TYPING CHECK FAILED: ${label}: ${r.reason}`);
+        return EXIT.failed;
+    }
+  } finally {
+    cleanup();
+    removeCleanup();
+    await server.close();
+  }
+}
+
 async function signInAccount(
   o: Options,
   host: HostEnv,
@@ -263,6 +443,7 @@ async function signInAccount(
     }
     throw err;
   }
+  if (o.typingCheck) return typingCheckAccount(o, host, label, password, bin);
   const profile = accountProfile(host, o.set, acct.file, true);
 
   // 1. The guard, before anything starts.
@@ -348,40 +529,16 @@ async function signInAccount(
     // The webmail browser on the account's profile, started normally in
     // the session at `url`, its sandbox checked; null (said why) when it
     // cannot run sandboxed.
-    const startBrowser = async (url: string): Promise<ChildProcess | null> => {
-      let said = "";
-      const child = spawn(
-        chrome.path,
-        signinBrowserArgs(profile.userDataDir, url, {
-          unsafeNoSandbox: o.unsafeNoSandbox,
-          extra: [...SIGNIN_SESSION_SWITCHES],
-        }),
-        { env, stdio: ["ignore", "ignore", "pipe"] },
-      );
-      browser = child;
-      child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (d: string) => {
-        said = (said + d).slice(-8192);
+    const startBrowser = (url: string): Promise<ChildProcess | null> =>
+      launchWebmailBrowser({
+        chrome,
+        userDataDir: profile.userDataDir,
+        url,
+        env,
+        unsafeNoSandbox: o.unsafeNoSandbox,
+        label,
+        onChild: (c) => (browser = c),
       });
-      if (o.unsafeNoSandbox) {
-        say(
-          `WARNING: ${label}: --unsafe-no-sandbox: the browser runs WITHOUT Chromium's sandbox.`,
-        );
-        return child;
-      }
-      const sandboxed = await waitSandboxed(
-        child,
-        profile.userDataDir,
-        () => said,
-      );
-      if (sandboxed.ok) return child;
-      await stopBrowser(child);
-      say(
-        `CANNOT RUN: ${label}: Chromium's sandbox is not running (${sandboxed.reason}). ` +
-          "It needs unprivileged user namespaces (or a setuid sandbox named by CHROME_DEVEL_SANDBOX); --unsafe-no-sandbox runs without it, unsafely.",
-      );
-      return null;
-    };
     mkdirSync(framesDir, { recursive: true, mode: 0o700 });
 
     let outcome: SigninOutcome | null = null;
@@ -463,6 +620,10 @@ async function signInAccount(
                 ? `STOPPED (secret-visible): ${label}: the password was legible on the screen after ${took}; no frame kept. Not retried.`
                 : `FAILED (${outcomeName(outcome)}): ${label}: after ${took}; ${shot}. Not retried.`;
           say(what);
+          if (outcome.result === "wrong-password")
+            say(
+              `${label}: the provider refused the account file's password. Do not run the sign-in again until the credential is corrected: re-seal it at its source (runbook docs/webmail-signin.md, "Re-sealing a QA password"), then confirm it with --typing-check.`,
+            );
           if (o.takeover && TAKEOVER_OUTCOMES.has(outcome.result)) {
             say(
               `${label}: --takeover: the browser stays open; finish the sign-in over VNC, then press Enter here.`,
@@ -471,10 +632,11 @@ async function signInAccount(
           } else {
             finish(outcomeName(outcome));
             await stopBrowser(child);
-            if (attempt !== null)
-              say(
-                `${label}: the next automated attempt is allowed from ${new Date(Date.parse((attempt as AttemptRecord).started_at) + COOLDOWN_MS).toISOString()}.`,
-              );
+            say(
+              attempt !== null
+                ? `${label}: the next automated attempt is allowed from ${new Date(Date.parse((attempt as AttemptRecord).started_at) + COOLDOWN_MS).toISOString()}.`
+                : `${label}: no input reached the provider: no attempt recorded, so no cool-down.`,
+            );
             return exitFor(outcome);
           }
         }
@@ -576,6 +738,7 @@ function parseArgs(args: string[]): Options | string {
   let account: string | undefined;
   const o = {
     checkOnly: false,
+    typingCheck: false,
     vnc: false,
     takeover: false,
     manual: false,
@@ -593,6 +756,7 @@ function parseArgs(args: string[]): Options | string {
     };
     if (a === "--account") account = value();
     else if (a === "--check-only") o.checkOnly = true;
+    else if (a === "--typing-check") o.typingCheck = true;
     else if (a === "--vnc") o.vnc = true;
     else if (a === "--takeover") o.takeover = true;
     else if (a === "--manual") o.manual = true;
@@ -615,6 +779,15 @@ function parseArgs(args: string[]): Options | string {
     return "--manual and --takeover exclude each other";
   if (o.overrideCooldown && (o.manual || o.checkOnly))
     return "--override-cooldown applies to an automated attempt only";
+  if (
+    o.typingCheck &&
+    (o.manual ||
+      o.checkOnly ||
+      o.takeover ||
+      o.overrideCooldown ||
+      o.playwrightCheck)
+  )
+    return "--typing-check takes only --vnc, --dir, --timeout and --unsafe-no-sandbox";
   return { set, account, ...o };
 }
 

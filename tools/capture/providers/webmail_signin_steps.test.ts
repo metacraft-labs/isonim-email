@@ -1,7 +1,8 @@
 // tools/capture/providers/webmail_signin_steps.test.ts — the automated
 // webmail sign-in's screen recognition: each provider's screens, every
-// challenge kind, the errors, and the order that settles a page carrying
-// words of two screens; an unknown screen is not guessed.
+// challenge kind, the errors, the account-setup interstitials, and the
+// order that settles a page carrying words of two screens; an unknown
+// screen is not guessed.
 //
 // The OCR texts below are invented in the providers' wording (with the
 // noise OCR adds: the browser's own bar, lost apostrophes, odd line
@@ -22,6 +23,7 @@ import {
   OUTLOOK_SIGNIN,
   PROVIDER_SIGNIN,
   type ProviderSignin,
+  SKIP_CONTROLS,
   YAHOO_SIGNIN,
 } from "./webmail_signin_steps.ts";
 
@@ -43,6 +45,8 @@ const kind = (p: ProviderSignin, text: string): string => {
       return `challenge:${s.challenge}`;
     case "error":
       return `error:${s.error}`;
+    case "interstitial":
+      return `interstitial:${s.interstitial}`;
     default:
       return s.kind;
   }
@@ -156,16 +160,14 @@ describe("Gmail screens", () => {
       ],
       ["Confirm you’re not a robot\nType the text you hear or see", "captcha"],
       [
-        "Simplify your sign-in\nWith passkeys, you can now use your fingerprint, face, or screen lock",
-        "passkey",
-      ],
-      [
         "Use your passkey to confirm it's really you\nYour device will ask for your fingerprint, face, or screen lock",
         "passkey",
       ],
       [
-        "Make sure you can always sign in to your Google Account\nAdd recovery phone",
-        "protect-account",
+        // A challenge that mentions protecting the account is still the
+        // challenge: hard challenges come before interstitials.
+        "Verify it's you\nTo protect your account, Google wants to make sure it's really you",
+        "verify-identity",
       ],
       [
         "Account recovery\nThis helps show that this account really belongs to you",
@@ -182,6 +184,59 @@ describe("Gmail screens", () => {
     ];
     for (const [text, want] of cases)
       assert.equal(kind(g, screen(text)), `challenge:${want}`, text);
+  });
+  it("reads Google's account-setup screens after the sign-in as interstitials, not challenges", () => {
+    // As measured on 2026-10-28 (gds.google.com/web/homeaddress), with
+    // and without Chrome's own sign-in bubble over it.
+    const homeAddress = [
+      "Set a home address",
+      "Your home and work addresses are used to personalize your experiences across Google products, and for ads purposes as described in Google's Privacy Policy.",
+      "qa@example.com",
+      "Home address",
+      "You can change or remove this any time in your Google Account settings.",
+      "Skip",
+      "Save",
+    ];
+    assert.equal(kind(g, screen(...homeAddress)), "interstitial:home-address");
+    assert.equal(
+      kind(
+        g,
+        screen(
+          ...homeAddress,
+          "Sign in to Chrome?",
+          "Make Chrome your own",
+          "To get your passwords and more on all your devices, sign in to Chrome",
+          "Continue as QA",
+          "Use Chrome without an account",
+        ),
+      ),
+      "interstitial:home-address",
+    );
+    const cases: [string, string][] = [
+      [
+        "Make sure you can always sign in to your Google Account\nAdd recovery phone\nCancel\nSave",
+        "always-sign-in",
+      ],
+      [
+        "Add a recovery phone\nIf you forget your password, Google can send you a text message with a code\nNot now\nNext",
+        "recovery-phone",
+      ],
+      [
+        "Add a recovery email\nIf you get locked out, Google can send a code to this email\nSkip\nNext",
+        "recovery-email",
+      ],
+      [
+        "Simplify your sign-in\nWith passkeys, you can now use your fingerprint, face, or screen lock\nCreate a passkey\nNot now",
+        "passkey-enrolment",
+      ],
+      [
+        "Protect your account\nReview these settings to keep your account safe\nRemind me later",
+        "protect-account",
+      ],
+      ["Set a work address\nWork address\nSkip\nSave", "work-address"],
+    ];
+    for (const [text, want] of cases)
+      assert.equal(kind(g, screen(text)), `interstitial:${want}`, text);
   });
 });
 
@@ -203,6 +258,30 @@ describe("Yahoo screens (and AOL's, which are Yahoo's)", () => {
         ),
         "step:address",
       );
+      // As measured on 2026-10-28: "Username, email or phone number",
+      // beside an advertisement.
+      assert.equal(
+        kind(
+          y,
+          screen(
+            "yahoo!",
+            "Help Terms Privacy",
+            "yahoo!finance",
+            "THE #1 FINANCE DESTINATION",
+            "DISCOVER WHAT'S NEW",
+            "Sign in to Yahoo Mail",
+            "Username, email or phone number",
+            "Stay signed in",
+            "Forgot username",
+            "Next",
+            "or",
+            "Sign in with Google",
+            "Create account",
+            "Real-time alerts to keep your edge",
+          ),
+        ),
+        "step:address",
+      );
       assert.equal(
         kind(
           y,
@@ -217,6 +296,49 @@ describe("Yahoo screens (and AOL's, which are Yahoo's)", () => {
           ),
         ),
         "step:password",
+      );
+      // A password screen without the heading.
+      assert.equal(
+        kind(
+          y,
+          screen(
+            "yahoo!",
+            "qa@example.com",
+            "Password",
+            "Show",
+            "Next",
+            "Forgot password?",
+          ),
+        ),
+        "step:password",
+      );
+      // Its address screen is never a password screen.
+      assert.equal(
+        kind(
+          y,
+          screen(
+            "Sign in to Yahoo Mail",
+            "Username, email or phone number",
+            "Next",
+            "Forgot username",
+          ),
+        ),
+        "step:address",
+      );
+      assert.equal(
+        kind(y, screen("Password", "Incorrect password. Try again.", "Next")),
+        "error:wrong-password",
+      );
+      assert.equal(
+        kind(
+          y,
+          screen(
+            "Add a recovery phone",
+            "Help keep your account secure",
+            "Remind me later",
+          ),
+        ),
+        "interstitial:recovery-phone",
       );
       assert.equal(
         kind(y, screen("Compose", "Inbox", "Unread", "Starred", "Drafts")),
@@ -355,6 +477,23 @@ describe("Outlook.com screens", () => {
       ),
       "error:wrong-password",
     );
+    // As measured on 2026-10-28.
+    assert.equal(
+      kind(
+        o,
+        screen(
+          "Microsoft",
+          "qa@example.com",
+          "Enter your password",
+          "Password",
+          "That password is incorrect for your Microsoft account.",
+          "Next",
+          "Send a code to qa*****@example.com",
+          "Sign in with a different Microsoft account",
+        ),
+      ),
+      "error:wrong-password",
+    );
     assert.equal(
       kind(
         o,
@@ -474,6 +613,29 @@ describe("the tables", () => {
         covered.add(r.kind);
     assert.deepEqual([...covered].sort(), [...CHALLENGE_KINDS].sort());
   });
+  it("never give an interstitial a phrase a challenge or an error of the same provider would claim first", () => {
+    for (const p of Object.values(PROVIDER_SIGNIN))
+      for (const r of p.interstitials) {
+        assert.ok(r.any.length > 0, `${p.label} ${r.name}`);
+        for (const ip of r.any)
+          for (const rule of [...p.hardChallenges, ...p.errors])
+            for (const cp of rule.any)
+              assert.ok(
+                !normalize(ip).includes(normalize(cp)),
+                `${p.label}: interstitial ${r.name} "${ip}" is shadowed by "${cp}"`,
+              );
+      }
+    assert.ok(GMAIL_SIGNIN.interstitials.length > 0);
+  });
+  it("dismiss an interstitial only through a control that declines it", () => {
+    for (const c of SKIP_CONTROLS)
+      assert.doesNotMatch(
+        c,
+        /save|next|continue|confirm|done|yes|ok|add|update|create|verify/i,
+        c,
+      );
+    assert.ok(SKIP_CONTROLS.includes("Skip"));
+  });
   it("give every provider an address and a password screen and a field name for the address", () => {
     for (const p of Object.values(PROVIDER_SIGNIN)) {
       const steps = p.steps.map((s) => s.step);
@@ -484,6 +646,9 @@ describe("the tables", () => {
       assert.match(p.startUrl, /^https:\/\//, p.label);
     }
     assert.ok(GMAIL_SIGNIN.addressField.test("Email or phone"));
+    assert.ok(
+      YAHOO_SIGNIN.addressField.test("Username, email or phone number"),
+    );
     assert.ok(!GMAIL_SIGNIN.addressField.test("Address and search bar"));
     assert.ok(!YAHOO_SIGNIN.addressField.test("Address and search bar"));
     assert.ok(!OUTLOOK_SIGNIN.addressField.test("Address and search bar"));

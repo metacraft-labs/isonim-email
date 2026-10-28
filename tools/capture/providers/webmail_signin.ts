@@ -24,13 +24,19 @@
 //   ends the attempt as `stuck`, a screen that matches nothing for
 //   `unknownMs` as `unknown-screen`, and the whole attempt has
 //   `deadlineMs`;
+// - an account-setup interstitial after the sign-in (a home address, a
+//   recovery phone, a passkey offer, ...) is only ever dismissed: one
+//   click on a button or link named exactly as one of SKIP_CONTROLS
+//   ("Skip", "Not now", ...), never a keystroke and never another
+//   control; each interstitial at most once (`stuck` and
+//   `field-not-found` as for a step, named `interstitial:<name>`);
 // - a challenge stops it at once with no further input, and nothing in
 //   here retries: the caller reports the result and the cool-down
 //   (webmail_signin_guard.ts) keeps a second attempt from following.
 // `verifySignedIn` is the check afterwards, in the same way: OCR of the
 // mailbox in a browser started again on the profile, with no input.
 
-import { rmSync } from "node:fs";
+import { chmodSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -45,8 +51,12 @@ import {
   classifyScreen,
   type ProviderSignin,
   type SigninErrorKind,
+  SKIP_CONTROLS,
   type StepId,
 } from "./webmail_signin_steps.ts";
+
+/** What the procedure acted on: a step, or an interstitial it dismissed. */
+export type ActionId = StepId | `interstitial:${string}`;
 
 /** The private session's one display. */
 export const SIGNIN_SCREEN = { width: 1280, height: 900 } as const;
@@ -116,8 +126,8 @@ export type SigninOutcome =
   | { result: "challenged"; challenge: ChallengeKind; phrase: string }
   | { result: SigninErrorKind; phrase: string }
   | { result: "unknown-screen" }
-  | { result: "stuck"; step: StepId }
-  | { result: "field-not-found"; step: StepId }
+  | { result: "stuck"; step: ActionId }
+  | { result: "field-not-found"; step: ActionId }
   | { result: "secret-visible" }
   | { result: "deadline" };
 
@@ -158,7 +168,7 @@ export interface SigninResult {
   outcome: SigninOutcome;
   /** The kept screenshot, when one was taken and the guard kept it. */
   screen: string | null;
-  steps: StepId[];
+  steps: ActionId[];
   elapsedMs: number;
 }
 
@@ -194,7 +204,7 @@ export function isPasswordField(e: GaElement): boolean {
   );
 }
 
-async function focusedElement(ctx: SigninContext): Promise<GaElement | null> {
+async function focusedElement(ctx: FieldFocuser): Promise<GaElement | null> {
   const f = await ctx.ga.find({
     pid: ctx.browserPid,
     states: ["focused"],
@@ -203,13 +213,18 @@ async function focusedElement(ctx: SigninContext): Promise<GaElement | null> {
   return f.find((e) => e.role === "text-field") ?? null;
 }
 
+/** What finding and focusing a field needs. */
+export type FieldFocuser = Pick<SigninContext, "ga" | "browserPid"> & {
+  timings: Pick<SigninTimings, "focusSettleMs">;
+};
+
 /**
  * Leaves the focus in a field `want` accepts, clicking the first visible
  * such field when the focus is elsewhere; true only when the focused
  * element, read back, is one.
  */
 export async function focusField(
-  ctx: SigninContext,
+  ctx: FieldFocuser,
   want: (e: GaElement) => boolean,
 ): Promise<boolean> {
   const now = await focusedElement(ctx);
@@ -248,6 +263,29 @@ async function clickControl(
   return true;
 }
 
+/**
+ * Clicks the first visible button or link named exactly as one of
+ * SKIP_CONTROLS, in their order; the name clicked, or null when there is
+ * none (then nothing was clicked).
+ */
+async function clickSkipControl(
+  ctx: SigninContext,
+  before: () => void,
+): Promise<string | null> {
+  for (const name of SKIP_CONTROLS)
+    for (const role of ["button", "link"]) {
+      const target = (
+        await ctx.ga.find({ pid: ctx.browserPid, role, name })
+      ).filter(usable)[0];
+      if (target === undefined) continue;
+      const [x, y] = centre(target.bounds!);
+      before();
+      await ctx.ga.click(x, y);
+      return name;
+    }
+  return null;
+}
+
 /** Types the password into the focused protected field (the --manual path). */
 export async function typePasswordIntoField(
   ctx: SigninContext,
@@ -282,6 +320,9 @@ async function keepScreen(ctx: SigninContext): Promise<string | null> {
   rmSync(ctx.keepPath, { force: true });
   try {
     await ctx.ga.screenshot(ctx.keepPath, ctx.password);
+    // GuiAssert writes it with its own umask: owner-only, like every
+    // other file in the profile directory.
+    if (existsSync(ctx.keepPath)) chmodSync(ctx.keepPath, 0o600);
     return ctx.keepPath;
   } catch (err) {
     if (err instanceof GuiAssertError) {
@@ -299,8 +340,8 @@ async function keepScreen(ctx: SigninContext): Promise<string | null> {
 export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
   const t0 = Date.now();
   const deadline = t0 + ctx.timings.deadlineMs;
-  const acted = new Map<StepId, number>();
-  const steps: StepId[] = [];
+  const acted = new Map<ActionId, number>();
+  const steps: ActionId[] = [];
   let typedAnything = false;
   let unknownSince: number | null = null;
   let reads = 0;
@@ -353,6 +394,25 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
         if (now - unknownSince >= ctx.timings.unknownMs)
           return end({ result: "unknown-screen" }, true);
         break;
+      case "interstitial": {
+        const id: ActionId = `interstitial:${screen.interstitial}`;
+        const at = acted.get(id);
+        if (at !== undefined) {
+          if (now - at >= ctx.timings.stuckMs)
+            return end({ result: "stuck", step: id }, true);
+          break;
+        }
+        ctx.log(
+          `screen: an account-setup screen (${screen.interstitial}: "${screen.phrase}")`,
+        );
+        const clicked = await clickSkipControl(ctx, firstInput);
+        if (clicked === null)
+          return end({ result: "field-not-found", step: id }, true);
+        ctx.log(`  dismissed it with "${clicked}"`);
+        acted.set(id, Date.now());
+        steps.push(id);
+        break;
+      }
       case "step": {
         const step = screen.step;
         const at = acted.get(step);
@@ -444,7 +504,8 @@ export type VerifyOutcome =
  * provider (Playwright's would show it `navigator.webdriver` and
  * `--enable-automation`). It never types, clicks or presses a key.
  * - the mailbox screen: signed in;
- * - a sign-in step, a challenge or an error screen that stays for
+ * - a sign-in step, a challenge, an error or an account-setup screen
+ *   (never dismissed here) that stays for
  *   `settleMs`: not signed in, naming the screen (the profile was sent
  *   to a sign-in page);
  * - neither within `timeoutMs`: not signed in;
@@ -476,7 +537,9 @@ export async function verifySignedIn(
           ? `a challenge (${screen.challenge}: "${screen.phrase}")`
           : screen.kind === "error"
             ? `an error (${screen.error}: "${screen.phrase}")`
-            : null;
+            : screen.kind === "interstitial"
+              ? `an account-setup screen (${screen.interstitial}: "${screen.phrase}")`
+              : null;
     // The same non-mailbox screen since when (a new one restarts it).
     const cur: Seen | null =
       what === null ? null : seen?.what === what ? seen : { what, since: now };
@@ -484,7 +547,9 @@ export async function verifySignedIn(
     if (cur !== null && now - cur.since >= ctx.settleMs)
       return {
         signedIn: false,
-        reason: `the inbox URL showed ${cur.what}, not the mailbox: the profile is not signed in`,
+        reason: cur.what.startsWith("an account-setup screen")
+          ? `the inbox URL showed ${cur.what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`
+          : `the inbox URL showed ${cur.what}, not the mailbox: the profile is not signed in`,
       };
     if (now >= deadline)
       return {

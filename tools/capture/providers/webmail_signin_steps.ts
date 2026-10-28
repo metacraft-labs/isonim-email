@@ -16,10 +16,19 @@
 //   3. errors (wrong password, unknown account): stop, never retry;
 //   4. the step screens: address, password, and the two small ones
 //      (Outlook.com's "Use your password" option, "Stay signed in?");
-//   5. soft challenges (a code, a phone): only when no step screen
-//      matched, because a password screen may offer "email a code" as an
-//      alternative;
-//   6. otherwise `unknown`: never guessed at.
+//   5. account-setup interstitials: what a provider asks for once the
+//      sign-in has succeeded (a home address, a recovery phone, a passkey
+//      offer, ...); the procedure only ever dismisses one through an
+//      explicit skip control (SKIP_CONTROLS), never answers it;
+//   6. soft challenges (a code, a phone): only when no step screen or
+//      interstitial matched, because a password screen may offer "email a
+//      code" as an alternative, and a recovery-phone interstitial talks
+//      about text messages;
+//   7. otherwise `unknown`: never guessed at.
+//
+// A phrase is never both a challenge and an interstitial of one
+// provider (the test checks it): hard challenges come first, so such an
+// interstitial could never be reached.
 //
 // Every phrase is an expectation until the live sign-in of each QA
 // account confirms it [measure: the first real attempt per provider].
@@ -85,6 +94,28 @@ export interface ErrorRule {
   any: string[];
 }
 
+/** A screen asking for more account data after the sign-in. */
+export interface InterstitialRule {
+  /** A short name for logs and results (`home-address`, ...). */
+  name: string;
+  any: string[];
+}
+
+/**
+ * The accessible names of the controls that dismiss an interstitial
+ * without answering it, in order of preference. Nothing else is ever
+ * clicked on one: not "Save", "Next", "Continue", "Confirm" or "Done".
+ */
+export const SKIP_CONTROLS: readonly string[] = [
+  "Skip",
+  "Skip for now",
+  "Not now",
+  "Remind me later",
+  "Maybe later",
+  "No thanks",
+  "Cancel",
+];
+
 export interface ProviderSignin {
   set: string;
   label: string;
@@ -101,6 +132,7 @@ export interface ProviderSignin {
   staySignedInControl?: string;
   hardChallenges: ChallengeRule[];
   errors: ErrorRule[];
+  interstitials: InterstitialRule[];
   softChallenges: ChallengeRule[];
 }
 
@@ -139,6 +171,7 @@ export type Screen =
   | { kind: "challenge"; challenge: ChallengeKind; phrase: string }
   | { kind: "error"; error: SigninErrorKind; phrase: string }
   | { kind: "step"; step: StepId }
+  | { kind: "interstitial"; interstitial: string; phrase: string }
   | { kind: "unknown" };
 
 /** Classifies one OCR text of the display (the order is the header's). */
@@ -161,6 +194,13 @@ export function classifyScreen(p: ProviderSignin, ocrText: string): Screen {
     };
   for (const s of p.steps)
     if (matches(norm, s)) return { kind: "step", step: s.step };
+  const inter = firstPhrase(norm, p.interstitials);
+  if (inter !== null)
+    return {
+      kind: "interstitial",
+      interstitial: p.interstitials[inter.index]!.name,
+      phrase: inter.phrase,
+    };
   const soft = firstPhrase(norm, p.softChallenges);
   if (soft !== null)
     return {
@@ -284,6 +324,62 @@ const COMMON_SOFT: ChallengeRule[] = [
   },
 ];
 
+/** `rules` without `phrases` (a rule left with none is dropped). */
+function without(rules: ChallengeRule[], phrases: string[]): ChallengeRule[] {
+  const drop = new Set(phrases.map(normalize));
+  return rules
+    .map((r) => ({ ...r, any: r.any.filter((p) => !drop.has(normalize(p))) }))
+    .filter((r) => r.any.length > 0);
+}
+
+// Google's account-setup screens after a successful sign-in (measured
+// 2026-10-28: "Set a home address" with "Skip" and "Save", on
+// gds.google.com). The others are Google's known prompts of the same
+// family [measure: as they appear].
+const GMAIL_INTERSTITIALS: InterstitialRule[] = [
+  {
+    name: "home-address",
+    any: ["set a home address", "add a home address", "set your home address"],
+  },
+  {
+    name: "work-address",
+    any: ["set a work address", "add a work address", "set your work address"],
+  },
+  // A heading over several prompts, before the prompts it lists.
+  {
+    name: "always-sign-in",
+    any: ["make sure you can always sign in"],
+  },
+  {
+    name: "recovery-phone",
+    any: [
+      "add a recovery phone",
+      "add recovery phone",
+      "confirm your recovery phone",
+      "update your recovery phone",
+    ],
+  },
+  {
+    name: "recovery-email",
+    any: [
+      "add a recovery email",
+      "add recovery email",
+      "confirm your recovery email",
+      "update your recovery email",
+    ],
+  },
+  { name: "protect-account", any: ["protect your account"] },
+  {
+    name: "passkey-enrolment",
+    any: [
+      "simplify your sign in",
+      "create a passkey",
+      "sign in faster with passkeys",
+      "sign in with passkeys",
+    ],
+  },
+];
+
 // ---------------------------------------------------------------------------
 // The providers
 // ---------------------------------------------------------------------------
@@ -302,15 +398,21 @@ export const GMAIL_SIGNIN: ProviderSignin = {
   ],
   addressField: /email or phone/i,
   // "Couldn't sign you in" heads several refusals; the more precise
-  // reason under it (an insecure browser, ...) is checked first.
+  // reason under it (an insecure browser, ...) is checked first. The
+  // account-setup prompts Google shows after a successful sign-in are
+  // interstitials here, not challenges.
   hardChallenges: [
-    ...COMMON_HARD,
+    ...without(
+      COMMON_HARD,
+      GMAIL_INTERSTITIALS.flatMap((r) => r.any),
+    ),
     { kind: "sign-in-refused", any: ["couldn't sign you in"] },
   ],
   errors: [
     { kind: "wrong-password", any: ["wrong password"] },
     { kind: "unknown-account", any: ["couldn't find your google account"] },
   ],
+  interstitials: GMAIL_INTERSTITIALS,
   softChallenges: [...COMMON_SOFT],
 };
 
@@ -320,17 +422,48 @@ export const YAHOO_SIGNIN: ProviderSignin = {
   startUrl:
     "https://login.yahoo.com/?.src=ym&done=https%3A%2F%2Fmail.yahoo.com%2F",
   done: { all: ["compose", "inbox"] },
+  // Measured 2026-10-28: the address screen reads "Sign in to Yahoo
+  // Mail", "Username, email or phone number", "Stay signed in", "Next"
+  // (with a large advertisement beside it). The password screen's
+  // heading is not measured yet; "Forgot password?" with "Next" is on it
+  // and on no address screen.
   steps: [
     { step: "password", any: ["enter password", "enter your password"] },
-    { step: "address", any: ["username email or mobile"] },
+    { step: "password", all: ["forgot password", "next"] },
+    {
+      step: "address",
+      any: ["username email or phone number", "username email or mobile"],
+    },
   ],
-  addressField: /username|email|mobile/i,
+  addressField: /username|email|mobile|phone/i,
   hardChallenges: [...COMMON_HARD],
   errors: [
-    { kind: "wrong-password", any: ["invalid password"] },
+    {
+      kind: "wrong-password",
+      any: ["invalid password", "incorrect password"],
+    },
     {
       kind: "unknown-account",
-      any: ["don't recognize this email", "we don't recognize"],
+      any: [
+        "don't recognize this email",
+        "we don't recognize",
+        "we don't recognise",
+      ],
+    },
+  ],
+  // Yahoo's prompts after a sign-in [measure: as they appear].
+  interstitials: [
+    {
+      name: "recovery-phone",
+      any: [
+        "add a recovery phone",
+        "add your phone number",
+        "is this still your phone",
+      ],
+    },
+    {
+      name: "recovery-email",
+      any: ["add a recovery email", "is this still your email"],
     },
   ],
   softChallenges: [
@@ -371,12 +504,15 @@ export const OUTLOOK_SIGNIN: ProviderSignin = {
   staySignedInControl: "Yes",
   hardChallenges: [...COMMON_HARD],
   errors: [
+    // Measured 2026-10-28: "That password is incorrect for your
+    // Microsoft account."
     { kind: "wrong-password", any: ["password is incorrect"] },
     {
       kind: "unknown-account",
       any: ["account doesn't exist", "couldn't find an account"],
     },
   ],
+  interstitials: [],
   softChallenges: [
     {
       kind: "passwordless-default",

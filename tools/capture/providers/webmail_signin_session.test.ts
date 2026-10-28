@@ -12,7 +12,9 @@
 // Gmail's and rendered by the webmail browser; the address and the
 // password reach the page's fields (the page receives them exactly once
 // each, the password through a password field it did not focus, so the
-// click-and-check path ran); the page sees no automation
+// click-and-check path ran); an account-setup screen after the password
+// ("Set a home address", its field focused) is declined through its
+// "Skip" link and nothing is saved; the page sees no automation
 // (navigator.webdriver is false on every page); the browser's command
 // line carries no automation switch and no password; the browser's
 // window shows no infobar (OCR finds no "automated" or "for testing"
@@ -22,13 +24,19 @@
 // the password stops the attempt, keeps a screenshot in which the
 // password is not legible (checked with GuiAssert's own guard), and
 // types nothing more; a session asked for VNC serves an owner-only
-// socket.
+// socket; the browser's own sign-in, turned off in the profile as the
+// recipe does before every start, stays off (Chrome kept both
+// preferences, and its profile menu offers no "Sign in to Chrome"); the
+// typing check (a loopback page comparing a salted SHA-256 of what was
+// typed) reports MATCH for passwords of every printable ASCII character
+// and of non-ASCII letters typed through GuiAssert into Google Chrome,
+// and MISMATCH for a different one.
 //
 // Test double (justification, per the repository's mock policy): the
 // real provider pages cannot be signed in to from a test, so a local
 // HTTP server on loopback plays Gmail's sign-in (an address page, a
-// password page, a "Verify it's you" page, and a mailbox behind a
-// session cookie), worded as Gmail words them. GuiAssert, the browser,
+// password page, a "Set a home address" page, a "Verify it's you" page,
+// and a mailbox behind a session cookie), worded as Gmail words them. GuiAssert, the browser,
 // tesseract, AT-SPI, Playwright and the profile are real.
 // Run (inside `nix develop`, which puts guiassert on PATH) with:
 //   node --test tools/capture/providers/webmail_signin_session.test.ts
@@ -40,6 +48,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -48,6 +57,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { resolveDriver } from "./browser_emulation.ts";
 import {
@@ -62,6 +72,7 @@ import {
   checkSignedIn,
   signinBrowserArgs,
   stopBrowser,
+  suppressBrowserSigninOffer,
   waitSandboxed,
   webmailBrowser,
   webmailLaunchOptions,
@@ -74,6 +85,10 @@ import {
   verifySignedIn,
 } from "./webmail_signin.ts";
 import { GMAIL_SIGNIN } from "./webmail_signin_steps.ts";
+import {
+  runTypingCheck,
+  startTypingCheckServer,
+} from "./webmail_typing_check.ts";
 
 const SENTINEL = "Sentinel-pw-7Qx9z";
 const ADDRESS = "qa.tester@example.com";
@@ -101,7 +116,11 @@ describe("the automated sign-in in a real GuiAssert session", () => {
   let server: Server;
   let port: number;
   let mode: "ok" | "challenge" = "ok";
-  const received = { identifier: [] as string[], password: [] as string[] };
+  const received = {
+    identifier: [] as string[],
+    password: [] as string[],
+    homeAddressSaved: 0,
+  };
   const probes: { webdriver: string; page: string }[] = [];
   let bin: string;
   let ga: GuiAssert;
@@ -158,10 +177,21 @@ describe("the automated sign-in in a real GuiAssert session", () => {
             res.writeHead(303, { location: "/challenge" });
             return res.end();
           }
+          // Signed in; then Google's account-setup screen, as measured on
+          // 2026-10-28 ("Set a home address", "Skip", "Save").
           res.writeHead(303, {
             "set-cookie": "session=yes; Max-Age=86400; Path=/",
-            location: "/mail/",
+            location: "/homeaddress",
           });
+          return res.end();
+        }
+        if (url.pathname === "/homeaddress" && req.method === "GET")
+          return html(
+            '<h1>Set a home address</h1><p>Your home and work addresses are used to personalize your experiences across Google products.</p><form method="post" action="/homeaddress"><input name="home" aria-label="Home address" autofocus autocomplete="off"><a href="/mail/">Skip</a> <button>Save</button></form>',
+          );
+        if (url.pathname === "/homeaddress" && req.method === "POST") {
+          received.homeAddressSaved++;
+          res.writeHead(303, { location: "/mail/" });
           return res.end();
         }
         if (url.pathname === "/challenge")
@@ -203,6 +233,8 @@ describe("the automated sign-in in a real GuiAssert session", () => {
   ) {
     const browser = webmailBrowser(process.env);
     if ("reason" in browser) throw new Error(browser.reason);
+    // As the recipe does before every start.
+    suppressBrowserSigninOffer(profile);
     let said = "";
     const child = spawn(
       browser.path,
@@ -334,7 +366,14 @@ describe("the automated sign-in in a real GuiAssert session", () => {
         { result: "signed-in", typed: true },
         a.events.join("\n"),
       );
-      assert.deepEqual(a.result.steps, ["address", "password"]);
+      // The account-setup screen declined through its "Skip" link, as
+      // Chrome's accessibility tree names it; nothing saved.
+      assert.deepEqual(a.result.steps, [
+        "address",
+        "password",
+        "interstitial:home-address",
+      ]);
+      assert.equal(received.homeAddressSaved, 0);
       assert.deepEqual(received.identifier, [ADDRESS]);
       assert.deepEqual(received.password, [SENTINEL]);
       assert.deepEqual(
@@ -440,5 +479,132 @@ describe("the automated sign-in in a real GuiAssert session", () => {
       (e: unknown) =>
         e instanceof GuiAssertError && e.reason === "secret-visible",
     );
+  });
+  it("keeps the browser's own sign-in off: both preferences stay false and the profile menu offers no sign-in", async () => {
+    const profile = join(scratch, "offer", "chromium");
+    mkdirSync(profile, { recursive: true, mode: 0o700 });
+    const frames = join(scratch, "offer", "frames");
+    mkdirSync(frames, { mode: 0o700 });
+    const session = await ga.sessionStart({
+      name: `signin-test-offer-${process.pid}`,
+      width: SIGNIN_SCREEN.width,
+      height: SIGNIN_SCREEN.height,
+      vncSocket: false,
+    });
+    const sga = ga.inSession(session.id);
+    try {
+      const child = await launch(
+        sessionEnv(process.env, session),
+        profile,
+        `http://127.0.0.1:${port}/mail/`,
+      );
+      try {
+        // The toolbar's profile button opens the menu that offers
+        // "Sign in to Chrome" when the browser's sign-in is allowed.
+        let you: { bounds: [number, number, number, number] | null }[] = [];
+        for (let i = 0; i < 20 && you.length === 0; i++) {
+          you = (
+            await sga.find({ pid: child.pid!, role: "button", name: "You" })
+          ).filter((e) => e.bounds !== null);
+          if (you.length === 0) await sleep(500);
+        }
+        assert.ok(you.length > 0, "the toolbar's profile button");
+        const b = you[0]!.bounds!;
+        // On a loaded host the first click can land before the toolbar
+        // takes input: click again until the menu shows.
+        const opened = /Guest profile|Add Chrome profile/i;
+        let menu = { text: "" };
+        for (let i = 0; i < 6 && !opened.test(menu.text); i++) {
+          await sga.click(b[0] + b[2] / 2, b[1] + b[3] / 2);
+          await sleep(2500);
+          menu = await sga.ocr(join(frames, "menu.png"), new Secret(SENTINEL));
+          rmSync(join(frames, "menu.png"), { force: true });
+        }
+        // The menu is open (it names the profile actions) ...
+        assert.match(menu.text, opened, menu.text);
+        // ... and offers no sign-in.
+        assert.doesNotMatch(
+          menu.text.replace(/\s+/g, ""),
+          /signintochrome|turnonsync/i,
+          menu.text,
+        );
+      } finally {
+        await stopBrowser(child);
+      }
+    } finally {
+      await ga.sessionStop(session.id);
+    }
+    // Chrome kept both (it resets `allowed` from the other at startup).
+    const prefs = JSON.parse(
+      readFileSync(join(profile, "Default", "Preferences"), "utf8"),
+    ) as { signin: Record<string, unknown> };
+    assert.equal(prefs.signin.allowed, false);
+    assert.equal(prefs.signin.allowed_on_next_startup, false);
+  });
+
+  it("types passwords of every printable ASCII character and of non-ASCII letters into the check page exactly (MATCH), and tells a different one (MISMATCH)", async () => {
+    let ascii = "";
+    for (let c = 0x20; c <= 0x7e; c++) ascii += String.fromCharCode(c);
+    // "𝄞" is outside the BMP: two UTF-16 units, one code point.
+    const nonAscii = "Grüße-Ñandú-Жук-€-éà-𝄞";
+    const differs = `${ascii.slice(0, -1)}}`;
+    assert.notEqual(differs, ascii);
+    const cases: { name: string; expected: string; typed: string }[] = [
+      { name: "ascii", expected: ascii, typed: ascii },
+      { name: "nonascii", expected: nonAscii, typed: nonAscii },
+      { name: "differs", expected: ascii, typed: differs },
+    ];
+    const session = await ga.sessionStart({
+      name: `signin-test-typing-${process.pid}`,
+      width: SIGNIN_SCREEN.width,
+      height: SIGNIN_SCREEN.height,
+      vncSocket: false,
+    });
+    const sga = ga.inSession(session.id);
+    const results: Record<string, unknown> = {};
+    try {
+      for (const c of cases) {
+        const profile = join(scratch, `typing-${c.name}`, "chromium");
+        mkdirSync(profile, { recursive: true, mode: 0o700 });
+        const frames = join(scratch, `typing-${c.name}`, "frames");
+        mkdirSync(frames, { mode: 0o700 });
+        const server = await startTypingCheckServer(new Secret(c.expected));
+        try {
+          const child = await launch(
+            sessionEnv(process.env, session),
+            profile,
+            server.url,
+          );
+          try {
+            results[c.name] = await runTypingCheck({
+              ga: sga,
+              browserPid: child.pid!,
+              timings: { focusSettleMs: 600 },
+              server,
+              typed: new Secret(c.typed),
+              guard: new Secret(c.expected),
+              framesDir: frames,
+              timeoutMs: 60_000,
+              pollMs: 500,
+              log: () => undefined,
+            });
+            // The page never echoes the field: nothing it served or
+            // showed carried the password.
+            assert.deepEqual(readdirSync(frames), []);
+          } finally {
+            await stopBrowser(child);
+          }
+        } finally {
+          await server.close();
+        }
+      }
+    } finally {
+      await ga.sessionStop(session.id);
+    }
+    assert.deepEqual(results, {
+      ascii: { result: "match", lengthMatch: true },
+      nonascii: { result: "match", lengthMatch: true },
+      differs: { result: "mismatch", lengthMatch: true },
+    });
   });
 });

@@ -32,7 +32,21 @@
 //   reaches the mailbox is checked in the same (stand-in) webmail browser
 //   started again on the inbox URL, without Playwright (which cannot run
 //   there), and recorded as verified by OCR (exit 0); `--check-only` on a
-//   signed-out profile exits 1 with no input and no attempt.
+//   signed-out profile exits 1 with no input and no attempt;
+// - an account-setup interstitial after the password (Gmail's "Set a
+//   home address") is dismissed by one click on its skip control and
+//   nothing else: no keystroke into its field, never "Save"; without a
+//   skip control the attempt stops (`field-not-found`), and one that
+//   stays after its dismissal is `stuck`; the check reports one on the
+//   inbox URL as not the mailbox, with no input;
+// - the kept screenshot is 0600 whatever the umask;
+// - the command line turns the browser's own sign-in off in the profile
+//   (both preferences, the rest of the file kept) before every browser
+//   start; a run that ends before any input records no attempt and says
+//   so; a wrong password names the re-sealing runbook step;
+//   `--typing-check` types the password into a loopback page (a stand-in
+//   browser that answers as the real page does) and prints only MATCH or
+//   MISMATCH, with no attempt, no lease and a throw-away profile.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // providers' sign-in pages and challenges cannot be reached from a test
@@ -59,6 +73,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -71,6 +86,7 @@ import { CREDENTIALS_SCHEMA } from "./requirements.ts";
 import {
   accountProfile,
   readSigninRecord,
+  SIGNIN_OFFER_PREFS,
   WEBMAIL_SIGNIN,
 } from "./webmail_profiles.ts";
 import {
@@ -511,6 +527,138 @@ describe("the automated sign-in procedure", () => {
     assert.ok(r.screen !== null);
   });
 
+  // Gmail's account-setup screen after the password, as measured on
+  // 2026-10-28: a focused "Home address" field, "Skip" (a link) and
+  // "Save".
+  const homeAddress = (
+    buttons: { name: string; role?: string; next: string }[],
+  ): StandinScenario["screens"][string] => ({
+    text: "Google\nSet a home address\nYour home and work addresses are used to personalize your experiences across Google products\nHome address\nSkip\nSave",
+    fields: [{ name: "Home address", bounds: ADDRESS_FIELD }],
+    focus: "Home address",
+    buttons: buttons.map((b, i) => ({
+      ...b,
+      bounds: [300 + 200 * i, 600, 80, 30] as [number, number, number, number],
+    })),
+  });
+  const afterPassword = (
+    h: Harness,
+  ): { inputs: StandinLogEntry[]; clicks: string[] } => {
+    const log = h.log();
+    const at = log.findIndex((e) => e.screen === "homeaddress");
+    const inputs = log
+      .slice(at)
+      .filter((e) => ["type", "key", "click"].includes(e.verb));
+    return {
+      inputs,
+      clicks: inputs
+        .filter((e) => e.verb === "click")
+        .map((e) => e.argv[e.argv.indexOf("--at") + 1]!),
+    };
+  };
+  const withInterstitial = (
+    buttons: { name: string; role?: string; next: string }[],
+  ): StandinScenario => {
+    const s = gmailScenario({ homeaddress: homeAddress(buttons) });
+    (s.screens.password!.submit as { then: string }).then = "homeaddress";
+    return s;
+  };
+
+  it("dismisses an account-setup screen after the password with its skip control only, then reaches the mailbox", async () => {
+    const h = harness(
+      withInterstitial([
+        { name: "Skip", role: "link", next: "inbox" },
+        { name: "Save", next: "inbox" },
+      ]),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, [
+      "address",
+      "password",
+      "interstitial:home-address",
+    ]);
+    // One click, on "Skip" (300+40, 600+15); no keystroke into the
+    // focused "Home address" field, no "Save".
+    assert.deepEqual(
+      afterPassword(h).inputs.map((e) => e.verb),
+      ["click"],
+    );
+    assert.deepEqual(afterPassword(h).clicks, ["340,615"]);
+    assert.equal(r.screen, null);
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("prefers the first skip control in its order, and never clicks anything else", async () => {
+    const h = harness(
+      withInterstitial([
+        { name: "Cancel", next: "inbox" },
+        { name: "Not now", next: "inbox" },
+        { name: "Continue", next: "inbox" },
+      ]),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.equal(r.outcome.result, "signed-in");
+    assert.deepEqual(afterPassword(h).clicks, ["540,615"]);
+  });
+
+  it("counts the click on an account-setup screen as the attempt's first input", async () => {
+    const s = withInterstitial([{ name: "Skip", role: "link", next: "inbox" }]);
+    s.start = "homeaddress";
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.equal(r.outcome.result, "signed-in");
+    assert.deepEqual(r.steps, ["interstitial:home-address"]);
+    assert.deepEqual(h.calls, ["first-input after 0 keystroke calls"]);
+  });
+
+  it("stops at an account-setup screen it cannot decline, with no input on it", async () => {
+    const h = harness(
+      withInterstitial([
+        { name: "Save", next: "inbox" },
+        { name: "Next", next: "inbox" },
+      ]),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "field-not-found",
+      step: "interstitial:home-address",
+    });
+    assert.deepEqual(afterPassword(h).inputs, []);
+    assert.ok(r.screen !== null);
+  });
+
+  it("ends as stuck when an account-setup screen stays after its dismissal, clicking once", async () => {
+    const h = harness(
+      withInterstitial([{ name: "Skip", role: "link", next: "homeaddress" }]),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "stuck",
+      step: "interstitial:home-address",
+    });
+    assert.deepEqual(afterPassword(h).clicks, ["340,615"]);
+  });
+
+  it("keeps its screenshot owner-only whatever the umask", async () => {
+    const challenge = { text: "Google\nVerify it's you\nTry another way" };
+    const s = gmailScenario({ challenge });
+    (s.screens.password!.submit as { then: string }).then = "challenge";
+    const h = harness(s);
+    // GuiAssert (here its stand-in) inherits the umask and writes the
+    // file with it.
+    const old = process.umask(0o000);
+    let r;
+    try {
+      r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    } finally {
+      process.umask(old);
+    }
+    assert.equal(r.outcome.result, "challenged");
+    assert.ok(r.screen !== null);
+    assert.equal(statSync(r.screen).mode & 0o777, 0o600);
+  });
+
   it("ends as stuck when the password screen stays after its step, typing the password once", async () => {
     const s = gmailScenario();
     s.screens.password!.submit = "password";
@@ -639,6 +787,31 @@ describe("the automated sign-in procedure", () => {
     noInput(h2.log());
   });
 
+  it("reports an account-setup screen on the inbox URL as not the mailbox, and dismisses nothing", async () => {
+    const s = gmailScenario({
+      homeaddress: {
+        text: "Google\nSet a home address\nHome address\nSkip\nSave",
+        buttons: [
+          {
+            name: "Skip",
+            role: "link",
+            bounds: [300, 600, 80, 30],
+            next: "inbox",
+          },
+        ],
+      },
+    });
+    s.start = "homeaddress";
+    const h = harness(s);
+    const r = await verifySignedIn(verifyCtx(h));
+    assert.ok(!r.signedIn);
+    assert.match(
+      r.reason,
+      /^the inbox URL showed an account-setup screen \(home-address: "set a home address"\), not the mailbox: .*the check dismisses nothing/,
+    );
+    noInput(h.log());
+  });
+
   it("keeps the sentinel off every argv and environment across all of the above", () => {
     // A cross-check over every log written by the tests above.
     for (const d of readdirSync(scratch).filter((x) => x.startsWith("run"))) {
@@ -667,7 +840,7 @@ describe("email-webmail-signin (the command line)", () => {
   const browserExe = join(scratch, "webmail-browser");
   writeFileSync(
     browserExe,
-    `#!/bin/sh\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nexec sleep 600\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\nexec sleep 600\n`,
     { mode: 0o755 },
   );
 
@@ -973,6 +1146,280 @@ describe("email-webmail-signin (the command line)", () => {
       [],
     );
     assert.equal(readAttempt(profile()).kind, "none");
+  });
+
+  it("turns the browser's own sign-in off in the profile before every browser start, keeping the rest of its preferences", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const prefsPath = join(profile().userDataDir, "Default", "Preferences");
+    mkdirSync(dirname(prefsPath), { recursive: true });
+    writeFileSync(
+      prefsPath,
+      JSON.stringify({
+        keep: { me: 1 },
+        signin: { other: true, allowed: true },
+      }),
+    );
+    const c = cliEnv(gmailScenario());
+    resetDesktop(c.state);
+    const before = new Set(readdirSync(browserLog));
+    const r = run(c.env, "--unsafe-no-sandbox", "--timeout", "10");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    // Two starts (the sign-in, the check); each found the preferences
+    // already written when it started.
+    const seen = readdirSync(browserLog).filter(
+      (f) => !before.has(f) && f.startsWith("prefs."),
+    );
+    assert.equal(seen.length, 2);
+    for (const f of seen) {
+      const p = JSON.parse(readFileSync(join(browserLog, f), "utf8")) as {
+        keep: unknown;
+        signin: Record<string, unknown>;
+      };
+      assert.deepEqual(p.keep, { me: 1 });
+      assert.deepEqual(p.signin, { other: true, ...SIGNIN_OFFER_PREFS });
+    }
+    assert.deepEqual(SIGNIN_OFFER_PREFS, {
+      allowed: false,
+      allowed_on_next_startup: false,
+    });
+    assert.equal(statSync(prefsPath).mode & 0o777, 0o600);
+  });
+
+  it("records no attempt for a run that ended before any input, says so, and keeps its screenshot 0600 under umask 000", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    rmSync(join(profile().dir, "signin-screen.png"), { force: true });
+    // The first screen is already a challenge: nothing is typed.
+    const c = cliEnv({
+      start: "captcha",
+      screens: {
+        captcha: {
+          text: "Google\nConfirm you're not a robot\nType the text you hear or see",
+        },
+      },
+    });
+    resetDesktop(c.state);
+    const r = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        'umask 000; exec "$0" "$@"',
+        process.execPath,
+        signinCli,
+        "gmail-workspace",
+        "--unsafe-no-sandbox",
+      ],
+      { env: c.env, encoding: "utf8", timeout: 120_000 },
+    );
+    assert.equal(r.status, 5, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /gmail-workspace\/qa1: no input reached the provider: no attempt recorded, so no cool-down\./,
+    );
+    assert.doesNotMatch(r.stdout, /next automated attempt is allowed/);
+    assert.equal(readAttempt(profile()).kind, "none");
+    assert.deepEqual(
+      readLog(c.state).filter((e) => ["type", "key", "click"].includes(e.verb)),
+      [],
+    );
+    const kept = join(profile().dir, "signin-screen.png");
+    assert.equal(statSync(kept).mode & 0o777, 0o600);
+    // And a second run is not held back by a cool-down.
+    resetDesktop(c.state);
+    const again = run(c.env, "--unsafe-no-sandbox");
+    assert.equal(again.status, 5, again.stdout);
+  });
+
+  it("names the re-sealing runbook step and the typing check on a wrong password", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const s = gmailScenario();
+    (s.screens.password!.submit as { equals: string }).equals =
+      "not the stored password";
+    const c = cliEnv(s);
+    resetDesktop(c.state);
+    const r = run(c.env, "--unsafe-no-sandbox");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /FAILED \(wrong-password\): gmail-workspace\/qa1/);
+    assert.match(
+      r.stdout,
+      /the provider refused the account file's password\. Do not run the sign-in again until the credential is corrected: re-seal it at its source \(runbook docs\/webmail-signin\.md, "Re-sealing a QA password"\), then confirm it with --typing-check\./,
+    );
+    assert.ok(!r.stdout.includes(SENTINEL));
+    const runbook = readFileSync(
+      join(repoRoot, "docs", "webmail-signin.md"),
+      "utf8",
+    );
+    assert.match(runbook, /^## Re-sealing a QA password$/m);
+  });
+
+  describe("--typing-check", () => {
+    // A stand-in for the browser on the check page: it loads the page
+    // and its expectation as the real page does, waits until the stand-in
+    // desktop's field was typed into and submitted, and posts the
+    // verdict the real page computes (SHA-256 of salt and the typed
+    // text). STANDIN_DROP_LAST makes it lose the last character typed.
+    const pageBrowser = join(scratch, "page-browser.mjs");
+    writeFileSync(
+      pageBrowser,
+      `import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+const url = process.argv.at(-1);
+writeFileSync(join(${JSON.stringify(browserLog)}, "args." + process.pid), process.argv.slice(2).join("\\n"));
+const page = await (await fetch(url)).text();
+if (!page.includes('type="password"')) process.exit(3);
+const exp = await (await fetch(url + "expect")).json();
+const state = join(process.env.ISONIM_EMAIL_WEBMAIL_PROFILES_DIR, ".guiassert-state", "standin-state.json");
+let typed = null;
+while (typed === null) {
+  try {
+    const s = JSON.parse(readFileSync(state, "utf8"));
+    if (s.screen === "done") typed = s.values["check/Typing check password"] ?? "";
+  } catch {}
+  await sleep(50);
+}
+if (process.env.STANDIN_DROP_LAST) typed = [...typed].slice(0, -1).join("");
+const digest = createHash("sha256").update(Buffer.from(exp.salt, "hex")).update(typed, "utf8").digest("hex");
+await fetch(url + "result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ match: digest === exp.digest, lengthMatch: [...typed].length === exp.length }) });
+await sleep(600000);
+`,
+    );
+    const pageBrowserExe = join(scratch, "page-browser");
+    writeFileSync(
+      pageBrowserExe,
+      `#!/bin/sh\nexec "${process.execPath}" "${pageBrowser}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    const checkScenario = (): StandinScenario => ({
+      start: "check",
+      screens: {
+        check: {
+          text: "Typing check\nNo provider is contacted.\nReady",
+          fields: [
+            {
+              name: "Typing check password",
+              protected: true,
+              bounds: PASSWORD_FIELD,
+            },
+          ],
+          submit: "done",
+        },
+        done: { text: "Typing check\nDone" },
+      },
+    });
+
+    for (const variant of ["match", "mismatch"] as const)
+      it(`types the password into the loopback page only, and prints ${variant === "match" ? "MATCH" : "MISMATCH"} and nothing about the password`, () => {
+        rmSync(attemptPath(profile()), { force: true });
+        const c = cliEnv(checkScenario());
+        resetDesktop(c.state);
+        const before = new Set(readdirSync(browserLog));
+        const env = {
+          ...c.env,
+          ISONIM_EMAIL_WEBMAIL_BROWSER: pageBrowserExe,
+          ...(variant === "mismatch" ? { STANDIN_DROP_LAST: "1" } : {}),
+        };
+        const r = run(
+          env,
+          "qa1",
+          "--typing-check",
+          "--unsafe-no-sandbox",
+          "--timeout",
+          "30",
+        );
+        if (variant === "match") {
+          assert.equal(r.status, 0, r.stdout + r.stderr);
+          assert.match(
+            r.stdout,
+            /^TYPING CHECK MATCH: gmail-workspace\/qa1 \(length match: yes\)$/m,
+          );
+        } else {
+          assert.equal(r.status, 1, r.stdout + r.stderr);
+          assert.match(
+            r.stdout,
+            /^TYPING CHECK MISMATCH: gmail-workspace\/qa1 \(length match: no\)/m,
+          );
+        }
+        for (const out of [r.stdout, r.stderr]) {
+          assert.ok(!out.includes(SENTINEL));
+          assert.doesNotMatch(out, /[0-9a-f]{32}/, "no digest, salt or token");
+        }
+        // The password went only into the page's protected field, once,
+        // and to the guard of the one read afterwards.
+        const log = readLog(c.state);
+        assertSecretOnlyOnItsPipes(log);
+        assert.deepEqual(typed(log), [
+          {
+            screen: "check",
+            focused: "Typing check password",
+            secret: true,
+            text: "",
+          },
+        ]);
+        // After the typing, one read of the display through the guard.
+        const typedAt = log.findIndex((e) => e.verb === "type");
+        assert.deepEqual(
+          log.slice(typedAt).filter((e) => e.verb === "ocr").length,
+          1,
+        );
+        // No attempt, and not the account's profile: a throw-away one,
+        // removed afterwards, at a loopback page.
+        assert.equal(readAttempt(profile()).kind, "none");
+        const launches = readdirSync(browserLog)
+          .filter((f) => !before.has(f) && f.startsWith("args."))
+          .map((f) => readFileSync(join(browserLog, f), "utf8").split("\n"));
+        assert.equal(launches.length, 1);
+        const argv = launches[0]!;
+        assert.match(
+          argv.at(-1)!,
+          /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{32}\/$/,
+        );
+        const udd = argv.find((a) => a.startsWith("--user-data-dir="))!;
+        assert.ok(!udd.includes(profile().userDataDir), udd);
+        assert.match(udd, /\/\.typing-check-[^/]+\/chromium$/);
+        assert.ok(!existsSync(udd.slice("--user-data-dir=".length)));
+        for (const a of argv) {
+          assert.ok(!AUTOMATION_SWITCHES.some((re) => re.test(a)), a);
+          assert.ok(!a.includes(SENTINEL));
+        }
+        assert.ok(!existsSync(join(profile().dir, "lease.json")));
+      });
+
+    it("stops (exit 7) when the password is legible on the screen after the typing", () => {
+      const sc = checkScenario();
+      // A page that showed what was typed in clear.
+      sc.screens.done!.text = `Typing check\nYou typed: ${SENTINEL}`;
+      const c = cliEnv(sc);
+      resetDesktop(c.state);
+      const r = run(
+        { ...c.env, ISONIM_EMAIL_WEBMAIL_BROWSER: pageBrowserExe },
+        "qa1",
+        "--typing-check",
+        "--unsafe-no-sandbox",
+        "--timeout",
+        "30",
+      );
+      assert.equal(r.status, 7, r.stdout + r.stderr);
+      assert.match(
+        r.stdout,
+        /^STOPPED \(secret-visible\): gmail-workspace\/qa1/m,
+      );
+      assert.ok(!r.stdout.includes(SENTINEL) && !r.stderr.includes(SENTINEL));
+    });
+
+    it("refuses to mix with the sign-in's own modes", () => {
+      const c = cliEnv(checkScenario());
+      for (const extra of [
+        "--manual",
+        "--check-only",
+        "--takeover",
+        "--override-cooldown",
+        "--playwright-check",
+      ]) {
+        const r = run(c.env, "--typing-check", extra);
+        assert.equal(r.status, 2, extra);
+      }
+    });
   });
 
   it("says what is missing: no GuiAssert (4), no account file (3), a bad invocation (2)", () => {
