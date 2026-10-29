@@ -22,6 +22,11 @@
 //      reported as itself (another hard challenge, an error, then a code
 //      or phone challenge), the re-verification's own wording not
 //      counted;
+//   1b. Google's "sign in again" page (`sign-in-again`), recognised by its
+//      address (`accounts.google.com/…/signin/confirmidentifier`, read
+//      from the browser's address bar) and its wording ("Please sign in
+//      again"): the account and a single "Next", nothing to fill; the
+//      same more precise reasons as 1a win over it;
 //   2. hard challenges: whatever else the page says, a person is needed;
 //   3. errors (wrong password, unknown account): stop, never retry;
 //   4. the step screens: address, password, and the two small ones
@@ -86,6 +91,7 @@ export type StepId =
   | "address"
   | "password"
   | "reauth-password"
+  | "sign-in-again"
   | "choose-password"
   | "stay-signed-in";
 
@@ -132,15 +138,19 @@ export const SKIP_CONTROLS: readonly string[] = [
 ];
 
 /**
- * A provider's privacy-consent pages, by address: the host is one of
- * `hosts` and the path (with its query) contains one of `paths`, both
- * compared in lower case ("" matches any path).
+ * Pages by address: the host is one of `hosts` and the path (with its
+ * query) contains one of `paths`, both compared in lower case ("" matches
+ * any path).
  */
-export interface ConsentRule {
-  /** A short name for logs and results (`yahoo-consent`). */
-  name: string;
+export interface AddressRule {
   hosts: string[];
   paths: string[];
+}
+
+/** A provider's privacy-consent pages, by address. */
+export interface ConsentRule extends AddressRule {
+  /** A short name for logs and results (`yahoo-consent`). */
+  name: string;
 }
 
 /**
@@ -151,6 +161,20 @@ export interface ConsentRule {
 export interface ReauthRule {
   match: ScreenMatch;
   allowed: string[];
+}
+
+/**
+ * Google's "sign in again" page of a session it no longer accepts: the
+ * page is on `address` and matches `match`, no challenge phrase but
+ * `allowed` is on it, and the procedure finds exactly one button named
+ * exactly `control` and no field to fill (webmail_signin.ts).
+ */
+export interface SignInAgainRule {
+  address: AddressRule;
+  match: ScreenMatch;
+  allowed: string[];
+  /** The accessible name of the one button that goes on. */
+  control: string;
 }
 
 /**
@@ -196,6 +220,8 @@ export interface ProviderSignin {
   consent?: ConsentRule;
   /** Its password re-verification of an existing session, when it has one. */
   reauth?: ReauthRule;
+  /** Its "sign in again" page, when it has one. */
+  signInAgain?: SignInAgainRule;
   done: ScreenMatch;
   /** In order of precedence. */
   steps: StepScreen[];
@@ -287,7 +313,7 @@ export function consentHinted(p: ProviderSignin, ocrText: string): boolean {
   return p.consent.hosts.some((h) => text.includes(squash(h)));
 }
 
-function isConsentAddress(rule: ConsentRule, location: string): boolean {
+function isRuleAddress(rule: AddressRule, location: string): boolean {
   const l = splitLocation(location);
   return (
     l !== null &&
@@ -297,30 +323,80 @@ function isConsentAddress(rule: ConsentRule, location: string): boolean {
 }
 
 /**
- * Whether the page is one of the provider's consent pages: by `location`
- * (the address bar's value, from the accessibility tree) when there is
- * one, else by a word of the OCR text that is such an address (a consent
- * host, then a consent path: a page that only mentions the host is not
- * the consent page).
+ * Whether the page is on one of `rule`'s addresses: by `location` (the
+ * address bar's value, from the accessibility tree) when there is one,
+ * else by a word of the OCR text that is such an address (a host of the
+ * rule, then one of its paths: a page that only mentions the host is not
+ * on it).
  */
+export function onAddress(
+  rule: AddressRule | undefined,
+  ocrText: string,
+  location: string | null | undefined,
+): boolean {
+  if (rule === undefined) return false;
+  if (location !== null && location !== undefined)
+    return isRuleAddress(rule, location);
+  return ocrText.split(/\s+/).some((w) => w !== "" && isRuleAddress(rule, w));
+}
+
+/** Whether the page is one of the provider's consent pages (`onAddress`). */
 export function onConsentPage(
   p: ProviderSignin,
   ocrText: string,
   location: string | null | undefined,
 ): boolean {
-  const rule = p.consent;
-  if (rule === undefined) return false;
-  if (location !== null && location !== undefined)
-    return isConsentAddress(rule, location);
-  return ocrText
-    .split(/\s+/)
-    .some((w) => w !== "" && isConsentAddress(rule, w));
+  return onAddress(p.consent, ocrText, location);
+}
+
+/**
+ * Whether the OCR text may be the provider's "sign in again" page: its
+ * wording is on it. Only a hint to read the address bar, which decides.
+ */
+export function signInAgainHinted(p: ProviderSignin, ocrText: string): boolean {
+  return (
+    p.signInAgain !== undefined &&
+    matches(normalize(ocrText), p.signInAgain.match)
+  );
+}
+
+/**
+ * A challenge or an error on a page that is otherwise one of Google's
+ * session pages (1a, 1b): another hard challenge, an error, then a code
+ * or phone challenge, the page's own wording (`allowed`) not counted;
+ * null when there is none.
+ */
+function morePrecise(
+  p: ProviderSignin,
+  norm: string,
+  allowed: string[],
+): Screen | null {
+  const other = without(p.hardChallenges, allowed);
+  const hit = firstPhrase(norm, other);
+  if (hit !== null)
+    return {
+      kind: "challenge",
+      challenge: other[hit.index]!.kind,
+      phrase: hit.phrase,
+    };
+  const e = firstPhrase(norm, p.errors);
+  if (e !== null)
+    return { kind: "error", error: p.errors[e.index]!.kind, phrase: e.phrase };
+  const soft = firstPhrase(norm, p.softChallenges);
+  if (soft !== null)
+    return {
+      kind: "challenge",
+      challenge: p.softChallenges[soft.index]!.kind,
+      phrase: soft.phrase,
+    };
+  return null;
 }
 
 /**
  * Classifies one OCR text of the display (the order is the header's).
  * `location` is the page's address from the browser's address bar, when
- * the caller read it (only a consent page needs it).
+ * the caller read it (only a consent page and the "sign in again" page
+ * need it).
  */
 export function classifyScreen(
   p: ProviderSignin,
@@ -342,34 +418,26 @@ export function classifyScreen(
     return { kind: "consent", consent: p.consent!.name };
   }
   if (matches(norm, p.done)) return { kind: "done" };
-  if (p.reauth !== undefined && matches(norm, p.reauth.match)) {
-    // Anything else on it is the more precise reason: another hard
-    // challenge, an error, then a code or phone challenge, the
-    // re-verification's own wording not counted.
-    const other = without(p.hardChallenges, p.reauth.allowed);
-    const hit = firstPhrase(norm, other);
-    if (hit !== null)
-      return {
-        kind: "challenge",
-        challenge: other[hit.index]!.kind,
-        phrase: hit.phrase,
-      };
-    const e = firstPhrase(norm, p.errors);
-    if (e !== null)
-      return {
-        kind: "error",
-        error: p.errors[e.index]!.kind,
-        phrase: e.phrase,
-      };
-    const soft = firstPhrase(norm, p.softChallenges);
-    if (soft !== null)
-      return {
-        kind: "challenge",
-        challenge: p.softChallenges[soft.index]!.kind,
-        phrase: soft.phrase,
-      };
-    return { kind: "step", step: "reauth-password" };
-  }
+  if (p.reauth !== undefined && matches(norm, p.reauth.match))
+    // Anything else on it is the more precise reason.
+    return (
+      morePrecise(p, norm, p.reauth.allowed) ?? {
+        kind: "step",
+        step: "reauth-password",
+      }
+    );
+  const again = p.signInAgain;
+  if (
+    again !== undefined &&
+    matches(norm, again.match) &&
+    onAddress(again.address, ocrText, location)
+  )
+    return (
+      morePrecise(p, norm, again.allowed) ?? {
+        kind: "step",
+        step: "sign-in-again",
+      }
+    );
   const hard = firstPhrase(norm, p.hardChallenges);
   if (hard !== null)
     return {
@@ -611,6 +679,22 @@ export const GMAIL_SIGNIN: ProviderSignin = {
       any: ["verify it's you", "verify that it's you"],
     },
     allowed: GMAIL_REAUTH_WORDING,
+  },
+  // Measured 2026-10-29 (a profile whose session cookies Google no longer
+  // accepted, on its inbox URL and on the start URL alike):
+  // accounts.google.com/v3/signin/confirmidentifier?…&flowName=GlifWebSignIn…,
+  // "Verify it's you", the account's chip, "To help keep your account
+  // secure, Google needs to verify it's you. Please sign in again to
+  // continue to Gmail.", one "Next" button, nothing else. Google's
+  // ordinary re-sign-in: "Next" leads to the password screen.
+  signInAgain: {
+    address: {
+      hosts: ["accounts.google.com"],
+      paths: ["/signin/confirmidentifier"],
+    },
+    match: { all: ["sign in again"] },
+    allowed: GMAIL_REAUTH_WORDING,
+    control: "Next",
   },
   done: { all: ["compose", "inbox"] },
   steps: [

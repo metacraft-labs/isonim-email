@@ -41,6 +41,12 @@
 // - Google's password re-verification of an existing session is the
 //   step `reauth-password`, typed like the password screen, and the
 //   password is still typed at most once per attempt;
+// - Google's "sign in again" page (the step `sign-in-again`: its address
+//   and wording, webmail_signin_steps.ts) is answered with one click on
+//   its only button, "Next", and only when the page has exactly one
+//   button of that exact name and no field to fill; that click is an
+//   input (it starts the attempt), and the password screen that follows
+//   is the ordinary one (the password still typed at most once);
 // - Chrome's own sign-in bubble, should it show despite the profile's
 //   preferences, is closed once through its "Use Chrome without an
 //   account" button (a click on the browser, not on the provider's page);
@@ -69,6 +75,7 @@ import {
   type ProviderSignin,
   type Screen,
   type SigninErrorKind,
+  signInAgainHinted,
   SKIP_CONTROLS,
   type StepId,
 } from "./webmail_signin_steps.ts";
@@ -390,14 +397,21 @@ export async function readLocation(
   return null;
 }
 
-/** Reads the address only when the OCR text names a consent host. */
+/**
+ * Reads the address only when the OCR text names a consent host or
+ * carries the wording of the "sign in again" page.
+ */
 async function locationFor(
   p: ProviderSignin,
   ga: GuiAssert,
   browserPid: number | undefined,
   text: string,
 ): Promise<string | null | undefined> {
-  if (browserPid === undefined || !consentHinted(p, text)) return undefined;
+  if (
+    browserPid === undefined ||
+    !(consentHinted(p, text) || signInAgainHinted(p, text))
+  )
+    return undefined;
   return readLocation(ga, browserPid);
 }
 
@@ -718,8 +732,9 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
         }
         const typesPassword = step === "password" || step === "reauth-password";
         // The password is typed at most once per attempt: Google asking
-        // for it again after it was typed is a challenge.
-        if (typesPassword && passwordTyped)
+        // for it again after it was typed (its password again, or to sign
+        // in again) is a challenge.
+        if ((typesPassword || step === "sign-in-again") && passwordTyped)
           return end(
             {
               result: "challenged",
@@ -770,6 +785,28 @@ async function takeStep(
           : "  Google asks the session to confirm its password: typed it into the protected field, and Return",
       );
       return true;
+    case "sign-in-again": {
+      const rule = p.signInAgain;
+      if (rule === undefined) return false;
+      // Nothing to fill on it: no field of the page (the browser's own
+      // address bar aside), and exactly one button of the exact name.
+      const fields = (
+        await ctx.ga.find({ pid: ctx.browserPid, role: "text-field" })
+      ).filter((e) => usable(e) && !sameName(e.name, ADDRESS_BAR_NAME));
+      if (fields.length > 0) return false;
+      const go = (
+        await ctx.ga.find({
+          pid: ctx.browserPid,
+          role: "button",
+          name: rule.control,
+        })
+      ).filter(onScreen);
+      if (go.length !== 1) return false;
+      firstInput();
+      await clickAt(ctx.ga, go[0]!.bounds);
+      ctx.log(`  Google asks to sign in again: clicked "${rule.control}"`);
+      return true;
+    }
     case "choose-password":
       if (p.choosePasswordControl === undefined) return false;
       if (
@@ -828,7 +865,9 @@ function checkScreenName(screen: Screen): string | null {
     case "step":
       return screen.step === "reauth-password"
         ? `Google's password re-verification of the session ("verify it's you" with only a password field)`
-        : `the ${screen.step} screen of the sign-in`;
+        : screen.step === "sign-in-again"
+          ? `Google's sign-in-again page ("please sign in again", the account and only "Next")`
+          : `the ${screen.step} screen of the sign-in`;
     case "challenge":
       return `a challenge (${screen.challenge}: "${screen.phrase}")`;
     case "error":
@@ -847,6 +886,8 @@ function notSignedInBecause(what: string): string {
     return `the inbox URL showed ${what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`;
   if (what.startsWith("a privacy-consent page"))
     return `the inbox URL showed ${what}, not the mailbox: the provider asks for the privacy choices first, and the check answers nothing (the sign-in does, rejecting every optional use)`;
+  if (what.startsWith("Google's sign-in-again page"))
+    return `signed out: Google asks to sign in again (the inbox URL showed ${what}); the check never clicks, an automated attempt answers it ("Next", then the password, typed once)`;
   if (what.startsWith("Google's password re-verification"))
     return `the inbox URL showed ${what}, not the mailbox: the session must confirm its password; an automated attempt answers it once, the check never types`;
   return `the inbox URL showed ${what}, not the mailbox: the profile is not signed in`;

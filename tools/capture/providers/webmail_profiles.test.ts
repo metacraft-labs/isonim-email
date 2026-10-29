@@ -24,8 +24,14 @@
 // interception off, Chrome's own sign-in on, the pages' languages) are
 // merged key by key into Default/Preferences, 0600, never replacing a
 // file that is not a JSON object; the saved passwords a profile holds
-// are counted (saved logins, not "never save" entries; password hashes)
-// and a database that cannot be read counts as a failure.
+// are counted (saved logins, not "never save" entries; password hashes
+// in Preferences and in Local State) and a database or a preferences file
+// that cannot be read counts as a failure; the password hashes are
+// scrubbed from both files, every other key kept, atomically and 0600, a
+// file without them left untouched and one that is not a JSON object never
+// replaced; a process running on a profile is found by its
+// --user-data-dir argument and by the live process Chrome's SingletonLock
+// names (not by a stale lock or another host's).
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails cannot be signed in from a test (a test never signs in
@@ -41,7 +47,9 @@
 // `Login Data` databases are written by the test with the `logins`
 // table reduced to the columns the count reads (Chrome writes them only
 // when it saves a password, which the real-browser session test proves
-// it no longer does).
+// it no longer does), and the password-hash entries with the keys Chrome
+// 147 writes and no real value (the session test has Chrome write a real
+// one).
 // Run with:
 //   node --test tools/capture/providers/webmail_profiles.test.ts
 
@@ -52,16 +60,18 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveDriver } from "./browser_emulation.ts";
@@ -69,7 +79,10 @@ import { launchOptions } from "../launch.ts";
 import { CREDENTIALS_SCHEMA } from "./requirements.ts";
 import {
   accountProfile,
+  browsersOn,
   checkSignedIn,
+  PASSWORD_HASH_LOCATIONS,
+  scrubPasswordHashes,
   webmailBrowser,
   profilesRoot,
   readSigninRecord,
@@ -216,6 +229,153 @@ describe("hosted-webmail browser profiles", () => {
     assert.equal(bad.unreadable.length, 1);
     assert.match(bad.unreadable[0]!, /^Login Data For Account \(/);
     assert.equal(holdsSecrets(bad), true);
+  });
+
+  it("counts the password hashes in Local State too, and a hash file that is not a JSON object as unreadable", () => {
+    const dir = mkdtempSync(join(scratch, "rest-"));
+    mkdirSync(join(dir, "Default"));
+    writeFileSync(
+      join(dir, "Local State"),
+      JSON.stringify({ local: { password_hash_data_list: [{}] } }),
+    );
+    writeFileSync(
+      join(dir, "Default", "Preferences"),
+      JSON.stringify({ profile: { password_hash_data_list: [{}, {}] } }),
+    );
+    assert.equal(secretsAtRest(dir).passwordHashes, 3);
+    writeFileSync(join(dir, "Local State"), "[]");
+    const bad = secretsAtRest(dir);
+    assert.deepEqual(bad.unreadable, ["Local State (not a JSON object)"]);
+    assert.equal(holdsSecrets(bad), true);
+  });
+
+  it("scrubs the password hashes from Preferences and Local State, keeping every other key, atomically and 0600", () => {
+    // Where Chromium 147 keeps them (hash_password_manager.cc).
+    assert.deepEqual(
+      PASSWORD_HASH_LOCATIONS.map((l) => [l.file, ...l.key]),
+      [
+        ["Default/Preferences", "profile", "password_hash_data_list"],
+        ["Local State", "local", "password_hash_data_list"],
+      ],
+    );
+    const dir = mkdtempSync(join(scratch, "scrub-"));
+    mkdirSync(join(dir, "Default"));
+    const prefs = join(dir, "Default", "Preferences");
+    const local = join(dir, "Local State");
+    // As Chrome 147 writes an entry (no value is read by the scrub).
+    const entry = {
+      hash: "1",
+      is_gaia: "x",
+      last_signin: 1,
+      salt_length: "y",
+      username: "z",
+    };
+    writeFileSync(
+      prefs,
+      JSON.stringify({
+        keep: [1, 2],
+        profile: { name: "Person 1", password_hash_data_list: [entry, entry] },
+      }),
+      { mode: 0o644 },
+    );
+    writeFileSync(
+      local,
+      JSON.stringify({
+        local: { password_hash_data_list: [entry], other: true },
+        browser: { x: 1 },
+      }),
+      { mode: 0o644 },
+    );
+    assert.equal(secretsAtRest(dir).passwordHashes, 3);
+    assert.deepEqual(scrubPasswordHashes(dir), {
+      removed: 3,
+      rewritten: ["Default/Preferences", "Local State"],
+    });
+    assert.deepEqual(JSON.parse(readFileSync(prefs, "utf8")), {
+      keep: [1, 2],
+      profile: { name: "Person 1" },
+    });
+    assert.deepEqual(JSON.parse(readFileSync(local, "utf8")), {
+      local: { other: true },
+      browser: { x: 1 },
+    });
+    assert.equal(mode(prefs), 0o600);
+    assert.equal(mode(local), 0o600);
+    assert.equal(holdsSecrets(secretsAtRest(dir)), false);
+    // No temporary file left beside them.
+    for (const d of [dir, join(dir, "Default")])
+      assert.deepEqual(
+        readdirSync(d).filter((f) => f.endsWith(".tmp")),
+        [],
+        d,
+      );
+    // Nothing to remove: no file is rewritten.
+    const before = statSync(prefs).mtimeMs;
+    assert.deepEqual(scrubPasswordHashes(dir), { removed: 0, rewritten: [] });
+    assert.equal(statSync(prefs).mtimeMs, before);
+    // An empty profile: nothing to do.
+    assert.deepEqual(
+      scrubPasswordHashes(mkdtempSync(join(scratch, "scrub-"))),
+      {
+        removed: 0,
+        rewritten: [],
+      },
+    );
+  });
+
+  it("never replaces a hash file that is not a JSON object when it scrubs", () => {
+    for (const body of ["[]", "null", "not json {"]) {
+      const dir = mkdtempSync(join(scratch, "scrub-"));
+      mkdirSync(join(dir, "Default"));
+      writeFileSync(join(dir, "Default", "Preferences"), body);
+      assert.throws(() => scrubPasswordHashes(dir), body);
+      assert.equal(
+        readFileSync(join(dir, "Default", "Preferences"), "utf8"),
+        body,
+      );
+    }
+  });
+
+  it("finds a process running on a profile by its --user-data-dir, and by Chrome's SingletonLock while its process lives", async () => {
+    const dir = mkdtempSync(join(scratch, "running-"));
+    assert.deepEqual(browsersOn(dir), []);
+    const child = spawn(process.execPath, [
+      "-e",
+      "setTimeout(() => {}, 60000)",
+      "--",
+      `--user-data-dir=${dir}`,
+    ]);
+    try {
+      await sleep(300);
+      assert.deepEqual(browsersOn(dir), [child.pid]);
+      // Another directory whose name starts the same is not this one.
+      assert.deepEqual(browsersOn(dir.slice(0, -1)), []);
+    } finally {
+      child.kill("SIGKILL");
+      await new Promise((r) => child.once("exit", r));
+    }
+    assert.deepEqual(browsersOn(dir), []);
+    // The lock Chrome leaves: <host>-<pid>.
+    const lockHolder = spawn(process.execPath, [
+      "-e",
+      "setTimeout(() => {}, 60000)",
+    ]);
+    try {
+      await sleep(100);
+      symlinkSync(
+        `${hostname()}-${lockHolder.pid}`,
+        join(dir, "SingletonLock"),
+      );
+      assert.deepEqual(browsersOn(dir), [lockHolder.pid]);
+    } finally {
+      lockHolder.kill("SIGKILL");
+      await new Promise((r) => lockHolder.once("exit", r));
+    }
+    // A stale lock (its process gone) or another host's: no browser.
+    assert.deepEqual(browsersOn(dir), []);
+    rmSync(join(dir, "SingletonLock"));
+    symlinkSync(`another-host-${process.pid}`, join(dir, "SingletonLock"));
+    assert.deepEqual(browsersOn(dir), []);
   });
 
   it("resolves the profile directory from the variable, XDG_STATE_HOME or HOME, and creates it 0700 at every level", () => {

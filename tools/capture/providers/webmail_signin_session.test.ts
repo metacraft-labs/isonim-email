@@ -37,7 +37,11 @@
 // typing check (a loopback page comparing a salted SHA-256 of what was
 // typed) reports MATCH for passwords of every printable ASCII character
 // and of non-ASCII letters typed through GuiAssert into Google Chrome,
-// and MISMATCH for a different one.
+// and MISMATCH for a different one; Chrome writes a hash of a password
+// submitted on Google's sign-in page into the profile's preferences even
+// with the recipe's preferences (the reason for the scrub), the scrub
+// removes it with the browser stopped, and the next start does not bring
+// it back, while the same page off Google's origin gets no hash.
 //
 // Test double (justification, per the repository's mock policy): the
 // real provider pages cannot be signed in to from a test, so a local
@@ -45,8 +49,12 @@
 // password page, a "Set a home address" page, a "Verify it's you" page,
 // and a mailbox behind a session cookie), worded as Gmail words them,
 // and a privacy-consent page on `consent.localhost` (which Chrome
-// resolves to loopback itself) worded as Yahoo's. GuiAssert, the browser,
-// tesseract, AT-SPI, Playwright and the profile are real.
+// resolves to loopback itself) worded as Yahoo's. For the password hash,
+// Chrome is told the loopback server is Google's sign-in origin with its
+// own `--gaia-url` switch (a test-only switch the recipe never passes; it
+// sets the origin Chromium's `IsGaiaCredentialPage` compares a form's
+// realm with). GuiAssert, the browser, tesseract, AT-SPI, Playwright and
+// the profile are real.
 // Run (inside `nix develop`, which puts guiassert on PATH) with:
 //   node --test tools/capture/providers/webmail_signin_session.test.ts
 
@@ -79,6 +87,7 @@ import {
 import { findExecutable } from "./requirements.ts";
 import {
   checkSignedIn,
+  scrubPasswordHashes,
   signinBrowserArgs,
   secretsAtRest,
   stopBrowser,
@@ -90,6 +99,8 @@ import {
 import {
   AUTOMATION_SWITCHES,
   driveSignin,
+  focusField,
+  isPasswordField,
   SIGNIN_SCREEN,
   SIGNIN_SESSION_SWITCHES,
   verifySignedIn,
@@ -131,6 +142,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     password: [] as string[],
     homeAddressSaved: 0,
     consent: [] as string[],
+    gaia: [] as string[],
   };
   const probes: { webdriver: string; page: string }[] = [];
   let bin: string;
@@ -221,6 +233,25 @@ describe("the automated sign-in in a real GuiAssert session", () => {
           res.writeHead(303, { location: `http://127.0.0.1:${port}/signin` });
           return res.end();
         }
+        // Google's sign-in-again page as measured on 2026-10-29: the
+        // account, the wording, one "Next", nothing to fill.
+        if (url.pathname === "/v3/signin/confirmidentifier")
+          return html(
+            `<h1>Verify it’s you</h1><p>${ADDRESS}</p><p>To help keep your account secure, Google needs to verify it’s you. Please sign in again to continue to Gmail.</p><form method="get" action="/signin/pwd"><button>Next</button></form>`,
+          );
+        // One form with the account and the password, as a password
+        // manager sees Google's two pages; then a page without it.
+        if (url.pathname === "/gaia/signin" && req.method === "GET")
+          return html(
+            '<h1>Sign in</h1><form method="post" action="/gaia/signin"><input type="email" name="identifier" aria-label="Email or phone" autocomplete="username"><input type="password" name="Passwd" aria-label="Enter your password" autocomplete="current-password"><button>Next</button></form>',
+          );
+        if (url.pathname === "/gaia/signin" && req.method === "POST") {
+          received.gaia.push((await readBody(req)).get("identifier") ?? "");
+          res.writeHead(303, { location: "/gaia/welcome" });
+          return res.end();
+        }
+        if (url.pathname === "/gaia/welcome")
+          return html("<h1>Welcome</h1><p>Compose</p><p>Inbox</p>");
         if (url.pathname === "/challenge")
           return html(
             "<h1>Verify it's you</h1><p>To help keep your account safe, Google wants to make sure it's really you trying to sign in.</p><input aria-label=\"Enter code\" autofocus><button>Next</button>",
@@ -258,6 +289,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     profile: string,
     url: string,
     prefs = true,
+    extra: string[] = [],
   ) {
     const browser = webmailBrowser(process.env);
     if ("reason" in browser) throw new Error(browser.reason);
@@ -267,7 +299,9 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     let said = "";
     const child = spawn(
       browser.path,
-      signinBrowserArgs(profile, url, { extra: [...SIGNIN_SESSION_SWITCHES] }),
+      signinBrowserArgs(profile, url, {
+        extra: [...SIGNIN_SESSION_SWITCHES, ...extra],
+      }),
       { env, stdio: ["ignore", "ignore", "pipe"] },
     );
     child.stderr.setEncoding("utf8");
@@ -585,6 +619,158 @@ describe("the automated sign-in in a real GuiAssert session", () => {
       true,
       "no Save password? offer without the preferences",
     );
+  });
+
+  // The webmail browser with the recipe's preferences on a fresh profile,
+  // at the loopback sign-in form; the account and the password typed
+  // through GuiAssert as the sign-in types them, then Return; the browser
+  // stopped once the form was posted, the session left for the caller to
+  // stop. `gaia`: Chrome is told the server is Google's sign-in origin.
+  async function submitGaiaForm(name: string, gaia: boolean) {
+    const profile = join(scratch, name, "chromium");
+    mkdirSync(profile, { recursive: true, mode: 0o700 });
+    const session = await ga.sessionStart({
+      name: `signin-test-${name}-${process.pid}`,
+      width: SIGNIN_SCREEN.width,
+      height: SIGNIN_SCREEN.height,
+      vncSocket: false,
+    });
+    const sga = ga.inSession(session.id);
+    const env = sessionEnv(process.env, session);
+    const origin = `http://127.0.0.1:${port}/`;
+    const stop = () => ga.sessionStop(session.id);
+    try {
+      const child = await launch(
+        env,
+        profile,
+        `${origin}gaia/signin`,
+        true,
+        gaia ? [`--gaia-url=${origin}`] : [],
+      );
+      try {
+        const posted = received.gaia.length;
+        const ctx = {
+          ga: sga,
+          browserPid: child.pid!,
+          timings: { focusSettleMs: 600 },
+        };
+        let ok = false;
+        for (const t0 = Date.now(); !ok && Date.now() - t0 < 60_000; ) {
+          ok = await focusField(
+            ctx,
+            (e) =>
+              e.role === "text-field" &&
+              !e.states.includes("protected") &&
+              e.name === "Email or phone",
+          );
+          if (!ok) await sleep(1000);
+        }
+        assert.ok(ok, "the account field");
+        await sga.type(ADDRESS);
+        assert.ok(await focusField(ctx, isPasswordField), "the password field");
+        await sga.type(new Secret(SENTINEL));
+        await sga.key("Return");
+        for (let i = 0; i < 60 && received.gaia.length === posted; i++)
+          await sleep(500);
+        assert.deepEqual(received.gaia.slice(posted), [ADDRESS]);
+        // The welcome page rendered: the login counts as successful.
+        await sleep(5000);
+      } finally {
+        await stopBrowser(child);
+      }
+      return { profile, env, stop };
+    } catch (err) {
+      await stop();
+      throw err;
+    }
+  }
+
+  it("Chrome writes a hash of a password submitted on Google's sign-in origin despite the recipe's preferences; the scrub removes it and the next start does not bring it back; off that origin no hash", async () => {
+    const g = await submitGaiaForm("gaia-hash", true);
+    try {
+      // Measured on the browser this test runs (Google Chrome 147 in the dev
+      // shell): the password manager off does not stop it.
+      const prefs = JSON.parse(
+        readFileSync(join(g.profile, "Default", "Preferences"), "utf8"),
+      ) as {
+        credentials_enable_service: unknown;
+        profile: { password_hash_data_list?: unknown[] };
+      };
+      assert.equal(prefs.credentials_enable_service, false);
+      assert.equal(prefs.profile.password_hash_data_list?.length, 1);
+      assert.deepEqual(secretsAtRest(g.profile), {
+        savedLogins: 0,
+        accountLogins: 0,
+        passwordHashes: 1,
+        unreadable: [],
+      });
+      // The hash is derived, never the password itself.
+      assert.ok(
+        !readFileSync(
+          join(g.profile, "Default", "Preferences"),
+          "utf8",
+        ).includes(SENTINEL),
+      );
+      assert.equal(scrubPasswordHashes(g.profile).removed, 1);
+      assert.equal(secretsAtRest(g.profile).passwordHashes, 0);
+      // Chrome started again on the scrubbed profile and stopped: still none.
+      const again = await launch(
+        g.env,
+        g.profile,
+        `http://127.0.0.1:${port}/gaia/welcome`,
+      );
+      await sleep(3000);
+      await stopBrowser(again);
+      assert.deepEqual(secretsAtRest(g.profile), {
+        savedLogins: 0,
+        accountLogins: 0,
+        passwordHashes: 0,
+        unreadable: [],
+      });
+    } finally {
+      await g.stop();
+    }
+    // The control: the same page and steps on an origin that is not
+    // Google's sign-in get no hash (the hash above came from the Gaia
+    // origin, not from the form).
+    const off = await submitGaiaForm("gaia-hash-control", false);
+    await off.stop();
+    assert.equal(secretsAtRest(off.profile).passwordHashes, 0);
+  });
+
+  it("answers the sign-in-again page, recognised by its address and wording in Chrome, with its one 'Next' (the address bar not taken for a field), then the password once", async () => {
+    mode = "ok";
+    received.password.length = 0;
+    const provider: ProviderSignin = {
+      ...standInGmail(),
+      startUrl: `http://127.0.0.1:${port}/v3/signin/confirmidentifier?continue=x&flowName=GlifWebSignIn`,
+      signInAgain: {
+        ...GMAIL_SIGNIN.signInAgain!,
+        address: { hosts: ["127.0.0.1"], paths: ["/signin/confirmidentifier"] },
+      },
+    };
+    const a = await attempt("sign-in-again", false, { provider });
+    try {
+      assert.deepEqual(
+        a.result.outcome,
+        { result: "signed-in", typed: true },
+        a.events.join("\n"),
+      );
+      assert.deepEqual(a.result.steps, [
+        "sign-in-again",
+        "password",
+        "interstitial:home-address",
+      ]);
+      assert.deepEqual(received.password, [SENTINEL]);
+      const clicked = a.events.indexOf(
+        '  Google asks to sign in again: clicked "Next"',
+      );
+      assert.ok(clicked > a.events.indexOf("first-input"), a.events.join("\n"));
+      assert.ok(a.events.indexOf("first-input") >= 0);
+    } finally {
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
+    }
   });
 
   it("answers a privacy-consent page on a loopback consent host by its address (any port): every row rejected, then its continue control, then the sign-in", async () => {

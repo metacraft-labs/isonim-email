@@ -8,7 +8,8 @@
 // noise OCR adds: the browser's own bar, lost apostrophes, odd line
 // breaks); the live sign-in of each QA account checks the wording itself.
 // Yahoo's privacy-consent page is the measured one (2026-10-28, in
-// Bulgarian), recognised by its address whatever its language.
+// Bulgarian), recognised by its address whatever its language, and so is
+// Google's sign-in-again page (2026-10-29), by its address and wording.
 // Pure functions: no browser, no GuiAssert, no network.
 // Run with:
 //   node --test tools/capture/providers/webmail_signin_steps.test.ts
@@ -27,6 +28,7 @@ import {
   OUTLOOK_SIGNIN,
   PROVIDER_SIGNIN,
   type ProviderSignin,
+  signInAgainHinted,
   SKIP_CONTROLS,
   splitLocation,
   YAHOO_SIGNIN,
@@ -948,6 +950,99 @@ describe("Google's password re-verification", () => {
         "challenge:verify-identity",
         p.label,
       );
+  });
+});
+
+describe("Google's sign-in-again page", () => {
+  const g = GMAIL_SIGNIN;
+  // The page measured on 2026-10-29 (the address bar's value as Chrome
+  // shows it, without the scheme; an invented address on the chip).
+  const AGAIN_AT =
+    "accounts.google.com/v3/signin/confirmidentifier?continue=https://mail.google.com/mail/u/0/&hl=en&service=mail&flowName=GlifWebSignIn&flowEntry=ServiceLogin";
+  const again = (...extra: string[]): string =>
+    [
+      "Gmail\nx\n+",
+      `${AGAIN_AT.slice(0, 120)}…`,
+      "G",
+      "Verify it’s you",
+      "S qa.tester@example.com",
+      "To help keep your account secure, Google needs to verify",
+      "it’s you. Please sign in again to continue to Gmail.",
+      ...extra,
+      "Next",
+      "English (United States)",
+      "Help Privacy Terms",
+    ].join("\n");
+
+  it("is the sign-in-again step on its address with its wording, by the address bar or by the OCR text alone", () => {
+    assert.equal(kind(g, again(), AGAIN_AT), "step:sign-in-again");
+    assert.equal(kind(g, again(), `https://${AGAIN_AT}`), "step:sign-in-again");
+    // No address from the tree: the address bar as OCR read it.
+    assert.equal(kind(g, again()), "step:sign-in-again");
+    assert.equal(kind(g, again(), undefined), "step:sign-in-again");
+    assert.ok(signInAgainHinted(g, again()));
+  });
+
+  it("is not that step anywhere else: another address, or its address without the wording", () => {
+    // The same words on another page of Google's: "verify it's you" is
+    // the challenge it always was.
+    for (const at of [
+      "accounts.google.com/v3/signin/identifier?continue=x",
+      "accounts.google.com.example.net/v3/signin/confirmidentifier",
+      "evil.example/accounts.google.com/v3/signin/confirmidentifier",
+      "accounts.google.com@evil.example/v3/signin/confirmidentifier",
+    ])
+      assert.equal(kind(g, again(), at), "challenge:verify-identity", at);
+    const unworded = again().replace(
+      "Please sign in again to continue",
+      "Please continue",
+    );
+    assert.equal(kind(g, unworded, AGAIN_AT), "challenge:verify-identity");
+    assert.ok(!signInAgainHinted(g, unworded));
+    // A page without the address in its OCR text and no address read.
+    assert.equal(
+      kind(
+        g,
+        again().replace(
+          /accounts\.google\.com\S*/,
+          "accounts.google.com/v3/signin/identifier",
+        ),
+      ),
+      "challenge:verify-identity",
+    );
+  });
+
+  it("gives way to any challenge or error on it, and to a password field (the re-verification)", () => {
+    const cases: [string, string][] = [
+      [
+        "Get a verification code at (•••) •••-••12",
+        "challenge:code-verification",
+      ],
+      [
+        "Check your phone\nTap Yes on the notification",
+        "challenge:app-approval",
+      ],
+      ["Confirm you're not a robot", "challenge:captcha"],
+      ["2-Step Verification", "challenge:verify-identity"],
+      ["Use your passkey", "challenge:passkey"],
+      ["Enter a phone number", "challenge:phone-verification"],
+      ["Something unusual happened", "challenge:unusual-activity"],
+      ["Couldn't find your Google Account", "error:unknown-account"],
+      ["Enter your password", "step:reauth-password"],
+    ];
+    for (const [extra, want] of cases)
+      assert.equal(kind(g, again(extra), AGAIN_AT), want, extra);
+  });
+
+  it("is Gmail's only: other providers keep the page a challenge", () => {
+    for (const p of [YAHOO_SIGNIN, OUTLOOK_SIGNIN, AOL_SIGNIN]) {
+      assert.equal(p.signInAgain, undefined, p.label);
+      assert.equal(
+        kind(p, again(), AGAIN_AT),
+        "challenge:verify-identity",
+        p.label,
+      );
+    }
   });
 });
 

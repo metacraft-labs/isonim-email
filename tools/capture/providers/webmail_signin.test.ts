@@ -49,6 +49,13 @@
 // - Google's password re-verification is answered once, as the attempt's
 //   input, and asked again after the password it is a challenge; the
 //   check reports it, and a consent page, as not signed in with no input;
+// - Google's sign-in-again page (its address and wording) is answered by
+//   one click on its only "Next", the attempt's first input, then the
+//   password is typed once; two "Next" buttons, another name or a field
+//   on the page stop it `field-not-found` with no input; elsewhere than
+//   its address it stays the challenge `verify-identity`; after the
+//   password it is a challenge; the check and `--check-only` report it as
+//   signed out (exit 1, not a challenge), clicking nothing;
 // - Chrome's own sign-in bubble is closed once through its "Use Chrome
 //   without an account" button, which is not an input to the provider;
 // - the check keeps its screen (check-screen.png, 0600) when it finds no
@@ -60,7 +67,11 @@
 //   a saved password fails the run (exit 8) whatever its result; a
 //   consent page it cannot answer exits 5; a run that ends before any
 //   input records no attempt and says so; a wrong password names the
-//   re-sealing runbook step;
+//   re-sealing runbook step; the password hashes Chrome keeps are removed
+//   once the browser has exited (and before every start), a scrub that
+//   cannot remove one ends the run exit 8, and `--scrub-profile` removes
+//   them with no browser, no session and no account file, refused while a
+//   browser runs on the profile;
 //   `--typing-check` types the password into a loopback page (a stand-in
 //   browser that answers as the real page does) and prints only MATCH or
 //   MISMATCH, with no attempt, no lease and a throw-away profile.
@@ -245,6 +256,27 @@ function outlookScenario(): StandinScenario {
   };
 }
 
+// Google's sign-in-again page as measured on 2026-10-29 (an invented
+// address on the account chip): its address in the browser's address bar,
+// its wording, and one "Next" that leads to the password screen.
+const AGAIN_AT =
+  "accounts.google.com/v3/signin/confirmidentifier?continue=https://mail.google.com/mail/u/0/&hl=en&service=mail&flowName=GlifWebSignIn";
+const NEXT_BUTTON: [number, number, number, number] = [960, 575, 80, 40];
+function signInAgainScenario(
+  over: Partial<StandinScenario["screens"][string]> = {},
+): StandinScenario {
+  const s = gmailScenario({
+    again: {
+      text: `Gmail\n${AGAIN_AT}\nVerify it’s you\nqa.tester@example.com\nTo help keep your account secure, Google needs to verify\nit’s you. Please sign in again to continue to Gmail.\nNext\nEnglish (United States)\nHelp Privacy Terms`,
+      location: AGAIN_AT,
+      buttons: [{ name: "Next", bounds: NEXT_BUTTON, next: "password" }],
+      ...over,
+    },
+  });
+  s.start = "again";
+  return s;
+}
+
 let runs = 0;
 interface Harness {
   dir: string;
@@ -359,6 +391,12 @@ function assertSecretOnlyOnItsPipes(entries: StandinLogEntry[]): void {
       `${e.verb} without the password on its guard`,
     );
 }
+
+const noInputs = (h: { log: () => StandinLogEntry[] }): void =>
+  assert.deepEqual(
+    h.log().filter((e) => ["type", "key", "click", "scroll"].includes(e.verb)),
+    [],
+  );
 
 const typed = (entries: StandinLogEntry[]) =>
   entries
@@ -922,6 +960,105 @@ describe("the automated sign-in procedure", () => {
     assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
   });
 
+  it("answers Google's sign-in-again page with one click on its only 'Next', as the attempt's first input, then types the password once", async () => {
+    const h = harness(signInAgainScenario());
+    const r = await driveSignin(
+      h.ctx(GMAIL_SIGNIN, {
+        onFirstInput: () =>
+          h.calls.push(
+            `first-input after ${h.log().filter((e) => ["type", "key", "click"].includes(e.verb)).length} inputs`,
+          ),
+      }),
+    );
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, ["sign-in-again", "password"]);
+    // The first input is the click on "Next" (its centre), recorded before
+    // it; then the password, once, into the protected field.
+    assert.deepEqual(h.calls, [
+      "first-input after 0 inputs",
+      "before-password after 0 password calls",
+    ]);
+    const ins = h
+      .log()
+      .filter((e) => ["type", "key", "click"].includes(e.verb));
+    assert.equal(ins[0]!.verb, "click");
+    assert.equal(ins[0]!.screen, "again");
+    assert.equal(ins[0]!.argv[ins[0]!.argv.indexOf("--at") + 1], "1000,595");
+    assert.equal(
+      ins.filter((e) => e.screen === "again").length,
+      1,
+      "one input on the sign-in-again page",
+    );
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+    assert.ok(!typed(h.log()).some((t) => t.screen === "again"));
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("does not answer a sign-in-again page with no single exact 'Next', or with a field to fill: field-not-found, no input", async () => {
+    for (const over of [
+      {
+        buttons: [
+          { name: "Next", bounds: NEXT_BUTTON, next: "password" },
+          { name: "Next", bounds: [600, 575, 80, 40], next: "password" },
+        ],
+      },
+      {
+        buttons: [{ name: "Next step", bounds: NEXT_BUTTON, next: "password" }],
+      },
+      { buttons: [{ name: "next", bounds: NEXT_BUTTON, next: "password" }] },
+      {
+        fields: [{ name: "Enter code", bounds: ADDRESS_FIELD }],
+      },
+    ] as Partial<StandinScenario["screens"][string]>[]) {
+      const h = harness(signInAgainScenario(over));
+      const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+      assert.deepEqual(
+        r.outcome,
+        { result: "field-not-found", step: "sign-in-again" },
+        JSON.stringify(over),
+      );
+      noInputs(h);
+      assert.deepEqual(h.calls, []);
+    }
+  });
+
+  it("keeps 'verify it's you' a challenge when the browser's address is not the sign-in-again page's, with no input", async () => {
+    const h = harness(
+      signInAgainScenario({
+        location: "accounts.google.com/v3/signin/challenge/pwd?x=1",
+      }),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "challenged",
+      challenge: "verify-identity",
+      phrase: "verify it's you",
+    });
+    noInputs(h);
+  });
+
+  it("stops as a challenge when Google asks to sign in again after the password was typed, typing it once", async () => {
+    const s = signInAgainScenario();
+    s.start = "address";
+    (s.screens.password!.submit as { then: string }).then = "again";
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "challenged",
+      challenge: "verify-identity",
+      phrase: "verify it's you",
+    });
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+    assert.ok(
+      !h
+        .log()
+        .some(
+          (e) =>
+            e.screen === "again" && ["click", "type", "key"].includes(e.verb),
+        ),
+    );
+  });
+
   it("closes Chrome's own sign-in bubble once through its button, not counting it as an input to the provider", async () => {
     const s = gmailScenario();
     s.start = "bubble";
@@ -1160,6 +1297,25 @@ describe("the automated sign-in procedure", () => {
     noInput(h2.log());
   });
 
+  it("reports Google's sign-in-again page on the inbox URL as signed out, not a challenge, clicking nothing", async () => {
+    const h = harness(signInAgainScenario());
+    const keep = join(h.dir, "check-screen.png");
+    const r = await verifySignedIn(
+      verifyCtx(h, { browserPid: 4242, keepPath: keep }),
+    );
+    assert.ok(!r.signedIn);
+    assert.match(
+      r.reason,
+      /^signed out: Google asks to sign in again \(the inbox URL showed Google's sign-in-again page .*the check never clicks/,
+    );
+    assert.match(r.seen!, /^Google's sign-in-again page/);
+    assert.doesNotMatch(r.reason, /challenge/);
+    assert.equal(r.screen, keep);
+    assert.match(readFileSync(keep, "utf8"), /sign in again/);
+    noInput(h.log());
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
   it("keeps the screen it saw when it finds no mailbox (guarded, 0600), and removes an older one when it does", async () => {
     const s = gmailScenario({
       verify: { text: "Google\nVerify it's you\nTry another way" },
@@ -1217,14 +1373,17 @@ describe("the automated sign-in procedure", () => {
 
 describe("email-webmail-signin (the command line)", () => {
   // A stand-in webmail browser where the dev shell names the real one
-  // (ISONIM_EMAIL_WEBMAIL_BROWSER): it records its arguments and
-  // environment and waits to be stopped.
+  // (ISONIM_EMAIL_WEBMAIL_BROWSER): it records its arguments, its
+  // environment and the preferences it starts with, and waits to be
+  // stopped; with STANDIN_BROWSER_PREFS it then replaces the profile's
+  // preferences with that file, as Chrome writes a password hash into them
+  // at a successful Google sign-in.
   const browserLog = join(scratch, "browser-log");
   mkdirSync(browserLog);
   const browserExe = join(scratch, "webmail-browser");
   writeFileSync(
     browserExe,
-    `#!/bin/sh\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\nexec sleep 600\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\n[ -n "$STANDIN_BROWSER_PREFS" ] && cp "$STANDIN_BROWSER_PREFS" "$d/Default/Preferences"\nexec sleep 600\n`,
     { mode: 0o755 },
   );
 
@@ -1636,6 +1795,244 @@ describe("email-webmail-signin (the command line)", () => {
     }
   });
 
+  // Preferences as Chrome leaves them after a Google sign-in (the entry's
+  // keys as Chrome 147 writes them; no real value).
+  const HASHED_PREFS = {
+    keep: { me: 1 },
+    profile: {
+      name: "Person 1",
+      password_hash_data_list: [
+        {
+          hash: "h",
+          is_gaia: "g",
+          last_signin: 1,
+          salt_length: "s",
+          username: "u",
+        },
+      ],
+    },
+  };
+  const prefsFile = (): string =>
+    join(profile().userDataDir, "Default", "Preferences");
+  const startedWith = (since: number): unknown[] =>
+    readdirSync(browserLog)
+      .filter((f) => f.startsWith("prefs."))
+      .map((f) => join(browserLog, f))
+      .filter((f) => statSync(f).mtimeMs >= since)
+      .map((f) => JSON.parse(readFileSync(f, "utf8")) as unknown);
+
+  it("removes the password hash Chrome writes during a run once the browser has exited, and one already there before a start (exit 0)", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const s = gmailScenario();
+    s.start = "inbox";
+    const c = cliEnv(s);
+    resetDesktop(c.state);
+    // A hash already in the profile, and one the browser writes.
+    mkdirSync(dirname(prefsFile()), { recursive: true });
+    writeFileSync(prefsFile(), JSON.stringify(HASHED_PREFS), { mode: 0o600 });
+    const written = join(scratch, "hashed-prefs.json");
+    writeFileSync(written, JSON.stringify(HASHED_PREFS));
+    const t0 = Date.now() - 1000;
+    const r = run(
+      { ...c.env, STANDIN_BROWSER_PREFS: written },
+      "--check-only",
+      "--unsafe-no-sandbox",
+      "--timeout",
+      "10",
+    );
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /gmail-workspace\/qa1: removed 1 password hash\(es\) Chrome keeps for its password-reuse warning \(Default\/Preferences\)\./,
+    );
+    assert.doesNotMatch(r.stdout, /SECRET AT REST/);
+    // The browser started without the hash that was there before it.
+    const seen = startedWith(t0) as {
+      profile?: Record<string, unknown>;
+    }[];
+    assert.ok(seen.length >= 1);
+    for (const p of seen)
+      assert.ok(!("password_hash_data_list" in (p.profile ?? {})));
+    // After the run: no hash, everything else the browser wrote kept, 0600.
+    const after = JSON.parse(readFileSync(prefsFile(), "utf8")) as {
+      keep: unknown;
+      profile: Record<string, unknown>;
+    };
+    assert.deepEqual(after.keep, { me: 1 });
+    assert.deepEqual(after.profile, { name: "Person 1" });
+    assert.equal(statSync(prefsFile()).mode & 0o777, 0o600);
+  });
+
+  it("ends a run SECRET AT REST (exit 8) when the hash cannot be removed: exit 8 means the scrub failed", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const s = gmailScenario();
+    s.start = "inbox";
+    const c = cliEnv(s);
+    resetDesktop(c.state);
+    // The browser leaves preferences the scrub must not replace.
+    const written = join(scratch, "broken-prefs.json");
+    writeFileSync(written, "[]");
+    try {
+      const r = run(
+        { ...c.env, STANDIN_BROWSER_PREFS: written },
+        "--check-only",
+        "--unsafe-no-sandbox",
+        "--timeout",
+        "10",
+      );
+      assert.equal(r.status, 8, r.stdout + r.stderr);
+      assert.match(r.stdout, /SIGNED IN: gmail-workspace\/qa1/);
+      assert.match(
+        r.stdout,
+        /SECRET AT REST: gmail-workspace\/qa1: .*could not count: Preferences \(not a JSON object\); the password hashes could not be removed: .*is not a JSON object/,
+      );
+      assert.equal(readFileSync(prefsFile(), "utf8"), "[]");
+    } finally {
+      rmSync(prefsFile(), { force: true });
+    }
+  });
+
+  it("ends a run SECRET AT REST (exit 8) when a browser still runs on the profile after the wait, though nothing is counted", async () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const s = gmailScenario();
+    s.start = "inbox";
+    const c = cliEnv(s);
+    resetDesktop(c.state);
+    // A browser the run did not start, still on the profile at its end.
+    const busy = spawn(process.execPath, [
+      "-e",
+      "setTimeout(() => {}, 120000)",
+      "--",
+      `--user-data-dir=${profile().userDataDir}`,
+    ]);
+    try {
+      await sleep(300);
+      const r = run(
+        c.env,
+        "--check-only",
+        "--unsafe-no-sandbox",
+        "--timeout",
+        "10",
+      );
+      assert.equal(r.status, 8, r.stdout + r.stderr);
+      assert.match(r.stdout, /SIGNED IN: gmail-workspace\/qa1/);
+      assert.match(
+        r.stdout,
+        new RegExp(
+          `SECRET AT REST: gmail-workspace/qa1: .*0 password hash\\(es\\); a browser still runs on the profile \\(pid ${busy.pid}\\)`,
+        ),
+      );
+    } finally {
+      busy.kill("SIGKILL");
+      await new Promise((r) => busy.once("exit", r));
+    }
+  });
+
+  it("--scrub-profile removes the hashes with no browser, no session and no account file, and refuses while a browser runs on the profile", async () => {
+    rmSync(attemptPath(profile()), { force: true });
+    mkdirSync(dirname(prefsFile()), { recursive: true });
+    writeFileSync(prefsFile(), JSON.stringify(HASHED_PREFS), { mode: 0o644 });
+    const local = join(profile().userDataDir, "Local State");
+    writeFileSync(
+      local,
+      JSON.stringify({ local: { password_hash_data_list: [{}] }, b: 2 }),
+    );
+    const c = cliEnv(gmailScenario());
+    resetDesktop(c.state);
+    // Neither GuiAssert, nor a webmail browser, nor an account file.
+    const env = {
+      ...c.env,
+      PATH: "/nonexistent",
+      ISONIM_EMAIL_WEBMAIL_BROWSER: "",
+      ISONIM_EMAIL_CREDENTIALS_DIR: join(scratch, "no-creds"),
+    };
+    const launches = browserArgs().length;
+    // A browser on the profile: refused, nothing touched.
+    const busy = spawn(process.execPath, [
+      "-e",
+      "setTimeout(() => {}, 60000)",
+      "--",
+      `--user-data-dir=${profile().userDataDir}`,
+    ]);
+    try {
+      await sleep(300);
+      const r = spawnSync(
+        process.execPath,
+        [signinCli, "gmail-workspace", "qa1", "--scrub-profile"],
+        { env, encoding: "utf8", timeout: 60_000 },
+      );
+      assert.equal(r.status, 6, r.stdout + r.stderr);
+      assert.match(
+        r.stdout,
+        new RegExp(
+          `REFUSED: gmail-workspace/qa1: a browser runs on the profile \\(pid ${busy.pid}\\)`,
+        ),
+      );
+      assert.deepEqual(
+        JSON.parse(readFileSync(prefsFile(), "utf8")),
+        HASHED_PREFS,
+      );
+    } finally {
+      busy.kill("SIGKILL");
+      await new Promise((r) => busy.once("exit", r));
+    }
+    const r = spawnSync(
+      process.execPath,
+      [signinCli, "gmail-workspace", "qa1", "--scrub-profile"],
+      { env, encoding: "utf8", timeout: 60_000 },
+    );
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /removed 2 password hash\(es\) .*\(Default\/Preferences, Local State\)/,
+    );
+    assert.match(r.stdout, /SCRUBBED: gmail-workspace\/qa1: nothing at rest/);
+    assert.deepEqual(JSON.parse(readFileSync(prefsFile(), "utf8")), {
+      keep: { me: 1 },
+      profile: { name: "Person 1" },
+    });
+    assert.deepEqual(JSON.parse(readFileSync(local, "utf8")), {
+      local: {},
+      b: 2,
+    });
+    assert.equal(statSync(prefsFile()).mode & 0o777, 0o600);
+    // No browser, no GuiAssert call, no attempt, no lease left.
+    assert.equal(browserArgs().length, launches);
+    assert.ok(!existsSync(join(c.state, "standin-log.jsonl")));
+    assert.equal(readAttempt(profile()).kind, "none");
+    assert.ok(!existsSync(join(profile().dir, "lease.json")));
+    // A saved login is not a hash: still at rest (exit 8).
+    const planted = plantSavedLogin();
+    try {
+      const r8 = spawnSync(
+        process.execPath,
+        [signinCli, "gmail-workspace", "qa1", "--scrub-profile"],
+        { env, encoding: "utf8", timeout: 60_000 },
+      );
+      assert.equal(r8.status, 8, r8.stdout + r8.stderr);
+      assert.match(
+        r8.stdout,
+        /SECRET AT REST: gmail-workspace\/qa1: .*1 saved login/,
+      );
+    } finally {
+      rmSync(planted, { force: true });
+      rmSync(local, { force: true });
+    }
+    // It needs the account, and takes no other option.
+    for (const args of [
+      ["--scrub-profile"],
+      ["qa1", "--scrub-profile", "--check-only"],
+      ["..", "--scrub-profile"],
+    ]) {
+      const u = spawnSync(
+        process.execPath,
+        [signinCli, "gmail-workspace", ...args],
+        { env, encoding: "utf8", timeout: 60_000 },
+      );
+      assert.equal(u.status, 2, args.join(" "));
+    }
+  });
+
   it("stops at a consent page it cannot answer (exit 5, consent-required) with no input on it", () => {
     rmSync(attemptPath(profile()), { force: true });
     const c = cliEnv({
@@ -1668,6 +2065,56 @@ describe("email-webmail-signin (the command line)", () => {
       readFileSync(join(profile().dir, "signin-screen.png"), "utf8"),
       /Before you continue/,
     );
+  });
+
+  it("--check-only on Google's sign-in-again page: signed out (exit 1, not 5), its screen kept, no click, no attempt", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const keep = join(profile().dir, "check-screen.png");
+    rmSync(keep, { force: true });
+    const c = cliEnv(signInAgainScenario());
+    resetDesktop(c.state);
+    const r = run(
+      c.env,
+      "--check-only",
+      "--unsafe-no-sandbox",
+      "--timeout",
+      "20",
+    );
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /NOT SIGNED IN: gmail-workspace\/qa1: signed out: Google asks to sign in again/,
+    );
+    assert.doesNotMatch(r.stdout, /CHALLENGED/);
+    assert.equal(statSync(keep).mode & 0o777, 0o600);
+    assert.match(readFileSync(keep, "utf8"), /sign in again/);
+    assert.deepEqual(
+      readLog(c.state).filter((e) =>
+        ["type", "key", "click", "scroll"].includes(e.verb),
+      ),
+      [],
+    );
+    assert.equal(readAttempt(profile()).kind, "none");
+  });
+
+  it("signs in from Google's sign-in-again page: 'Next' starts the attempt, then the password once (exit 0)", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const c = cliEnv(signInAgainScenario());
+    resetDesktop(c.state);
+    const r = run(c.env, "--unsafe-no-sandbox", "--timeout", "10");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /screen: sign-in-again/);
+    assert.match(r.stdout, /Google asks to sign in again: clicked "Next"/);
+    assert.match(r.stdout, /SIGNED IN: gmail-workspace\/qa1/);
+    const log = readLog(c.state);
+    assert.equal(
+      log.filter((e) => e.verb === "type" && e.stdin === SENTINEL).length,
+      1,
+    );
+    assertSecretOnlyOnItsPipes(log);
+    const a = readAttempt(profile());
+    assert.ok(a.kind === "record");
+    assert.equal(a.record.result, "signed-in");
   });
 
   it("keeps the screen a --check-only saw when the profile is not signed in, and names it", () => {

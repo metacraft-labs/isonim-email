@@ -43,6 +43,19 @@ account file's address and password:
   with only the account and a password field, nothing else) is answered
   once during an automated attempt, with the password, which is still
   typed at most once per attempt;
+- Google's "sign in again" page is not a challenge either: a session
+  Google no longer accepts is sent to
+  `accounts.google.com/…/signin/confirmidentifier`, headed "Verify it's
+  you", with the account, "Please sign in again to continue to Gmail" and
+  one "Next" button, nothing to fill. The recipe recognises it by that
+  address (read from the browser's address bar) and that wording. During
+  an automated attempt it clicks "Next" once, only when the page has
+  exactly one button named exactly `Next` and no field (this click starts
+  the attempt), and then signs in on the password screen that follows,
+  the password typed at most once. Any challenge on the page (a code, a
+  phone, a device, a passkey, "2-Step Verification", ...) still stops the
+  attempt. A check (`--check-only`, or the check after a sign-in) clicks
+  nothing and reports it as "signed out: Google asks to sign in again";
 - a provider may show a privacy-consent page (Yahoo's
   `consent.yahoo.com/…/collectConsent`, Google's `consent.google.com`),
   sometimes in the language of the host's region whatever the browser
@@ -201,10 +214,12 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `--check-only` tells.
 - **1, `NOT SIGNED IN`**: the sign-in ended but the check did not find
   the mailbox on the inbox URL (it names the screen it saw instead, for
-  example the provider's sign-in, a challenge, a consent page or
-  Google's password re-verification, none of which the check answers)
-  and keeps it as `check-screen.png`. Read the reason; `--check-only`
-  repeats the check, which types nothing.
+  example the provider's sign-in, a challenge, a consent page,
+  Google's password re-verification or Google's "sign in again" page,
+  none of which the check answers) and keeps it as `check-screen.png`.
+  Read the reason; `--check-only` repeats the check, which types nothing.
+  "signed out: Google asks to sign in again" is not a challenge: an
+  automated attempt (after the cool-down) signs the profile in again.
 - **3, `PENDING`**: no account file, or one without a password.
 - **4, `CANNOT RUN`**: no usable browser sandbox, no `guiassert`, no
   webmail browser (outside the dev shell), or the display session would
@@ -228,8 +243,10 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `--manual`; treat the password as exposed only if someone was
   watching the session.
 - **8, `SECRET AT REST`**: after the run, the browser profile holds a
-  saved password (or a database the recipe could not count), whatever
-  the sign-in's result. See
+  saved password, a password hash the recipe could not remove, or a file
+  it could not count, or a browser still runs on the profile after the
+  run (it may write a hash back as it exits), whatever the sign-in's
+  result. See
   [No saved password at rest](#no-saved-password-at-rest).
 
 ## Checking the typing: `--typing-check`
@@ -299,18 +316,32 @@ The QA password lives in the credential store and nowhere else. A
 browser that saved it would keep a second copy in the profile, readable
 by anyone who can read the profile directory (`Login Data` is a SQLite
 file, and on a capture host its key is a fixed one). The profile's
-preferences keep the password manager off, and after every run on an
-account's profile, once its browsers have stopped, the recipe checks
-that it worked. It counts, without reading any value:
+preferences keep the password manager off.
+
+Chrome also keeps a salted hash of a Google account's password, with
+its length, for its password-reuse warning. It is not the password, but
+it is enough to test guesses offline. Chrome writes it when a password is
+submitted on Google's sign-in page and the sign-in succeeds, **whatever
+the password manager's settings**: no profile preference prevents it
+(only an incognito window does, which keeps no session). So the recipe
+removes it. Before every browser start, and after every run once the
+account's browsers have stopped, it deletes these keys and keeps
+everything else in their files (each file rewritten atomically, 0600):
+
+- `profile.password_hash_data_list` in `chromium/Default/Preferences`
+  (a Google account's password);
+- `local.password_hash_data_list` in `chromium/Local State` (Chrome keeps
+  an enterprise password's there).
+
+Then it checks that nothing is left. It counts, without reading any value:
 
 - the saved logins in `chromium/Default/Login Data` and
   `chromium/Default/Login Data For Account` ("never save" entries do
   not count);
-- the entries of `profile.password_hash_data_list` in
-  `chromium/Default/Preferences` (salted hashes of a Google password,
-  kept for Chrome's password-reuse warning).
+- the entries left in the two password-hash lists above.
 
-Any of them, or a database it cannot read, ends the run with exit 8:
+Any of them, or a file it cannot read, ends the run with exit 8, so a
+hash in the count means the removal failed (it says why):
 
 ```text
 SECRET AT REST: yahoo/qa1: the browser profile holds 1 saved login(s) in Login Data, 0 in Login Data For Account and 0 password hash(es) (…/chromium). …
@@ -326,21 +357,28 @@ To clear it:
    or, with no browser running, delete the two files
    `chromium/Default/Login Data` and `chromium/Default/Login Data For
 Account` (and their `-journal` files). Deleting them removes saved
-   passwords only, not the provider's session. A password hash is
-   removed, with no browser running, by deleting the key
-   `profile.password_hash_data_list` from `chromium/Default/Preferences`
-   (for example
-   `jq 'del(.profile.password_hash_data_list)' Preferences > Preferences.new`,
-   then `chmod 600 Preferences.new` and `mv Preferences.new Preferences`).
-3. Check: `just email-webmail-signin <set> <account> --check-only`
+   passwords only, not the provider's session.
+3. Remove a password hash with no browser:
+   `just email-webmail-signin <set> <account> --scrub-profile`. It starts
+   no browser and no session and needs no account file; it refuses
+   (exit 6) while a run holds the account or a browser runs on the
+   profile (a running browser writes its preferences back when it
+   exits). It removes the two keys above, then counts as a run does:
+   `SCRUBBED: <set>/<account>: nothing at rest …` and exit 0, or
+   `SECRET AT REST` and exit 8 (a saved login is not removed by it: see
+   step 2). A profile signed in before the recipe removed hashes by
+   itself still holds one: scrub it once.
+4. Check: `just email-webmail-signin <set> <account> --check-only`
    counts again and must not print `SECRET AT REST`.
-4. If the profile was copied anywhere (a backup, another machine, an
-   archive) while the password was in it, treat the password as exposed:
-   [rotate it](#rotating-a-password).
-5. Find out how it got there: only this recipe writes the preferences
-   before a start, so the usual cause is the profile opened by another
-   browser or tool, which starts it without them and lets Chrome offer
-   "Save password?".
+5. If the profile was copied anywhere (a backup, another machine, an
+   archive) while the password or its hash was in it, treat the password
+   as exposed: [rotate it](#rotating-a-password).
+6. Find out how a saved login got there: only this recipe writes the
+   preferences before a start, so the usual cause is the profile opened
+   by another browser or tool, which starts it without them and lets
+   Chrome offer "Save password?". A hash comes from every Google sign-in
+   in the profile, the recipe's included, and is removed at the end of
+   every run.
 
 ## Open risk: Playwright on a signed-in profile
 

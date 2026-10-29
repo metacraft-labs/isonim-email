@@ -44,12 +44,13 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   statSync,
   chmodSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { BrowserContext } from "playwright-core";
@@ -311,33 +312,141 @@ function mergePrefs(base: Json, over: Json): Json {
   return out;
 }
 
-// Writes WEBMAIL_PROFILE_PREFS into the profile's Default/Preferences
-// before a browser starts on it (none may run on it then), keeping
-// everything else in the file; atomic, 0600. A file that is not a JSON
-// object is an error: it is never replaced.
-export function writeWebmailProfilePrefs(userDataDir: string): void {
-  const dir = join(userDataDir, "Default");
-  const path = join(dir, "Preferences");
-  let prefs: Json = {};
-  if (existsSync(path)) {
-    const v: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (!isObject(v)) throw new Error(`${path} is not a JSON object`);
-    prefs = v;
-  }
-  prefs = mergePrefs(prefs, WEBMAIL_PROFILE_PREFS as unknown as Json);
-  privateDir(dir);
+// A preferences file read as a JSON object; {} when there is none. A file
+// that is not a JSON object is an error (it is never replaced).
+function readPrefsObject(path: string): Json {
+  if (!existsSync(path)) return {};
+  const v: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isObject(v)) throw new Error(`${path} is not a JSON object`);
+  return v;
+}
+
+// Writes a preferences file atomically (a temporary file renamed over
+// it), 0600, its directory 0700.
+function writePrefsObject(path: string, prefs: Json): void {
+  privateDir(join(path, ".."));
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(prefs), { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
 }
 
+// Writes WEBMAIL_PROFILE_PREFS into the profile's Default/Preferences
+// before a browser starts on it (none may run on it then), keeping
+// everything else in the file; atomic, 0600. A file that is not a JSON
+// object is an error: it is never replaced.
+export function writeWebmailProfilePrefs(userDataDir: string): void {
+  const path = join(userDataDir, "Default", "Preferences");
+  writePrefsObject(
+    path,
+    mergePrefs(readPrefsObject(path), WEBMAIL_PROFILE_PREFS as unknown as Json),
+  );
+}
+
+// Where Chrome keeps the hashes of a password it protects against reuse
+// (read in Chromium 147.0.7727.137, hash_password_manager.cc: the Google
+// account password's in the profile's preferences, kPasswordHashDataList;
+// an enterprise password's in the browser's Local State,
+// kLocalPasswordHashDataList). Each entry is a salted hash of the
+// password with its length and the account name: not the password, but
+// derived from it, and enough to test a guess offline, so it is a secret
+// at rest. Chrome writes the profile's one when a password is submitted
+// on Google's sign-in page and the login succeeds, whatever the password
+// manager's settings: no profile preference prevents it (only an
+// off-the-record window does), measured with Google Chrome
+// 147.0.7727.137 (webmail_signin_session.test.ts).
+export const PASSWORD_HASH_LOCATIONS: readonly {
+  /** The file, relative to the user data directory. */
+  file: string;
+  /** The key, as a path of object keys. */
+  key: readonly [string, string];
+}[] = [
+  {
+    file: join("Default", "Preferences"),
+    key: ["profile", "password_hash_data_list"],
+  },
+  { file: "Local State", key: ["local", "password_hash_data_list"] },
+];
+
+export interface PasswordHashScrub {
+  /** Entries removed, over every location. */
+  removed: number;
+  /** The files rewritten (relative to the user data directory). */
+  rewritten: string[];
+}
+
+// Removes every PASSWORD_HASH_LOCATIONS key from its file, keeping
+// everything else (each rewritten file merge-written atomically, 0600;
+// a file without the key is not touched). Run only with no browser on
+// the profile: a running browser writes its preferences back on exit.
+// A file that is not a JSON object is an error and is never replaced.
+export function scrubPasswordHashes(userDataDir: string): PasswordHashScrub {
+  const out: PasswordHashScrub = { removed: 0, rewritten: [] };
+  for (const loc of PASSWORD_HASH_LOCATIONS) {
+    const path = join(userDataDir, loc.file);
+    if (!existsSync(path)) continue;
+    const prefs = readPrefsObject(path);
+    const [outer, inner] = loc.key;
+    const parent = prefs[outer];
+    if (!isObject(parent) || !(inner in parent)) continue;
+    const list = parent[inner];
+    out.removed += Array.isArray(list) ? list.length : 1;
+    const { [inner]: _gone, ...rest } = parent;
+    writePrefsObject(path, { ...prefs, [outer]: rest });
+    out.rewritten.push(loc.file);
+  }
+  return out;
+}
+
+// The processes running a browser on `userDataDir`: every process whose
+// command line carries `--user-data-dir=<it>` (the browser and its
+// helpers), and the process Chrome's SingletonLock names on this host
+// (`<host>-<pid>`) while it lives. Linux only (/proc); elsewhere the lock
+// alone.
+export function browsersOn(userDataDir: string): number[] {
+  const pids = new Set<number>();
+  let entries: string[] = [];
+  try {
+    entries = readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch {
+    // no /proc
+  }
+  for (const pid of entries) {
+    if (Number(pid) === process.pid) continue;
+    try {
+      const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      if (hasArg(argv, `--user-data-dir=${userDataDir}`)) pids.add(Number(pid));
+    } catch {
+      continue;
+    }
+  }
+  try {
+    const m = /^(.*)-(\d+)$/.exec(
+      readlinkSync(join(userDataDir, "SingletonLock")),
+    );
+    if (m !== null && m[1] === hostname()) {
+      const pid = Number(m[2]);
+      try {
+        process.kill(pid, 0);
+        pids.add(pid);
+      } catch (err) {
+        // EPERM: it lives, as another user's process.
+        if ((err as NodeJS.ErrnoException).code === "EPERM") pids.add(pid);
+      }
+    }
+  } catch {
+    // no lock: no browser
+  }
+  return [...pids].sort((a, b) => a - b);
+}
+
 // What the browser keeps of a password in a profile, counted, never read:
 // saved logins in Login Data and Login Data For Account (rows that are not
-// "never save" entries), and the entries of profile.password_hash_data_list
-// (salted hashes of a Google password, kept for Chrome's password-reuse
+// "never save" entries), and the entries of every PASSWORD_HASH_LOCATIONS
+// list (salted hashes of a password, kept for Chrome's password-reuse
 // warning). `unreadable` names what could not be counted (a database that
-// is locked or malformed): that is a failure too, since it proves nothing.
+// is locked or malformed, a preferences file that is not JSON): that is a
+// failure too, since it proves nothing.
 export interface SecretsAtRest {
   savedLogins: number;
   accountLogins: number;
@@ -391,17 +500,24 @@ export function secretsAtRest(userDataDir: string): SecretsAtRest {
       );
     }
   }
-  const prefsPath = join(def, "Preferences");
-  if (existsSync(prefsPath)) {
+  for (const loc of PASSWORD_HASH_LOCATIONS) {
+    const path = join(userDataDir, loc.file);
+    if (!existsSync(path)) continue;
+    const name = loc.file.slice(loc.file.lastIndexOf("/") + 1);
     try {
-      const v: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
-      const list =
-        isObject(v) && isObject(v.profile)
-          ? v.profile.password_hash_data_list
-          : undefined;
-      out.passwordHashes = Array.isArray(list) ? list.length : 0;
+      const v: unknown = JSON.parse(readFileSync(path, "utf8"));
+      if (!isObject(v)) throw new Error("not an object");
+      const [outer, inner] = loc.key;
+      const parent = v[outer];
+      const list = isObject(parent) ? parent[inner] : undefined;
+      // Anything but an empty list under the key counts.
+      out.passwordHashes += Array.isArray(list)
+        ? list.length
+        : list === undefined
+          ? 0
+          : 1;
     } catch {
-      out.unreadable.push("Preferences (not JSON)");
+      out.unreadable.push(`${name} (not a JSON object)`);
     }
   }
   return out;

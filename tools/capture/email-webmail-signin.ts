@@ -30,9 +30,18 @@
 //    screen is kept as check-screen.png); signin.json is written.
 //    `--playwright-check` adds the earlier check under Playwright, which a
 //    provider can see as automation, so it is off by default.
-// 6. Once every browser on the profile has stopped, the saved passwords
-//    it holds are counted (webmail_profiles.ts `secretsAtRest`, no value
-//    read): any is a failure (exit 8), whatever the sign-in's result.
+// 6. Once every browser on the profile has stopped, the password hashes
+//    Chrome keeps for its password-reuse warning are removed from the
+//    profile (webmail_profiles.ts `scrubPasswordHashes`: Chrome writes the
+//    Google account's at a successful sign-in whatever its settings), then
+//    the saved passwords and hashes it still holds are counted
+//    (`secretsAtRest`, no value read): any is a failure (exit 8), whatever
+//    the sign-in's result, so exit 8 means a saved login or a scrub that
+//    failed (a browser still on the profile after 20 s is one). The same
+//    scrub runs before every browser start.
+//
+// `--scrub-profile` runs only step 6 on an account's profile, starting no
+// browser and no session, and refuses while a browser or a run holds it.
 //
 // `--typing-check` contacts no provider: the same session and browser,
 // on a throw-away profile, at a loopback page that compares a salted
@@ -46,7 +55,13 @@
 // record, or in a kept screenshot (each one passes GuiAssert's guard).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -99,10 +114,12 @@ import { PROVIDER_SIGNIN } from "./providers/webmail_signin_steps.ts";
 import {
   accountName,
   accountProfile,
+  browsersOn,
   checkSignedIn,
   holdsSecrets,
   PROFILES_ENV,
   profilesRoot,
+  scrubPasswordHashes,
   secretsAtRest,
   signinBrowserArgs,
   stopBrowser,
@@ -127,6 +144,7 @@ const USAGE = `usage: email-webmail-signin SET [ACCOUNT] [--account NAME]
                             [--typing-check] [--override-cooldown] [--dir DIR]
                             [--timeout SECONDS] [--playwright-check]
                             [--unsafe-no-sandbox]
+usage: email-webmail-signin SET ACCOUNT --scrub-profile
 
 Signs a hosted-webmail QA account's browser profile in, by itself, with
 the account file's address and password. Sets: ${SETS.join(", ")}.
@@ -173,6 +191,11 @@ signin.json.
 --timeout S         how long the check waits for the mailbox (default 45)
 --unsafe-no-sandbox UNSAFE: run the browsers with Chromium's sandbox off,
                     on a host where it cannot run
+--scrub-profile     only remove the password hashes Chrome keeps in the
+                    account's profile (every sign-in does it too), then
+                    count what it still holds at rest; starts no browser
+                    and no session, needs no account file; refused (6)
+                    while a browser or a run holds the profile
 
 Exit status: 0 signed in (recorded), or the typing check matched; 1 not
 signed in, or failed (wrong password, unknown account, an unrecognised
@@ -182,8 +205,10 @@ no GuiAssert session, no webmail browser); 5 challenged, or a consent
 page it cannot answer (a person must finish it); 6 refused (cool-down, or
 the account in use); 7 stopped: the password was legible on the screen;
 8 the profile holds a saved password (a secret at rest), whatever the
-sign-in's result; 128+N signal N. With several accounts, the first
-account's non-zero status.
+sign-in's result (a saved login, a password hash it could not remove,
+or a browser still on the profile after the run); 128+N signal N. With several accounts, the first account's
+non-zero status. --scrub-profile: 0 nothing left at rest, 6 refused, 8
+something left at rest.
 `;
 
 interface Options {
@@ -198,6 +223,7 @@ interface Options {
   timeoutS: number;
   playwrightCheck: boolean;
   unsafeNoSandbox: boolean;
+  scrubProfile: boolean;
 }
 
 const EXIT = {
@@ -291,6 +317,8 @@ async function launchWebmailBrowser(a: {
   label: string;
   onChild: (c: ChildProcess) => void;
 }): Promise<ChildProcess | null> {
+  // No password hash is loaded into the browser, and its preferences.
+  scrubPasswordHashes(a.userDataDir);
   writeWebmailProfilePrefs(a.userDataDir);
   let said = "";
   const child = spawn(
@@ -433,11 +461,65 @@ async function typingCheckAccount(
   }
 }
 
+/** How long the end of a run waits for the browsers on a profile to exit. */
+const BROWSERS_EXIT_MS = 20_000;
+
 /**
- * The account's sign-in, then (once its browsers have stopped) the count
- * of saved passwords in its profile: any, or a database that cannot be
- * read, is exit 8 whatever the sign-in's result. Not after a run that
- * never opened the profile (pending, refused, the typing check).
+ * The end of every run on a profile (`userDataDir`): once no browser runs
+ * on it, the password hashes Chrome keeps are removed, then what it still
+ * holds at rest is counted; exit 8 (said why) when anything is left (a
+ * saved login, a hash the scrub could not remove, a file it could not
+ * read) or a browser still runs on it after the wait, else `code`.
+ */
+async function scrubAndCount(
+  label: string,
+  userDataDir: string,
+  code: number,
+): Promise<number> {
+  let running = browsersOn(userDataDir);
+  for (const t0 = Date.now(); running.length > 0; ) {
+    if (Date.now() - t0 >= BROWSERS_EXIT_MS) break;
+    await new Promise((r) => setTimeout(r, 250));
+    running = browsersOn(userDataDir);
+  }
+  let scrubFailed: string | null = null;
+  if (running.length > 0)
+    scrubFailed = `a browser still runs on the profile (pid ${running.join(", ")}), so nothing was removed and the count proves nothing`;
+  else
+    try {
+      const r = scrubPasswordHashes(userDataDir);
+      if (r.removed > 0)
+        say(
+          `${label}: removed ${r.removed} password hash(es) Chrome keeps for its password-reuse warning (${r.rewritten.join(", ")}).`,
+        );
+    } catch (err) {
+      scrubFailed = `the password hashes could not be removed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
+    }
+  let s = secretsAtRest(userDataDir);
+  // A browser stopped a moment ago may still hold a database's lock.
+  if (s.unreadable.length > 0) {
+    await new Promise((r) => setTimeout(r, 3000));
+    s = secretsAtRest(userDataDir);
+  }
+  // A browser still on the profile may write a hash back when it exits,
+  // so the count proves nothing then: a failure too.
+  if (!holdsSecrets(s) && running.length === 0) return code;
+  say(
+    `SECRET AT REST: ${label}: the browser profile holds ${s.savedLogins} saved login(s) in Login Data, ${s.accountLogins} in Login Data For Account and ${s.passwordHashes} password hash(es)` +
+      (s.unreadable.length > 0
+        ? `; could not count: ${s.unreadable.join(", ")}`
+        : "") +
+      (scrubFailed === null ? "" : `; ${scrubFailed}`) +
+      ` (${userDataDir}). The password must never be persisted by the browser: remove it (a saved login: Chrome's password manager in a --manual session, or delete the two Login Data files with no browser running; a password hash: --scrub-profile with no browser running), then rotate the password if the profile was copied anywhere (runbook docs/webmail-signin.md, "No saved password at rest").`,
+  );
+  return EXIT.secretAtRest;
+}
+
+/**
+ * The account's sign-in, then (once its browsers have stopped) the scrub
+ * and the count of what its profile holds at rest (`scrubAndCount`). Not
+ * after a run that never opened the profile (pending, refused, the
+ * typing check).
  */
 async function signInAccount(
   o: Options,
@@ -450,21 +532,47 @@ async function signInAccount(
   const opened = { profile: null as string | null };
   const code = await signInAccountOnce(o, host, file, bin, rl, opened);
   if (opened.profile === null) return code;
-  let s = secretsAtRest(opened.profile);
-  // A browser stopped a moment ago may still hold a database's lock.
-  if (s.unreadable.length > 0) {
-    await new Promise((r) => setTimeout(r, 3000));
-    s = secretsAtRest(opened.profile);
+  return scrubAndCount(label, opened.profile, code);
+}
+
+/**
+ * `--scrub-profile`: the scrub and the count of a run's end on the
+ * account's profile, with no browser, no session and no account file;
+ * refused while a run holds the account's lease or a browser runs on the
+ * profile. Not an attempt.
+ */
+async function scrubProfile(o: Options, host: HostEnv): Promise<number> {
+  const file = `${o.set}/${o.account!}.json`;
+  const label = `${o.set}/${o.account!}`;
+  const profile = accountProfile(host, o.set, file);
+  if (!existsSync(profile.userDataDir)) {
+    say(
+      `NOTHING TO SCRUB: ${label}: no browser profile at ${profile.userDataDir}.`,
+    );
+    return EXIT.signedIn;
   }
-  if (!holdsSecrets(s)) return code;
-  say(
-    `SECRET AT REST: ${label}: the browser profile holds ${s.savedLogins} saved login(s) in Login Data, ${s.accountLogins} in Login Data For Account and ${s.passwordHashes} password hash(es)` +
-      (s.unreadable.length > 0
-        ? `; could not count: ${s.unreadable.join(", ")}`
-        : "") +
-      ` (${opened.profile}). The password must never be persisted by the browser: remove it (Chrome's password manager in a --manual session, or delete the two Login Data files with no browser running; a password hash: delete profile.password_hash_data_list from Default/Preferences with no browser running), then rotate the password if the profile was copied anywhere (runbook docs/webmail-signin.md, "No saved password at rest").`,
-  );
-  return EXIT.secretAtRest;
+  const lease = tryLease(profile, `scrub-${process.pid}`);
+  if (lease === null) {
+    say(
+      `REFUSED: ${label}: another run holds the account's lease (${join(profile.dir, "lease.json")}).`,
+    );
+    return EXIT.refused;
+  }
+  try {
+    const running = browsersOn(profile.userDataDir);
+    if (running.length > 0) {
+      say(
+        `REFUSED: ${label}: a browser runs on the profile (pid ${running.join(", ")}); stop it first (it writes its preferences back when it exits).`,
+      );
+      return EXIT.refused;
+    }
+    const code = await scrubAndCount(label, profile.userDataDir, EXIT.signedIn);
+    if (code === EXIT.signedIn)
+      say(`SCRUBBED: ${label}: nothing at rest in ${profile.userDataDir}.`);
+    return code;
+  } finally {
+    releaseLease(lease);
+  }
 }
 
 async function signInAccountOnce(
@@ -807,6 +915,7 @@ function parseArgs(args: string[]): Options | string {
     timeoutS: 45,
     playwrightCheck: false,
     unsafeNoSandbox: false,
+    scrubProfile: false,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
@@ -827,6 +936,7 @@ function parseArgs(args: string[]): Options | string {
     else if (a === "--timeout") o.timeoutS = Number(value());
     else if (a === "--playwright-check") o.playwrightCheck = true;
     else if (a === "--unsafe-no-sandbox") o.unsafeNoSandbox = true;
+    else if (a === "--scrub-profile") o.scrubProfile = true;
     else if (a.startsWith("-")) return `unknown option ${a}`;
     else if (set === undefined) set = a;
     else if (account === undefined) account = a;
@@ -849,6 +959,18 @@ function parseArgs(args: string[]): Options | string {
       o.playwrightCheck)
   )
     return "--typing-check takes only --vnc, --dir, --timeout and --unsafe-no-sandbox";
+  if (o.scrubProfile) {
+    if (account === undefined) return "--scrub-profile needs ACCOUNT";
+    // It names a profile directory directly (no account file is read).
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(account))
+      return "--scrub-profile: ACCOUNT is an account file's name (qa1)";
+    if (
+      args
+        .filter((x) => x.startsWith("-"))
+        .some((x) => x !== "--scrub-profile" && x !== "--account")
+    )
+      return "--scrub-profile takes no other option";
+  }
   return { set, account, ...o };
 }
 
@@ -864,6 +986,8 @@ async function main(): Promise<number> {
     return EXIT.usage;
   }
   const host = currentHost();
+  // Before the checks for a session and a browser: it needs neither.
+  if (o.scrubProfile) return scrubProfile(o, host);
   if (host.platform !== "linux") {
     say("CANNOT RUN: the sign-in's private display session is Linux only.");
     return EXIT.hostCannot;
