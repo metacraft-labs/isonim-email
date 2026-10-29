@@ -24,9 +24,16 @@
 // the password stops the attempt, keeps a screenshot in which the
 // password is not legible (checked with GuiAssert's own guard), and
 // types nothing more; a session asked for VNC serves an owner-only
-// socket; the browser's own sign-in, turned off in the profile as the
-// recipe does before every start, stays off (Chrome kept both
-// preferences, and its profile menu offers no "Sign in to Chrome"); the
+// socket; with the profile's preferences, written as the recipe writes
+// them before every start, Chrome offers no "Save password?" after the
+// password form is submitted, saves no login, and keeps every one of
+// them (the password manager off, the web sign-in interception off,
+// Chrome's sign-in allowed), while the same pages and steps on a profile
+// without them get the offer (the positive control); a privacy-consent
+// page on a loopback consent host (`consent.localhost`, any port),
+// worded in Bulgarian as Yahoo's is, is recognised by the address Chrome's
+// address bar holds and answered by rejecting every row and clicking
+// its continue control, never its allow choices; the
 // typing check (a loopback page comparing a salted SHA-256 of what was
 // typed) reports MATCH for passwords of every printable ASCII character
 // and of non-ASCII letters typed through GuiAssert into Google Chrome,
@@ -36,7 +43,9 @@
 // real provider pages cannot be signed in to from a test, so a local
 // HTTP server on loopback plays Gmail's sign-in (an address page, a
 // password page, a "Set a home address" page, a "Verify it's you" page,
-// and a mailbox behind a session cookie), worded as Gmail words them. GuiAssert, the browser,
+// and a mailbox behind a session cookie), worded as Gmail words them,
+// and a privacy-consent page on `consent.localhost` (which Chrome
+// resolves to loopback itself) worded as Yahoo's. GuiAssert, the browser,
 // tesseract, AT-SPI, Playwright and the profile are real.
 // Run (inside `nix develop`, which puts guiassert on PATH) with:
 //   node --test tools/capture/providers/webmail_signin_session.test.ts
@@ -71,11 +80,12 @@ import { findExecutable } from "./requirements.ts";
 import {
   checkSignedIn,
   signinBrowserArgs,
+  secretsAtRest,
   stopBrowser,
-  suppressBrowserSigninOffer,
   waitSandboxed,
   webmailBrowser,
   webmailLaunchOptions,
+  writeWebmailProfilePrefs,
 } from "./webmail_profiles.ts";
 import {
   AUTOMATION_SWITCHES,
@@ -84,7 +94,7 @@ import {
   SIGNIN_SESSION_SWITCHES,
   verifySignedIn,
 } from "./webmail_signin.ts";
-import { GMAIL_SIGNIN } from "./webmail_signin_steps.ts";
+import { GMAIL_SIGNIN, type ProviderSignin } from "./webmail_signin_steps.ts";
 import {
   runTypingCheck,
   startTypingCheckServer,
@@ -120,6 +130,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     identifier: [] as string[],
     password: [] as string[],
     homeAddressSaved: 0,
+    consent: [] as string[],
   };
   const probes: { webdriver: string; page: string }[] = [];
   let bin: string;
@@ -194,6 +205,22 @@ describe("the automated sign-in in a real GuiAssert session", () => {
           res.writeHead(303, { location: "/mail/" });
           return res.end();
         }
+        if (url.pathname === "/collectConsent" && req.method === "GET") {
+          // Yahoo's layout (measured 2026-10-28): rows of a reject/allow
+          // pair of radio buttons, none chosen, then a continue button.
+          const row = (n: number, what: string) =>
+            `<p>${what}</p><label><input type="radio" name="r${n}" value="reject" aria-label="Отхвърляне"> Отхвърляне</label> <label><input type="radio" name="r${n}" value="allow" aria-label="Разрешаване"> Разрешаване</label>`;
+          return html(
+            `<h1>Актуализирайте настройките си за поверителност</h1><form method="post" action="/collectConsent">${row(1, "Използване на информация от всички имейли")}${row(2, "Персонализирани реклами")}<p><button>Продължаване</button></p></form>`,
+          );
+        }
+        if (url.pathname === "/collectConsent" && req.method === "POST") {
+          const b = await readBody(req);
+          received.consent.push(`${b.get("r1")},${b.get("r2")}`);
+          // On to the sign-in, on the provider's own host.
+          res.writeHead(303, { location: `http://127.0.0.1:${port}/signin` });
+          return res.end();
+        }
         if (url.pathname === "/challenge")
           return html(
             "<h1>Verify it's you</h1><p>To help keep your account safe, Google wants to make sure it's really you trying to sign in.</p><input aria-label=\"Enter code\" autofocus><button>Next</button>",
@@ -230,11 +257,13 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     env: Record<string, string>,
     profile: string,
     url: string,
+    prefs = true,
   ) {
     const browser = webmailBrowser(process.env);
     if ("reason" in browser) throw new Error(browser.reason);
-    // As the recipe does before every start.
-    suppressBrowserSigninOffer(profile);
+    // As the recipe does before every start (left out only by the
+    // password manager's positive control).
+    if (prefs) writeWebmailProfilePrefs(profile);
     let said = "";
     const child = spawn(
       browser.path,
@@ -282,7 +311,18 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     }
   }
 
-  async function attempt(name: string, vncSocket: boolean) {
+  // The stand-in Gmail, from its inbox URL.
+  const standInGmail = (): ProviderSignin => ({
+    ...GMAIL_SIGNIN,
+    startUrl: `http://127.0.0.1:${port}/mail/`,
+  });
+
+  async function attempt(
+    name: string,
+    vncSocket: boolean,
+    opts: { provider?: ProviderSignin; prefs?: boolean } = {},
+  ) {
+    const provider = opts.provider ?? standInGmail();
     const profile = join(scratch, name, "chromium");
     mkdirSync(profile, { recursive: true, mode: 0o700 });
     const frames = join(scratch, name, "frames");
@@ -297,7 +337,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     const env = sessionEnv(process.env, session);
     let child;
     try {
-      child = await launch(env, profile, `http://127.0.0.1:${port}/mail/`);
+      child = await launch(env, profile, provider.startUrl, opts.prefs ?? true);
     } catch (err) {
       await ga.sessionStop(session.id);
       throw err;
@@ -319,10 +359,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
       );
       const result = await driveSignin({
         ga: sga,
-        provider: {
-          ...GMAIL_SIGNIN,
-          startUrl: `http://127.0.0.1:${port}/mail/`,
-        },
+        provider,
         browserPid: child.pid!,
         address: ADDRESS,
         password: new Secret(SENTINEL),
@@ -480,66 +517,120 @@ describe("the automated sign-in in a real GuiAssert session", () => {
         e instanceof GuiAssertError && e.reason === "secret-visible",
     );
   });
-  it("keeps the browser's own sign-in off: both preferences stay false and the profile menu offers no sign-in", async () => {
-    const profile = join(scratch, "offer", "chromium");
-    mkdirSync(profile, { recursive: true, mode: 0o700 });
-    const frames = join(scratch, "offer", "frames");
-    mkdirSync(frames, { mode: 0o700 });
-    const session = await ga.sessionStart({
-      name: `signin-test-offer-${process.pid}`,
-      width: SIGNIN_SCREEN.width,
-      height: SIGNIN_SCREEN.height,
-      vncSocket: false,
-    });
-    const sga = ga.inSession(session.id);
+  // Chrome's "Save password?" bubble, by its title (OCR of the display).
+  const SAVE_OFFER = /save\s+password/i;
+
+  // The challenge flow (address, password, "Verify it's you") on a fresh
+  // profile, then the display read for SAVE_OFFER until it shows or
+  // `watchMs` passes; the browser is stopped before returning.
+  async function passwordOffer(name: string, prefs: boolean) {
+    mode = "challenge";
+    received.password.length = 0;
+    const a = await attempt(name, false, { prefs });
+    let offered = false;
     try {
-      const child = await launch(
-        sessionEnv(process.env, session),
-        profile,
-        `http://127.0.0.1:${port}/mail/`,
-      );
-      try {
-        // The toolbar's profile button opens the menu that offers
-        // "Sign in to Chrome" when the browser's sign-in is allowed.
-        let you: { bounds: [number, number, number, number] | null }[] = [];
-        for (let i = 0; i < 20 && you.length === 0; i++) {
-          you = (
-            await sga.find({ pid: child.pid!, role: "button", name: "You" })
-          ).filter((e) => e.bounds !== null);
-          if (you.length === 0) await sleep(500);
-        }
-        assert.ok(you.length > 0, "the toolbar's profile button");
-        const b = you[0]!.bounds!;
-        // On a loaded host the first click can land before the toolbar
-        // takes input: click again until the menu shows.
-        const opened = /Guest profile|Add Chrome profile/i;
-        let menu = { text: "" };
-        for (let i = 0; i < 6 && !opened.test(menu.text); i++) {
-          await sga.click(b[0] + b[2] / 2, b[1] + b[3] / 2);
-          await sleep(2500);
-          menu = await sga.ocr(join(frames, "menu.png"), new Secret(SENTINEL));
-          rmSync(join(frames, "menu.png"), { force: true });
-        }
-        // The menu is open (it names the profile actions) ...
-        assert.match(menu.text, opened, menu.text);
-        // ... and offers no sign-in.
-        assert.doesNotMatch(
-          menu.text.replace(/\s+/g, ""),
-          /signintochrome|turnonsync/i,
-          menu.text,
-        );
-      } finally {
-        await stopBrowser(child);
+      assert.equal(a.result.outcome.result, "challenged", a.events.join("\n"));
+      assert.deepEqual(received.password, [SENTINEL]);
+      const watchMs = 15_000;
+      for (const t0 = Date.now(); !offered && Date.now() - t0 < watchMs; ) {
+        const shot = join(a.frames, "offer.png");
+        const seen = await a.sga.ocr(shot, new Secret(SENTINEL));
+        rmSync(shot, { force: true });
+        offered = SAVE_OFFER.test(seen.text);
+        if (!offered) await sleep(1000);
       }
     } finally {
-      await ga.sessionStop(session.id);
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
     }
-    // Chrome kept both (it resets `allowed` from the other at startup).
+    return { offered, profile: a.profile };
+  }
+
+  it("keeps Chrome's password manager off: no 'Save password?' after the password, no saved login, and every profile preference kept; without them the same steps get the offer", async () => {
+    const off = await passwordOffer("password-manager", true);
+    assert.equal(
+      off.offered,
+      false,
+      "a Save password? offer with the preferences",
+    );
+    assert.deepEqual(secretsAtRest(off.profile), {
+      savedLogins: 0,
+      accountLogins: 0,
+      passwordHashes: 0,
+      unreadable: [],
+    });
+    // Chrome kept every preference the recipe wrote across its start.
     const prefs = JSON.parse(
-      readFileSync(join(profile, "Default", "Preferences"), "utf8"),
-    ) as { signin: Record<string, unknown> };
-    assert.equal(prefs.signin.allowed, false);
-    assert.equal(prefs.signin.allowed_on_next_startup, false);
+      readFileSync(join(off.profile, "Default", "Preferences"), "utf8"),
+    ) as {
+      credentials_enable_service: unknown;
+      credentials_enable_autosignin: unknown;
+      profile: Record<string, unknown>;
+      signin: Record<string, unknown>;
+      intl: Record<string, unknown>;
+    };
+    assert.equal(prefs.credentials_enable_service, false);
+    assert.equal(prefs.credentials_enable_autosignin, false);
+    assert.equal(prefs.profile.password_manager_enabled, false);
+    assert.equal(prefs.profile.password_manager_leak_detection, false);
+    assert.equal(prefs.signin.interception_enabled, false);
+    assert.equal(prefs.signin.allowed, true);
+    assert.equal(prefs.signin.allowed_on_next_startup, true);
+    assert.equal(prefs.intl.accept_languages, "en-US,en");
+    // The positive control: Chrome's defaults offer to save the password
+    // on the same pages after the same steps (nobody answers it).
+    const on = await passwordOffer("password-manager-control", false);
+    assert.equal(
+      on.offered,
+      true,
+      "no Save password? offer without the preferences",
+    );
+  });
+
+  it("answers a privacy-consent page on a loopback consent host by its address (any port): every row rejected, then its continue control, then the sign-in", async () => {
+    mode = "ok";
+    received.identifier.length = 0;
+    received.password.length = 0;
+    received.consent.length = 0;
+    const provider: ProviderSignin = {
+      ...standInGmail(),
+      startUrl: `http://consent.localhost:${port}/collectConsent?sessionId=x`,
+      consent: {
+        name: "loopback-consent",
+        hosts: ["consent.localhost"],
+        paths: ["collectconsent"],
+      },
+    };
+    const a = await attempt("consent", false, { provider });
+    try {
+      assert.deepEqual(
+        a.result.outcome,
+        { result: "signed-in", typed: true },
+        a.events.join("\n"),
+      );
+      assert.deepEqual(a.result.steps, [
+        "consent:loopback-consent",
+        "address",
+        "password",
+        "interstitial:home-address",
+      ]);
+      // Both rows rejected, no allow choice, posted once.
+      assert.deepEqual(received.consent, ["reject,reject"]);
+      assert.deepEqual(received.identifier, [ADDRESS]);
+      assert.deepEqual(received.password, [SENTINEL]);
+      // The consent page's clicks, by exact name; the first of them was
+      // the attempt's first input.
+      const chose = a.events.findIndex((e) => /chose "Отхвърляне" on/.test(e));
+      const went = a.events.findIndex((e) =>
+        /every row rejected \(2\); clicked "Продължаване"/.test(e),
+      );
+      assert.ok(chose >= 0 && went > chose, a.events.join("\n"));
+      assert.equal(a.events.filter((e) => e === "first-input").length, 1);
+      assert.ok(a.events.indexOf("first-input") < chose);
+    } finally {
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
+    }
   });
 
   it("types passwords of every printable ASCII character and of non-ASCII letters into the check page exactly (MATCH), and tells a different one (MISMATCH)", async () => {

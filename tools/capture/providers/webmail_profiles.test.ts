@@ -20,6 +20,12 @@
 // Playwright opening the same profile with the same executable (as the
 // hosted-webmail captures do), sandboxed too; a browser without the
 // sandbox, or one that aborts for want of one, is refused, naming why.
+// The profile's preferences (the password manager and the sign-in
+// interception off, Chrome's own sign-in on, the pages' languages) are
+// merged key by key into Default/Preferences, 0600, never replacing a
+// file that is not a JSON object; the saved passwords a profile holds
+// are counted (saved logins, not "never save" entries; password hashes)
+// and a database that cannot be read counts as a failure.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails cannot be signed in from a test (a test never signs in
@@ -31,7 +37,11 @@
 // Chromium, Playwright, the persistent profile, the sandbox and the
 // check are real. One double more: a stand-in Chromium executable that
 // aborts as Chromium does without a usable sandbox (a host without
-// user namespaces cannot be made from inside a test).
+// user namespaces cannot be made from inside a test). And Chrome's
+// `Login Data` databases are written by the test with the `logins`
+// table reduced to the columns the count reads (Chrome writes them only
+// when it saves a password, which the real-browser session test proves
+// it no longer does).
 // Run with:
 //   node --test tools/capture/providers/webmail_profiles.test.ts
 
@@ -48,6 +58,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DatabaseSync } from "node:sqlite";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -65,11 +76,14 @@ import {
   rendererSandboxes,
   signinBrowserArgs,
   stopBrowser,
-  suppressBrowserSigninOffer,
+  holdsSecrets,
+  secretsAtRest,
   waitSandboxed,
   type WebmailSignin,
+  WEBMAIL_PROFILE_PREFS,
   webmailLaunchOptions,
   writeSigninRecord,
+  writeWebmailProfilePrefs,
 } from "./webmail_profiles.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
@@ -81,15 +95,127 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 const mode = (p: string): number => statSync(p).mode & 0o777;
 
 describe("hosted-webmail browser profiles", () => {
-  it("never replaces a Preferences file that is not a JSON object when it turns the browser's sign-in off", () => {
+  it("never replaces a Preferences file that is not a JSON object when it writes the profile's preferences", () => {
     for (const body of ["[]", "null", "not json {"]) {
       const dir = mkdtempSync(join(scratch, "prefs-"));
       const prefs = join(dir, "Default", "Preferences");
       mkdirSync(dirname(prefs));
       writeFileSync(prefs, body);
-      assert.throws(() => suppressBrowserSigninOffer(dir), body);
+      assert.throws(() => writeWebmailProfilePrefs(dir), body);
       assert.equal(readFileSync(prefs, "utf8"), body);
     }
+  });
+
+  it("turns the password manager and the sign-in interception off, and Chrome's own sign-in back on, merging key by key", () => {
+    // The values themselves (capture spec): a change here is a change of
+    // what Chrome is told, and must be deliberate.
+    assert.deepEqual(WEBMAIL_PROFILE_PREFS, {
+      credentials_enable_service: false,
+      credentials_enable_autosignin: false,
+      profile: {
+        password_manager_enabled: false,
+        password_manager_leak_detection: false,
+      },
+      signin: {
+        interception_enabled: false,
+        allowed: true,
+        allowed_on_next_startup: true,
+      },
+      intl: { accept_languages: "en-US,en" },
+    });
+    const dir = mkdtempSync(join(scratch, "prefs-"));
+    const prefs = join(dir, "Default", "Preferences");
+    mkdirSync(dirname(prefs));
+    // A profile the first follow-up left with Chrome's sign-in off, and
+    // keys of Chrome's own beside the ones written.
+    writeFileSync(
+      prefs,
+      JSON.stringify({
+        keep: { me: 1 },
+        credentials_enable_service: true,
+        profile: { name: "Person 1", password_manager_enabled: true },
+        signin: { allowed: false, allowed_on_next_startup: false, other: 2 },
+      }),
+      { mode: 0o644 },
+    );
+    writeWebmailProfilePrefs(dir);
+    assert.deepEqual(JSON.parse(readFileSync(prefs, "utf8")), {
+      keep: { me: 1 },
+      credentials_enable_service: false,
+      credentials_enable_autosignin: false,
+      profile: {
+        name: "Person 1",
+        password_manager_enabled: false,
+        password_manager_leak_detection: false,
+      },
+      signin: {
+        allowed: true,
+        allowed_on_next_startup: true,
+        other: 2,
+        interception_enabled: false,
+      },
+      intl: { accept_languages: "en-US,en" },
+    });
+    assert.equal(mode(prefs), 0o600);
+    // A fresh profile gets them all.
+    const fresh = mkdtempSync(join(scratch, "prefs-"));
+    writeWebmailProfilePrefs(fresh);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(fresh, "Default", "Preferences"), "utf8")),
+      WEBMAIL_PROFILE_PREFS,
+    );
+  });
+
+  it("counts the saved passwords a profile holds, without reading one, and fails on a database it cannot read", () => {
+    const dir = mkdtempSync(join(scratch, "rest-"));
+    const def = join(dir, "Default");
+    mkdirSync(def);
+    // No databases at all: nothing at rest.
+    assert.deepEqual(secretsAtRest(dir), {
+      savedLogins: 0,
+      accountLogins: 0,
+      passwordHashes: 0,
+      unreadable: [],
+    });
+    // Chrome's `logins` table, reduced to the columns the count needs:
+    // two saved logins and one "never save" entry; the account store one.
+    const make = (name: string, rows: number[]) => {
+      const db = new DatabaseSync(join(def, name));
+      db.exec(
+        "CREATE TABLE logins (origin_url TEXT, password_value BLOB, blacklisted_by_user INTEGER)",
+      );
+      const ins = db.prepare(
+        "INSERT INTO logins (origin_url, password_value, blacklisted_by_user) VALUES (?, ?, ?)",
+      );
+      for (const b of rows) ins.run("https://example.test/", "x", b);
+      db.close();
+    };
+    make("Login Data", [0, 0, 1]);
+    make("Login Data For Account", [0]);
+    writeFileSync(
+      join(def, "Preferences"),
+      JSON.stringify({ profile: { password_hash_data_list: [{}, {}] } }),
+    );
+    const s = secretsAtRest(dir);
+    assert.deepEqual(s, {
+      savedLogins: 2,
+      accountLogins: 1,
+      passwordHashes: 2,
+      unreadable: [],
+    });
+    assert.equal(holdsSecrets(s), true);
+    // Only "never save" entries: nothing at rest.
+    rmSync(join(def, "Login Data"));
+    rmSync(join(def, "Login Data For Account"));
+    make("Login Data", [1]);
+    writeFileSync(join(def, "Preferences"), "{}");
+    assert.equal(holdsSecrets(secretsAtRest(dir)), false);
+    // A database that is not one proves nothing: a failure.
+    writeFileSync(join(def, "Login Data For Account"), "not a database");
+    const bad = secretsAtRest(dir);
+    assert.equal(bad.unreadable.length, 1);
+    assert.match(bad.unreadable[0]!, /^Login Data For Account \(/);
+    assert.equal(holdsSecrets(bad), true);
   });
 
   it("resolves the profile directory from the variable, XDG_STATE_HOME or HOME, and creates it 0700 at every level", () => {

@@ -30,6 +30,20 @@
 //   ("Skip", "Not now", ...), never a keystroke and never another
 //   control; each interstitial at most once (`stuck` and
 //   `field-not-found` as for a step, named `interstitial:<name>`);
+// - a privacy-consent page (recognised by its address, read from the
+//   browser's address bar in the accessibility tree, whatever language
+//   the page is in) is answered the most privacy-preserving way, by exact
+//   control names (CONSENT_CONTROLS): a reject-all control, or every
+//   row's reject choice and then a continue control; never an accepting
+//   control, and never past a check box or switch; anything it cannot
+//   identify ends the attempt
+//   `consent-required` for a person to answer once;
+// - Google's password re-verification of an existing session is the
+//   step `reauth-password`, typed like the password screen, and the
+//   password is still typed at most once per attempt;
+// - Chrome's own sign-in bubble, should it show despite the profile's
+//   preferences, is closed once through its "Use Chrome without an
+//   account" button (a click on the browser, not on the provider's page);
 // - a challenge stops it at once with no further input, and nothing in
 //   here retries: the caller reports the result and the cool-down
 //   (webmail_signin_guard.ts) keeps a second attempt from following.
@@ -49,14 +63,21 @@ import {
 import {
   type ChallengeKind,
   classifyScreen,
+  CONSENT_CONTROLS,
+  consentHinted,
+  normalize,
   type ProviderSignin,
+  type Screen,
   type SigninErrorKind,
   SKIP_CONTROLS,
   type StepId,
 } from "./webmail_signin_steps.ts";
 
-/** What the procedure acted on: a step, or an interstitial it dismissed. */
-export type ActionId = StepId | `interstitial:${string}`;
+/**
+ * What the procedure acted on: a step, an interstitial it dismissed, or a
+ * consent page it answered.
+ */
+export type ActionId = StepId | `interstitial:${string}` | `consent:${string}`;
 
 /** The private session's one display. */
 export const SIGNIN_SCREEN = { width: 1280, height: 900 } as const;
@@ -83,7 +104,9 @@ export const SIGNIN_SCREEN = { width: 1280, height: 900 } as const;
  *   bounds null, so a field that needs a click cannot be clicked; probe,
  *   2026-10-28; recorded as a GuiAssert issue). A page sees only
  *   `devicePixelRatio` 1, the common desktop value.
- * - --lang=en-US: the screens are recognised by their English wording.
+ * - --lang=en-US: the browser's own interface in English (its bubbles,
+ *   and the address bar's accessible name, ADDRESS_BAR_NAME); the pages'
+ *   language comes from the profile's preferences and the start URLs.
  * - the window placed on the whole display, so OCR reads all of it.
  */
 export const SIGNIN_SESSION_SWITCHES: readonly string[] = [
@@ -126,6 +149,7 @@ export type SigninOutcome =
   | { result: "challenged"; challenge: ChallengeKind; phrase: string }
   | { result: SigninErrorKind; phrase: string }
   | { result: "unknown-screen" }
+  | { result: "consent-required"; consent: string; why: string }
   | { result: "stuck"; step: ActionId }
   | { result: "field-not-found"; step: ActionId }
   | { result: "secret-visible" }
@@ -136,6 +160,8 @@ export function outcomeName(o: SigninOutcome): string {
   switch (o.result) {
     case "challenged":
       return `challenged:${o.challenge}`;
+    case "consent-required":
+      return `consent-required:${o.consent}`;
     case "stuck":
     case "field-not-found":
       return `${o.result}:${o.step}`;
@@ -316,7 +342,10 @@ async function readScreen(
   }
 }
 
-async function keepScreen(ctx: SigninContext): Promise<string | null> {
+/** A guarded screenshot kept at `keepPath` (0600); null when refused. */
+async function keepScreen(
+  ctx: Pick<SigninContext, "ga" | "password" | "keepPath" | "log">,
+): Promise<string | null> {
   rmSync(ctx.keepPath, { force: true });
   try {
     await ctx.ga.screenshot(ctx.keepPath, ctx.password);
@@ -337,12 +366,228 @@ async function keepScreen(ctx: SigninContext): Promise<string | null> {
   }
 }
 
+/** The accessible name of Chrome's address bar (its interface in English). */
+export const ADDRESS_BAR_NAME = "Address and search bar";
+
+/**
+ * The page's address as the browser's address bar holds it, read from
+ * the accessibility tree of the browser's process; null when there is no
+ * such field or it gives no value.
+ */
+export async function readLocation(
+  ga: GuiAssert,
+  browserPid: number,
+): Promise<string | null> {
+  const bars = await ga.find({
+    pid: browserPid,
+    role: "text-field",
+    name: ADDRESS_BAR_NAME,
+  });
+  for (const b of bars) {
+    const v = b.value ?? b.text ?? null;
+    if (v !== null && v.trim() !== "") return v.trim();
+  }
+  return null;
+}
+
+/** Reads the address only when the OCR text names a consent host. */
+async function locationFor(
+  p: ProviderSignin,
+  ga: GuiAssert,
+  browserPid: number | undefined,
+  text: string,
+): Promise<string | null | undefined> {
+  if (browserPid === undefined || !consentHinted(p, text)) return undefined;
+  return readLocation(ga, browserPid);
+}
+
+/**
+ * Chrome's own sign-in bubble ("Make Chrome your own … Continue as …"):
+ * the phrase that shows it on the screen, and the button that closes it
+ * without signing the browser in.
+ */
+export const BROWSER_SIGNIN_BUBBLE = {
+  phrase: "Use Chrome without an account",
+  control: "Use Chrome without an account",
+} as const;
+
+const onScreen = (e: GaElement): e is GaElement & { bounds: Rect } =>
+  usable(e) &&
+  e.bounds![0] >= 0 &&
+  e.bounds![1] >= 0 &&
+  e.bounds![0] + e.bounds![2] <= SIGNIN_SCREEN.width &&
+  e.bounds![1] + e.bounds![3] <= SIGNIN_SCREEN.height;
+
+const sameName = (a: string | null, b: string): boolean =>
+  a !== null && normalize(a) === normalize(b);
+
+/** At most this many clicks and scrolls on consent pages per attempt. */
+export const CONSENT_MAX_ACTIONS = 20;
+/** At most this many clicks on a continue control. */
+export const CONSENT_MAX_PROCEED = 3;
+/** The wheel, in lines, to bring the next rows on screen. */
+export const CONSENT_SCROLL_LINES = 3;
+
+/**
+ * Which choice a consent row's radio button is, by its accessible name:
+ * a listed reject or allow name, exactly or followed by more words that
+ * do not name the other choice; null otherwise.
+ */
+export function consentChoice(name: string | null): "reject" | "allow" | null {
+  if (name === null) return null;
+  const n = normalize(name);
+  const reject = CONSENT_CONTROLS.reject.map(normalize);
+  const allow = CONSENT_CONTROLS.allow.map(normalize);
+  const startsWith = (ws: string[]) => ws.some((w) => n.startsWith(w));
+  const mentions = (ws: string[]) => ws.some((w) => n.includes(w));
+  if (startsWith(reject) && !mentions(allow)) return "reject";
+  if (startsWith(allow) && !mentions(reject)) return "allow";
+  return null;
+}
+
+export interface ConsentState {
+  actions: number;
+  proceeds: number;
+}
+
+export type ConsentStep =
+  | { kind: "acted"; what: string }
+  | { kind: "unidentified"; why: string };
+
+/** The first on-screen element of `roles` named exactly as one of `names`. */
+async function findNamed(
+  ctx: Pick<SigninContext, "ga" | "browserPid">,
+  roles: string[],
+  names: readonly string[],
+): Promise<{ el: GaElement & { bounds: Rect }; name: string } | null> {
+  for (const role of roles) {
+    const els = (await ctx.ga.find({ pid: ctx.browserPid, role })).filter(
+      onScreen,
+    );
+    for (const name of names) {
+      const el = els.find((e) => sameName(e.name, name));
+      if (el !== undefined) return { el, name };
+    }
+  }
+  return null;
+}
+
+async function clickAt(ga: GuiAssert, b: Rect): Promise<void> {
+  const [x, y] = centre(b);
+  await ga.click(x, y);
+}
+
+/**
+ * One round on a consent page (the procedure's header says what it
+ * does); `before` runs before its first input. Every control is matched
+ * by exact name; a name of CONSENT_CONTROLS.never is never clicked.
+ */
+export async function consentRound(
+  ctx: Pick<SigninContext, "ga" | "browserPid">,
+  st: ConsentState,
+  before: () => void,
+): Promise<ConsentStep> {
+  const never = CONSENT_CONTROLS.never.map(normalize);
+  const click = async (el: GaElement & { bounds: Rect }): Promise<void> => {
+    if (el.name !== null && never.includes(normalize(el.name)))
+      throw new Error(`refusing to click "${el.name}" on a consent page`);
+    before();
+    await clickAt(ctx.ga, el.bounds);
+    st.actions++;
+  };
+  const scroll = async (why: string): Promise<ConsentStep> => {
+    before();
+    await ctx.ga.scroll(
+      SIGNIN_SCREEN.width / 2,
+      SIGNIN_SCREEN.height / 2,
+      CONSENT_SCROLL_LINES,
+    );
+    st.actions++;
+    return { kind: "acted", what: `scrolled down ${why}` };
+  };
+  if (st.actions >= CONSENT_MAX_ACTIONS)
+    return {
+      kind: "unidentified",
+      why: `still on the page after ${CONSENT_MAX_ACTIONS} clicks and scrolls`,
+    };
+  const all = await findNamed(
+    ctx,
+    ["button", "link"],
+    CONSENT_CONTROLS.rejectAll,
+  );
+  if (all !== null) {
+    await click(all.el);
+    return { kind: "acted", what: `clicked "${all.name}"` };
+  }
+  // A check box or a switch (an optional use the page may have on by
+  // default) is never answered: only reject choices are clicked, so
+  // going on past one would accept its default.
+  const boxes = await ctx.ga.find({ pid: ctx.browserPid, role: "checkbox" });
+  if (boxes.length > 0)
+    return {
+      kind: "unidentified",
+      why: `a check box or switch named ${JSON.stringify(boxes[0]!.name ?? "")}, which it does not answer`,
+    };
+  const radios = await ctx.ga.find({ pid: ctx.browserPid, role: "radio" });
+  if (radios.length === 0)
+    return {
+      kind: "unidentified",
+      why: "no reject-all control and no reject choices",
+    };
+  const odd = radios.find((r) => consentChoice(r.name) === null);
+  if (odd !== undefined)
+    return {
+      kind: "unidentified",
+      why: `a choice named ${JSON.stringify(odd.name ?? "")}, neither a reject nor an allow choice of a listed language`,
+    };
+  const rejects = radios.filter((r) => consentChoice(r.name) === "reject");
+  const allows = radios.filter((r) => consentChoice(r.name) === "allow");
+  if (rejects.length !== allows.length)
+    return {
+      kind: "unidentified",
+      why: `${rejects.length} reject and ${allows.length} allow choices, not one of each per row`,
+    };
+  const todo = rejects.filter((r) => !r.states.includes("checked"));
+  const reachable = todo.filter(onScreen);
+  if (reachable.length > 0) {
+    for (const r of reachable) await click(r);
+    return {
+      kind: "acted",
+      what: `chose "${reachable[0]!.name}" on ${reachable.length} row(s)`,
+    };
+  }
+  if (todo.length > 0) return scroll("to the next reject choices");
+  if (allows.some((a) => a.states.includes("checked")))
+    return {
+      kind: "unidentified",
+      why: "an allow choice stays selected with every reject choice checked",
+    };
+  const go = await findNamed(ctx, ["button"], CONSENT_CONTROLS.proceed);
+  if (go !== null) {
+    if (st.proceeds >= CONSENT_MAX_PROCEED)
+      return {
+        kind: "unidentified",
+        why: `still on the page after "${go.name}" ${CONSENT_MAX_PROCEED} times`,
+      };
+    await click(go.el);
+    st.proceeds++;
+    return {
+      kind: "acted",
+      what: `every row rejected (${rejects.length}); clicked "${go.name}"`,
+    };
+  }
+  return scroll("to a continue control");
+}
+
 export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
   const t0 = Date.now();
   const deadline = t0 + ctx.timings.deadlineMs;
   const acted = new Map<ActionId, number>();
   const steps: ActionId[] = [];
   let typedAnything = false;
+  let passwordTyped = false;
+  let bubbleClosed = false;
+  const consent: ConsentState = { actions: 0, proceeds: 0 };
   let unknownSince: number | null = null;
   let reads = 0;
 
@@ -366,7 +611,34 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
     if (Date.now() >= deadline) return end({ result: "deadline" }, true);
     const text = await readScreen(ctx, reads++);
     if (text === null) return end({ result: "secret-visible" }, false);
-    const screen = classifyScreen(ctx.provider, text);
+    // Chrome's own sign-in bubble over the page: closed once, through
+    // its button, then the screen is read again.
+    if (
+      !bubbleClosed &&
+      normalize(text).includes(normalize(BROWSER_SIGNIN_BUBBLE.phrase))
+    ) {
+      bubbleClosed = true;
+      const b = (
+        await ctx.ga.find({
+          pid: ctx.browserPid,
+          role: "button",
+          name: BROWSER_SIGNIN_BUBBLE.control,
+        })
+      ).filter(onScreen)[0];
+      if (b !== undefined) {
+        await clickAt(ctx.ga, b.bounds);
+        ctx.log(
+          `browser: closed Chrome's sign-in bubble with "${BROWSER_SIGNIN_BUBBLE.control}"`,
+        );
+        await sleep(ctx.timings.pollMs);
+        continue;
+      }
+    }
+    const screen = classifyScreen(
+      ctx.provider,
+      text,
+      await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
+    );
     const now = Date.now();
     if (screen.kind !== "unknown") unknownSince = null;
 
@@ -394,6 +666,28 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
         if (now - unknownSince >= ctx.timings.unknownMs)
           return end({ result: "unknown-screen" }, true);
         break;
+      case "consent": {
+        const id: ActionId = `consent:${screen.consent}`;
+        if (!acted.has(id)) {
+          ctx.log(`screen: a privacy-consent page (${screen.consent})`);
+          acted.set(id, now);
+          steps.push(id);
+        }
+        const r = await consentRound(ctx, consent, firstInput);
+        if (r.kind === "unidentified") {
+          ctx.log(`  cannot answer it: ${r.why}`);
+          return end(
+            {
+              result: "consent-required",
+              consent: screen.consent,
+              why: r.why,
+            },
+            true,
+          );
+        }
+        ctx.log(`  ${r.what}`);
+        break;
+      }
       case "interstitial": {
         const id: ActionId = `interstitial:${screen.interstitial}`;
         const at = acted.get(id);
@@ -422,9 +716,22 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
             return end({ result: "stuck", step }, true);
           break;
         }
+        const typesPassword = step === "password" || step === "reauth-password";
+        // The password is typed at most once per attempt: Google asking
+        // for it again after it was typed is a challenge.
+        if (typesPassword && passwordTyped)
+          return end(
+            {
+              result: "challenged",
+              challenge: "verify-identity",
+              phrase: "verify it's you",
+            },
+            true,
+          );
         ctx.log(`screen: ${step}`);
         const ok = await takeStep(ctx, step, firstInput);
         if (!ok) return end({ result: "field-not-found", step }, true);
+        if (typesPassword) passwordTyped = true;
         acted.set(step, Date.now());
         steps.push(step);
         break;
@@ -451,12 +758,17 @@ async function takeStep(
       );
       return true;
     case "password":
+    case "reauth-password":
       if (!(await focusField(ctx, isPasswordField))) return false;
       firstInput();
       ctx.onBeforePassword();
       await ctx.ga.type(ctx.password);
       await ctx.ga.key("Return");
-      ctx.log("  typed the password into the protected field, and Return");
+      ctx.log(
+        step === "password"
+          ? "  typed the password into the protected field, and Return"
+          : "  Google asks the session to confirm its password: typed it into the protected field, and Return",
+      );
       return true;
     case "choose-password":
       if (p.choosePasswordControl === undefined) return false;
@@ -484,6 +796,13 @@ async function takeStep(
 
 export interface VerifyContext extends ScreenReader {
   provider: ProviderSignin;
+  /** The browser's process, to read its address bar (a consent page). */
+  browserPid?: number;
+  /**
+   * Where the screen is kept (guarded, 0600) when the check finds no
+   * mailbox; removed when it does. None kept when unset.
+   */
+  keepPath?: string;
   /** How long the mailbox may take to show. */
   timeoutMs: number;
   /** How long a sign-in, challenge or error screen must stay to count. */
@@ -494,7 +813,44 @@ export interface VerifyContext extends ScreenReader {
 
 export type VerifyOutcome =
   | { signedIn: true }
-  | { signedIn: false; reason: string };
+  | {
+      signedIn: false;
+      reason: string;
+      /** The screen it saw, classified ("unrecognised" when nothing matched). */
+      seen?: string;
+      /** The kept screenshot, when `keepPath` was given and the guard kept it. */
+      screen?: string | null;
+    };
+
+/** How the check names a screen that is not the mailbox; null for none it names. */
+function checkScreenName(screen: Screen): string | null {
+  switch (screen.kind) {
+    case "step":
+      return screen.step === "reauth-password"
+        ? `Google's password re-verification of the session ("verify it's you" with only a password field)`
+        : `the ${screen.step} screen of the sign-in`;
+    case "challenge":
+      return `a challenge (${screen.challenge}: "${screen.phrase}")`;
+    case "error":
+      return `an error (${screen.error}: "${screen.phrase}")`;
+    case "interstitial":
+      return `an account-setup screen (${screen.interstitial}: "${screen.phrase}")`;
+    case "consent":
+      return `a privacy-consent page (${screen.consent})`;
+    default:
+      return null;
+  }
+}
+
+function notSignedInBecause(what: string): string {
+  if (what.startsWith("an account-setup screen"))
+    return `the inbox URL showed ${what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`;
+  if (what.startsWith("a privacy-consent page"))
+    return `the inbox URL showed ${what}, not the mailbox: the provider asks for the privacy choices first, and the check answers nothing (the sign-in does, rejecting every optional use)`;
+  if (what.startsWith("Google's password re-verification"))
+    return `the inbox URL showed ${what}, not the mailbox: the session must confirm its password; an automated attempt answers it once, the check never types`;
+  return `the inbox URL showed ${what}, not the mailbox: the profile is not signed in`;
+}
 
 /**
  * Whether the browser on the session's display shows the provider's
@@ -504,12 +860,15 @@ export type VerifyOutcome =
  * provider (Playwright's would show it `navigator.webdriver` and
  * `--enable-automation`). It never types, clicks or presses a key.
  * - the mailbox screen: signed in;
- * - a sign-in step, a challenge, an error or an account-setup screen
- *   (never dismissed here) that stays for
- *   `settleMs`: not signed in, naming the screen (the profile was sent
- *   to a sign-in page);
- * - neither within `timeoutMs`: not signed in;
+ * - a sign-in step (Google's password re-verification among them), a
+ *   challenge, an error, an account-setup screen or a privacy-consent
+ *   page (never answered here) that stays for `settleMs`: not signed in,
+ *   naming the screen;
+ * - neither within `timeoutMs`: not signed in, naming the last screen
+ *   it recognised, or "unrecognised";
  * - a frame showing the password: not signed in (it never should here).
+ * Not signed in (but for the password), the screen is kept at `keepPath`
+ * through the guard; signed in, an older one there is removed.
  */
 export async function verifySignedIn(
   ctx: VerifyContext,
@@ -517,45 +876,52 @@ export async function verifySignedIn(
   const deadline = Date.now() + ctx.timeoutMs;
   type Seen = { what: string; since: number };
   let seen = null as Seen | null;
+  // Not signed in: the screen kept first (while the browser still shows it).
+  const notSignedIn = async (
+    reason: string,
+    what: string,
+    keep: boolean,
+  ): Promise<VerifyOutcome> => ({
+    signedIn: false,
+    reason,
+    seen: what,
+    screen:
+      keep && ctx.keepPath !== undefined
+        ? await keepScreen({ ...ctx, keepPath: ctx.keepPath })
+        : null,
+  });
   for (let n = 0; ; n++) {
     const text = await readScreen(ctx, n);
     if (text === null)
-      return {
-        signedIn: false,
-        reason: "the password was legible on the screen",
-      };
-    const screen = classifyScreen(ctx.provider, text);
+      return notSignedIn(
+        "the password was legible on the screen",
+        "the password, legible",
+        false,
+      );
+    const screen = classifyScreen(
+      ctx.provider,
+      text,
+      await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
+    );
     const now = Date.now();
     if (screen.kind === "done") {
       ctx.log("check: the mailbox shows");
+      if (ctx.keepPath !== undefined) rmSync(ctx.keepPath, { force: true });
       return { signedIn: true };
     }
-    const what =
-      screen.kind === "step"
-        ? `the ${screen.step} screen of the sign-in`
-        : screen.kind === "challenge"
-          ? `a challenge (${screen.challenge}: "${screen.phrase}")`
-          : screen.kind === "error"
-            ? `an error (${screen.error}: "${screen.phrase}")`
-            : screen.kind === "interstitial"
-              ? `an account-setup screen (${screen.interstitial}: "${screen.phrase}")`
-              : null;
+    const what = checkScreenName(screen);
     // The same non-mailbox screen since when (a new one restarts it).
     const cur: Seen | null =
       what === null ? null : seen?.what === what ? seen : { what, since: now };
     seen = cur;
     if (cur !== null && now - cur.since >= ctx.settleMs)
-      return {
-        signedIn: false,
-        reason: cur.what.startsWith("an account-setup screen")
-          ? `the inbox URL showed ${cur.what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`
-          : `the inbox URL showed ${cur.what}, not the mailbox: the profile is not signed in`,
-      };
+      return notSignedIn(notSignedInBecause(cur.what), cur.what, true);
     if (now >= deadline)
-      return {
-        signedIn: false,
-        reason: `the mailbox did not show within ${Math.round(ctx.timeoutMs / 1000)} s${cur === null ? "" : ` (the screen: ${cur.what})`}`,
-      };
+      return notSignedIn(
+        `the mailbox did not show within ${Math.round(ctx.timeoutMs / 1000)} s (the screen: ${cur === null ? "unrecognised" : cur.what})`,
+        cur === null ? "unrecognised" : cur.what,
+        true,
+      );
     await sleep(ctx.pollMs);
   }
 }

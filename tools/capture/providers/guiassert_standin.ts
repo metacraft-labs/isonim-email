@@ -9,8 +9,8 @@
 // never sign in to. This stand-in speaks the same command-line contract
 // (guiassert-desktop/1.1: one JSON envelope on stdout, the exit code its
 // error.code; `session-start`, `session-stop`, `ocr` and `screenshot`
-// with `--secret-stdin`, `find`, `click`, `type --stdin`, `key`) over a
-// scripted desktop, and records every invocation, so a test can see
+// with `--secret-stdin`, `find`, `click`, `type --stdin`, `key`,
+// `scroll`) over a scripted desktop, and records every invocation, so a test can see
 // every argument, environment and standard input the procedure handed
 // to it.
 //
@@ -25,8 +25,14 @@
 // inside a field focuses it, inside a button moves to the button's next
 // screen; `type --stdin` appends to the focused field; `key Return`
 // moves to the screen's `submit` (optionally depending on a field's
-// value). A frame written by `ocr` / `screenshot` is a text file holding
-// what the simulated display shows, so a test can look into it.
+// value). A screen may carry the browser's address (`location`: `find`
+// reports the address bar, "Address and search bar", with it as its
+// value) and radio buttons (`radios`: a click checks one and unchecks
+// the rest of its group; one `below: n` is off the screen, reported
+// `offscreen` and below the display, until the wheel has scrolled the
+// screen down n times). A frame written by `ocr` / `screenshot` is a text
+// file holding what the simulated display shows, so a test can look into
+// it.
 
 import {
   appendFileSync,
@@ -52,6 +58,15 @@ export interface StandinButton {
   next: string;
 }
 
+export interface StandinRadio {
+  name: string | null;
+  group: string;
+  bounds: Rect;
+  checked?: boolean;
+  /** Off the screen until the screen was scrolled down this many times. */
+  below?: number;
+}
+
 export type StandinSubmit =
   | string
   | { field: string; equals: string; then: string; else: string };
@@ -66,6 +81,9 @@ export interface StandinScreen {
   submit?: StandinSubmit;
   /** Protected fields show their value in clear (a "show password" toggle). */
   revealPassword?: boolean;
+  /** The browser's address bar value while the screen shows. */
+  location?: string;
+  radios?: StandinRadio[];
 }
 
 export interface StandinScenario {
@@ -89,6 +107,10 @@ interface State {
   focused: string | null;
   values: Record<string, string>;
   sessions: Record<string, { state: string; vncSocket: string | null }>;
+  /** Per screen: how many times the wheel scrolled it down. */
+  scrolls?: Record<string, number>;
+  /** Per screen and radio index: checked. */
+  checked?: Record<string, boolean>;
 }
 
 function out(verb: string, data: unknown): number {
@@ -282,6 +304,9 @@ export function main(argv: string[]): number {
     }
     case "find": {
       const s = screen();
+      const scrolled = state.scrolls?.[state.screen] ?? 0;
+      const radioChecked = (r: StandinRadio, i: number): boolean =>
+        state.checked?.[`${state.screen}/${i}`] ?? r.checked === true;
       const role = flag("--role");
       const name = flag("--name");
       const contains = flag("--name-contains");
@@ -311,6 +336,39 @@ export function main(argv: string[]): number {
           bounds: b.bounds,
           states: ["focusable", "enabled", "visible"],
         })),
+        ...(s.radios ?? []).map((r, i) => {
+          const off = (r.below ?? 0) > scrolled;
+          return {
+            path: `/app[1]/radio[${i}]`,
+            role: "radio",
+            nativeRole: "radio button",
+            name: r.name ?? "",
+            bounds: (off
+              ? [r.bounds[0], r.bounds[1] + 1000, r.bounds[2], r.bounds[3]]
+              : r.bounds) as Rect,
+            states: [
+              "focusable",
+              "enabled",
+              "visible",
+              ...(off ? ["offscreen"] : []),
+              ...(radioChecked(r, i) ? ["checked"] : []),
+            ],
+          };
+        }),
+        ...(s.location === undefined
+          ? []
+          : [
+              {
+                path: "/app[1]/toolbar[0]/text-field[0]",
+                role: "text-field",
+                nativeRole: "entry",
+                name: "Address and search bar",
+                bounds: [140, 50, 900, 26] as Rect,
+                states: ["focusable", "enabled", "editable", "visible"],
+                value: s.location,
+                text: s.location,
+              },
+            ]),
       ].filter(
         (e) =>
           (role === undefined || e.role === role) &&
@@ -335,7 +393,18 @@ export function main(argv: string[]): number {
       const s = screen();
       const field = (s.fields ?? []).find((f) => inside(f.bounds, x, y));
       const button = (s.buttons ?? []).find((b) => inside(b.bounds, x, y));
-      if (field !== undefined) state.focused = field.name;
+      const scrolled = state.scrolls?.[state.screen] ?? 0;
+      const radio = (s.radios ?? []).findIndex(
+        (r) => (r.below ?? 0) <= scrolled && inside(r.bounds, x, y),
+      );
+      if (radio >= 0) {
+        const group = s.radios![radio]!.group;
+        state.checked ??= {};
+        s.radios!.forEach((r, i) => {
+          if (r.group === group)
+            state.checked![`${state.screen}/${i}`] = i === radio;
+        });
+      } else if (field !== undefined) state.focused = field.name;
       else if (button !== undefined) show(button.next);
       else state.focused = null;
       code = out(verb, { input: { kind: "click", at: [x, y] } });
@@ -350,6 +419,15 @@ export function main(argv: string[]): number {
       code = out(verb, {
         input: { kind: "type", length: (stdin ?? "").length },
       });
+      break;
+    }
+    case "scroll": {
+      const dy = Number(flag("--dy") ?? "0");
+      if (dy > 0) {
+        state.scrolls ??= {};
+        state.scrolls[state.screen] = (state.scrolls[state.screen] ?? 0) + 1;
+      }
+      code = out(verb, { input: { kind: "scroll", dy } });
       break;
     }
     case "key": {

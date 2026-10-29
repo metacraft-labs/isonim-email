@@ -39,11 +39,28 @@
 //   skip control the attempt stops (`field-not-found`), and one that
 //   stays after its dismissal is `stuck`; the check reports one on the
 //   inbox URL as not the mailbox, with no input;
+// - a privacy-consent page (Yahoo's, in Bulgarian, recognised by the
+//   address the browser reports) is answered by clicking every row's
+//   reject choice (scrolling to the ones off the screen) and then its
+//   continue control, or its reject-all control; an allow or accept
+//   control is never clicked; a choice it cannot name, a check box or
+//   switch, or a page that stays, ends the attempt `consent-required`
+//   with no further input;
+// - Google's password re-verification is answered once, as the attempt's
+//   input, and asked again after the password it is a challenge; the
+//   check reports it, and a consent page, as not signed in with no input;
+// - Chrome's own sign-in bubble is closed once through its "Use Chrome
+//   without an account" button, which is not an input to the provider;
+// - the check keeps its screen (check-screen.png, 0600) when it finds no
+//   mailbox and names the screen, and removes an older one when it does;
 // - the kept screenshot is 0600 whatever the umask;
-// - the command line turns the browser's own sign-in off in the profile
-//   (both preferences, the rest of the file kept) before every browser
-//   start; a run that ends before any input records no attempt and says
-//   so; a wrong password names the re-sealing runbook step;
+// - the command line writes the profile's preferences (the password
+//   manager and the sign-in interception off, Chrome's sign-in on, the
+//   rest of the file kept) before every browser start; a profile holding
+//   a saved password fails the run (exit 8) whatever its result; a
+//   consent page it cannot answer exits 5; a run that ends before any
+//   input records no attempt and says so; a wrong password names the
+//   re-sealing runbook step;
 //   `--typing-check` types the password into a loopback page (a stand-in
 //   browser that answers as the real page does) and prints only MATCH or
 //   MISMATCH, with no attempt, no lease and a throw-away profile.
@@ -83,14 +100,17 @@ import { inspect } from "node:util";
 import { GuiAssert, Secret } from "./guiassert.ts";
 import type { StandinLogEntry, StandinScenario } from "./guiassert_standin.ts";
 import { CREDENTIALS_SCHEMA } from "./requirements.ts";
+import { DatabaseSync } from "node:sqlite";
 import {
   accountProfile,
   readSigninRecord,
-  SIGNIN_OFFER_PREFS,
+  WEBMAIL_PROFILE_PREFS,
   WEBMAIL_SIGNIN,
 } from "./webmail_profiles.ts";
 import {
   AUTOMATION_SWITCHES,
+  CONSENT_MAX_PROCEED,
+  consentChoice,
   driveSignin,
   type SigninContext,
   type VerifyContext,
@@ -101,6 +121,7 @@ import {
   GMAIL_SIGNIN,
   OUTLOOK_SIGNIN,
   type ProviderSignin,
+  YAHOO_SIGNIN,
 } from "./webmail_signin_steps.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
@@ -640,6 +661,293 @@ describe("the automated sign-in procedure", () => {
     assert.deepEqual(afterPassword(h).clicks, ["340,615"]);
   });
 
+  // Yahoo's privacy-consent page as measured on 2026-10-28 (in
+  // Bulgarian): three rows of Reject/Allow radio buttons, the third off
+  // the screen until the page is scrolled, a "Продължаване" (Continue)
+  // button, and a decoy accept-all button.
+  const CONSENT_URL =
+    "consent.yahoo.com/mailbox/collectConsent?sessionId=3_cc-session_x";
+  const R = (
+    row: number,
+    choice: "reject" | "allow",
+    over: Partial<{
+      name: string | null;
+      below: number;
+      checked: boolean;
+    }> = {},
+  ) => ({
+    name: choice === "reject" ? "Отхвърляне" : "Разрешаване",
+    group: `row${row}`,
+    bounds: [choice === "reject" ? 840 : 940, 300 + row * 120, 20, 20] as [
+      number,
+      number,
+      number,
+      number,
+    ],
+    ...over,
+  });
+  const consentScenario = (
+    over: Partial<StandinScenario["screens"][string]> = {},
+  ): StandinScenario => ({
+    start: "consent",
+    screens: {
+      consent: {
+        text: `Welcome to Mail!\n${CONSENT_URL}\nyahoo!\nАктуализирайте настройките си за поверителност\nОтхвърляне Разрешаване\nПродължаване`,
+        location: CONSENT_URL,
+        radios: [
+          R(0, "reject"),
+          R(0, "allow", { checked: true }),
+          R(1, "reject"),
+          R(1, "allow"),
+          R(2, "reject", { below: 1 }),
+          R(2, "allow", { below: 1 }),
+        ],
+        buttons: [
+          { name: "Продължаване", bounds: [560, 790, 200, 40], next: "inbox" },
+          {
+            name: "Приемане на всички",
+            bounds: [100, 790, 200, 40],
+            next: "accepted",
+          },
+        ],
+        ...over,
+      },
+      inbox: { text: "Yahoo Mail\nCompose\nInbox\nUnread" },
+      accepted: { text: "ACCEPTED: the decoy was clicked" },
+    },
+  });
+  const inputs = (h: Harness) =>
+    h
+      .log()
+      .filter((e) => ["type", "key", "click", "scroll"].includes(e.verb))
+      .map((e) =>
+        e.verb === "click"
+          ? `click ${e.argv[e.argv.indexOf("--at") + 1]}`
+          : e.verb,
+      );
+
+  it("names a consent row's choice only by a listed name, exactly or followed by words that do not name the other", () => {
+    assert.equal(consentChoice("Отхвърляне"), "reject");
+    assert.equal(consentChoice("Reject"), "reject");
+    assert.equal(consentChoice("Allow"), "allow");
+    assert.equal(consentChoice("Разрешаване"), "allow");
+    assert.equal(consentChoice("Reject personalised ads"), "reject");
+    assert.equal(consentChoice("Reject or Allow"), null);
+    assert.equal(consentChoice("Decline"), null);
+    assert.equal(consentChoice("Rejected"), null);
+    assert.equal(consentChoice(null), null);
+  });
+
+  it("answers Yahoo's consent page in Bulgarian by rejecting every row (scrolling to the last), then 'Продължаване', never an allow or accept control", async () => {
+    const h = harness(consentScenario());
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, ["consent:yahoo-consent"]);
+    // The two reject choices on the screen, the wheel, the third, then
+    // the continue control: no allow choice (940,…), no accept-all.
+    assert.deepEqual(inputs(h), [
+      "click 850,310",
+      "click 850,430",
+      "scroll",
+      "click 850,550",
+      "click 660,810",
+    ]);
+    // The first click was announced as the attempt's first input.
+    assert.deepEqual(h.calls, ["first-input after 0 keystroke calls"]);
+    // The page's address was read from the browser's address bar.
+    assert.ok(
+      h
+        .log()
+        .some(
+          (e) => e.verb === "find" && e.argv.includes("Address and search bar"),
+        ),
+    );
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("prefers a reject-all control when the page has one, and clicks nothing else", async () => {
+    const h = harness(
+      consentScenario({
+        radios: [],
+        buttons: [
+          {
+            name: "Приемане на всички",
+            bounds: [100, 790, 200, 40],
+            next: "accepted",
+          },
+          {
+            name: "Отхвърляне на всички",
+            bounds: [400, 790, 200, 40],
+            next: "inbox",
+          },
+        ],
+      }),
+    );
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(inputs(h), ["click 500,810"]);
+  });
+
+  it("stops consent-required, with no input, at a choice it cannot name, and at unequal pairs", async () => {
+    for (const radios of [
+      [R(0, "reject", { name: "Decline" }), R(0, "allow")],
+      [R(0, "reject"), R(0, "allow"), R(1, "reject")],
+      [],
+    ]) {
+      const h = harness(
+        consentScenario({
+          radios,
+          buttons: [
+            {
+              name: "Продължаване",
+              bounds: [560, 790, 200, 40],
+              next: "inbox",
+            },
+          ],
+        }),
+      );
+      const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+      assert.equal(
+        r.outcome.result,
+        "consent-required",
+        JSON.stringify(radios),
+      );
+      assert.ok(r.outcome.result === "consent-required");
+      assert.equal(r.outcome.consent, "yahoo-consent");
+      assert.deepEqual(inputs(h), [], JSON.stringify(radios));
+      assert.deepEqual(h.calls, []);
+      assert.ok(r.screen !== null);
+    }
+  });
+
+  it("stops consent-required, with no input, at a check box or switch on the consent page, whatever its name", async () => {
+    for (const name of ["Отхвърляне", "Personalised ads"]) {
+      const s = consentScenario();
+      s.screens.consent!.buttons!.push({
+        role: "checkbox",
+        name,
+        bounds: [840, 700, 20, 20],
+        next: "consent",
+      });
+      const h = harness(s);
+      const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+      assert.equal(r.outcome.result, "consent-required", name);
+      assert.ok(r.outcome.result === "consent-required");
+      assert.match(r.outcome.why, /a check box or switch named/);
+      assert.deepEqual(inputs(h), [], name);
+      assert.deepEqual(h.calls, []);
+    }
+  });
+
+  it("gives up consent-required when the page stays after its continue control, clicking it a bounded number of times", async () => {
+    const s = consentScenario();
+    s.screens.consent!.buttons![0]!.next = "consent";
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.equal(r.outcome.result, "consent-required");
+    assert.ok(r.outcome.result === "consent-required");
+    assert.match(r.outcome.why, /after "Продължаване" 3 times/);
+    assert.equal(
+      inputs(h).filter((x) => x === "click 660,810").length,
+      CONSENT_MAX_PROCEED,
+    );
+    assert.ok(!inputs(h).includes("click 200,810"));
+  });
+
+  it("does not take a page for the consent page when the browser's address says otherwise", async () => {
+    const h = harness(
+      consentScenario({ location: "mail.yahoo.com/d/folders/1" }),
+    );
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "unknown-screen" });
+    assert.deepEqual(inputs(h), []);
+  });
+
+  it("answers Google's password re-verification once, as the attempt's input, and reaches the mailbox", async () => {
+    const s = gmailScenario({
+      reauth: {
+        text: "Google\nVerify it's you\nqa.tester@example.com\nEnter your password\nTry another way\nNext",
+        fields: [
+          {
+            name: "Enter your password",
+            protected: true,
+            bounds: PASSWORD_FIELD,
+          },
+        ],
+        focus: "Enter your password",
+        submit: {
+          field: "Enter your password",
+          equals: SENTINEL,
+          then: "inbox",
+          else: "wrong",
+        },
+      },
+    });
+    s.start = "reauth";
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, ["reauth-password"]);
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+    assert.deepEqual(h.calls, [
+      "first-input after 0 keystroke calls",
+      "before-password after 0 password calls",
+    ]);
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("treats a re-verification after the password was typed as a challenge, typing the password once", async () => {
+    const s = gmailScenario({
+      reauth: {
+        text: "Google\nVerify it's you\nEnter your password\nNext",
+        fields: [
+          {
+            name: "Enter your password",
+            protected: true,
+            bounds: PASSWORD_FIELD,
+          },
+        ],
+        focus: "Enter your password",
+        submit: "inbox",
+      },
+    });
+    (s.screens.password!.submit as { then: string }).then = "reauth";
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "challenged",
+      challenge: "verify-identity",
+      phrase: "verify it's you",
+    });
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+  });
+
+  it("closes Chrome's own sign-in bubble once through its button, not counting it as an input to the provider", async () => {
+    const s = gmailScenario();
+    s.start = "bubble";
+    s.screens.bubble = {
+      text: "Gmail\nCompose\nMake Chrome your own\nContinue as QA\nUse Chrome without an account",
+      buttons: [
+        {
+          name: "Continue as QA",
+          bounds: [900, 300, 200, 30],
+          next: "accepted",
+        },
+        {
+          name: "Use Chrome without an account",
+          bounds: [900, 350, 200, 30],
+          next: "inbox",
+        },
+      ],
+    };
+    s.screens.accepted = { text: "ACCEPTED" };
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: false });
+    assert.deepEqual(inputs(h), ["click 1000,365"]);
+    assert.deepEqual(h.calls, []);
+  });
+
   it("keeps its screenshot owner-only whatever the umask", async () => {
     const challenge = { text: "Google\nVerify it's you\nTry another way" };
     const s = gmailScenario({ challenge });
@@ -783,7 +1091,11 @@ describe("the automated sign-in procedure", () => {
     const h2 = harness(s2);
     const r2 = await verifySignedIn(verifyCtx(h2, { timeoutMs: 200 }));
     assert.ok(!r2.signedIn);
-    assert.match(r2.reason, /^the mailbox did not show within 0 s$/);
+    assert.match(
+      r2.reason,
+      /^the mailbox did not show within 0 s \(the screen: unrecognised\)$/,
+    );
+    assert.equal(r2.seen, "unrecognised");
     noInput(h2.log());
   });
 
@@ -810,6 +1122,78 @@ describe("the automated sign-in procedure", () => {
       /^the inbox URL showed an account-setup screen \(home-address: "set a home address"\), not the mailbox: .*the check dismisses nothing/,
     );
     noInput(h.log());
+  });
+
+  it("reports a consent page and Google's re-verification on the inbox URL as not signed in, answering nothing", async () => {
+    const c = consentScenario();
+    const h1 = harness(c);
+    const r1 = await verifySignedIn(
+      verifyCtx(h1, { provider: YAHOO_SIGNIN, browserPid: 4242 }),
+    );
+    assert.ok(!r1.signedIn);
+    assert.match(
+      r1.reason,
+      /^the inbox URL showed a privacy-consent page \(yahoo-consent\), not the mailbox: .*the check answers nothing/,
+    );
+    noInput(h1.log());
+    const s = gmailScenario({
+      reauth: {
+        text: "Google\nVerify it's you\nEnter your password\nNext",
+        fields: [
+          {
+            name: "Enter your password",
+            protected: true,
+            bounds: PASSWORD_FIELD,
+          },
+        ],
+        focus: "Enter your password",
+      },
+    });
+    s.start = "reauth";
+    const h2 = harness(s);
+    const r2 = await verifySignedIn(verifyCtx(h2));
+    assert.ok(!r2.signedIn);
+    assert.match(
+      r2.reason,
+      /^the inbox URL showed Google's password re-verification of the session .*the check never types$/,
+    );
+    noInput(h2.log());
+  });
+
+  it("keeps the screen it saw when it finds no mailbox (guarded, 0600), and removes an older one when it does", async () => {
+    const s = gmailScenario({
+      verify: { text: "Google\nVerify it's you\nTry another way" },
+    });
+    s.start = "verify";
+    const h = harness(s);
+    const keep = join(h.dir, "check-screen.png");
+    const old = process.umask(0o000);
+    let r;
+    try {
+      r = await verifySignedIn(verifyCtx(h, { keepPath: keep }));
+    } finally {
+      process.umask(old);
+    }
+    assert.ok(!r.signedIn);
+    assert.equal(r.screen, keep);
+    assert.equal(r.seen, 'a challenge (verify-identity: "verify it\'s you")');
+    assert.match(readFileSync(keep, "utf8"), /Verify it's you/);
+    assert.equal(statSync(keep).mode & 0o777, 0o600);
+    // Every frame, the kept one too, through the guard.
+    assertSecretOnlyOnItsPipes(h.log());
+    noInput(h.log());
+    // Signed in: the older screenshot is gone.
+    const s2 = gmailScenario();
+    s2.start = "inbox";
+    const h2 = harness(s2);
+    writeFileSync(join(h2.dir, "check-screen.png"), "old");
+    assert.deepEqual(
+      await verifySignedIn(
+        verifyCtx(h2, { keepPath: join(h2.dir, "check-screen.png") }),
+      ),
+      { signedIn: true },
+    );
+    assert.ok(!existsSync(join(h2.dir, "check-screen.png")));
   });
 
   it("keeps the sentinel off every argv and environment across all of the above", () => {
@@ -1148,15 +1532,16 @@ describe("email-webmail-signin (the command line)", () => {
     assert.equal(readAttempt(profile()).kind, "none");
   });
 
-  it("turns the browser's own sign-in off in the profile before every browser start, keeping the rest of its preferences", () => {
+  it("writes the profile's preferences before every browser start, keeping the rest of them", () => {
     rmSync(attemptPath(profile()), { force: true });
     const prefsPath = join(profile().userDataDir, "Default", "Preferences");
     mkdirSync(dirname(prefsPath), { recursive: true });
+    // As the first follow-up left a profile: Chrome's sign-in off.
     writeFileSync(
       prefsPath,
       JSON.stringify({
         keep: { me: 1 },
-        signin: { other: true, allowed: true },
+        signin: { other: true, allowed: false, allowed_on_next_startup: false },
       }),
     );
     const c = cliEnv(gmailScenario());
@@ -1174,15 +1559,143 @@ describe("email-webmail-signin (the command line)", () => {
       const p = JSON.parse(readFileSync(join(browserLog, f), "utf8")) as {
         keep: unknown;
         signin: Record<string, unknown>;
+        credentials_enable_service: unknown;
+        profile: Record<string, unknown>;
       };
       assert.deepEqual(p.keep, { me: 1 });
-      assert.deepEqual(p.signin, { other: true, ...SIGNIN_OFFER_PREFS });
+      assert.deepEqual(p.signin, {
+        other: true,
+        ...WEBMAIL_PROFILE_PREFS.signin,
+      });
+      assert.equal(p.credentials_enable_service, false);
+      assert.deepEqual(p.profile, WEBMAIL_PROFILE_PREFS.profile);
     }
-    assert.deepEqual(SIGNIN_OFFER_PREFS, {
-      allowed: false,
-      allowed_on_next_startup: false,
-    });
     assert.equal(statSync(prefsPath).mode & 0o777, 0o600);
+  });
+
+  // Chrome's saved-password database with one saved login (the columns
+  // the count reads), as a profile would hold one had a person answered
+  // "Save" to Chrome's bubble.
+  const plantSavedLogin = (): string => {
+    const path = join(profile().userDataDir, "Default", "Login Data");
+    mkdirSync(dirname(path), { recursive: true });
+    rmSync(path, { force: true });
+    const db = new DatabaseSync(path);
+    db.exec(
+      "CREATE TABLE logins (origin_url TEXT, password_value BLOB, blacklisted_by_user INTEGER)",
+    );
+    db.prepare(
+      "INSERT INTO logins (origin_url, password_value, blacklisted_by_user) VALUES (?, ?, 0)",
+    ).run("https://accounts.google.com/", "x");
+    db.close();
+    return path;
+  };
+
+  it("fails a run whose profile holds a saved password (exit 8), whatever the sign-in's result, counting it without reading it", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const planted = plantSavedLogin();
+    try {
+      const s = gmailScenario();
+      s.start = "inbox";
+      const c = cliEnv(s);
+      resetDesktop(c.state);
+      const r = run(
+        c.env,
+        "--check-only",
+        "--unsafe-no-sandbox",
+        "--timeout",
+        "10",
+      );
+      assert.equal(r.status, 8, r.stdout + r.stderr);
+      // The check itself passed; the profile still fails the run.
+      assert.match(r.stdout, /SIGNED IN: gmail-workspace\/qa1/);
+      assert.match(
+        r.stdout,
+        /SECRET AT REST: gmail-workspace\/qa1: the browser profile holds 1 saved login\(s\) in Login Data, 0 in Login Data For Account and 0 password hash\(es\)/,
+      );
+      assert.match(r.stdout, /"No saved password at rest"/);
+      const runbook = readFileSync(
+        join(repoRoot, "docs", "webmail-signin.md"),
+        "utf8",
+      );
+      assert.match(runbook, /^## No saved password at rest$/m);
+      // Without it, the same run passes.
+      rmSync(planted);
+      resetDesktop(c.state);
+      const ok = run(
+        c.env,
+        "--check-only",
+        "--unsafe-no-sandbox",
+        "--timeout",
+        "10",
+      );
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+      assert.doesNotMatch(ok.stdout, /SECRET AT REST/);
+    } finally {
+      rmSync(planted, { force: true });
+    }
+  });
+
+  it("stops at a consent page it cannot answer (exit 5, consent-required) with no input on it", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const c = cliEnv({
+      start: "consent",
+      screens: {
+        consent: {
+          text: "consent.google.com/ml?continue=x\nBefore you continue to Google\nAccept all\nMore options",
+          location: "consent.google.com/ml?continue=x",
+          buttons: [
+            { name: "Accept all", bounds: [100, 700, 200, 40], next: "x" },
+          ],
+        },
+        x: { text: "ACCEPTED" },
+      },
+    });
+    resetDesktop(c.state);
+    const r = run(c.env, "--unsafe-no-sandbox");
+    assert.equal(r.status, 5, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /CONSENT REQUIRED \(google-consent\): gmail-workspace\/qa1: a privacy-consent page it cannot answer \(no reject-all control and no reject choices\) after \d+ s; a person answers it once \(--takeover, or --manual\)/,
+    );
+    assert.deepEqual(
+      readLog(c.state).filter((e) =>
+        ["type", "key", "click", "scroll"].includes(e.verb),
+      ),
+      [],
+    );
+    assert.match(
+      readFileSync(join(profile().dir, "signin-screen.png"), "utf8"),
+      /Before you continue/,
+    );
+  });
+
+  it("keeps the screen a --check-only saw when the profile is not signed in, and names it", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    const keep = join(profile().dir, "check-screen.png");
+    rmSync(keep, { force: true });
+    const s = gmailScenario({
+      verify: { text: "Google\nVerify it's you\nTry another way" },
+    });
+    s.start = "verify";
+    const c = cliEnv(s);
+    resetDesktop(c.state);
+    const r = run(
+      c.env,
+      "--check-only",
+      "--unsafe-no-sandbox",
+      "--timeout",
+      "20",
+    );
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(
+      r.stdout,
+      /gmail-workspace\/qa1: the check saw: a challenge \(verify-identity: "verify it's you"\); screenshot: .*check-screen\.png\./,
+    );
+    assert.equal(statSync(keep).mode & 0o777, 0o600);
+    assert.match(readFileSync(keep, "utf8"), /Verify it's you/);
+    assert.ok(!readFileSync(keep, "utf8").includes(SENTINEL));
+    assert.equal(readAttempt(profile()).kind, "none");
   });
 
   it("records no attempt for a run that ended before any input, says so, and keeps its screenshot 0600 under umask 000", () => {

@@ -12,20 +12,27 @@
 // 3. The dev shell's webmail browser (Google Chrome; webmail_profiles.ts
 //    `webmailBrowser`) started normally in that session (no Playwright,
 //    no DevTools protocol, no automation switch), on the account's
-//    profile, its sandbox checked, with the browser's own sign-in turned
-//    off in the profile first (`suppressBrowserSigninOffer`), so Chrome
-//    never offers to sign itself in over the provider's page.
+//    profile, its sandbox checked, with the profile's preferences written
+//    first (`writeWebmailProfilePrefs`: the password manager off, Chrome's
+//    sign-in interception off, the pages' languages), so Chrome never
+//    offers to save the password or to sign itself in over the
+//    provider's page.
 // 4. The sign-in (providers/webmail_signin.ts): OCR of the display read
 //    through the password guard, the provider's screens and challenges
 //    (providers/webmail_signin_steps.ts), OS-level input; a challenge or
-//    an error stops it and is never retried.
+//    an error stops it and is never retried; a privacy-consent page is
+//    answered rejecting every optional use, or left to a person
+//    (`consent-required`).
 // 5. The browser closed (SIGINT, so its cookies are written), then the
 //    check: the same browser started again in the same session, without
 //    automation, on the inbox URL, and the mailbox read off the screen by
-//    OCR (providers/webmail_signin.ts `verifySignedIn`); signin.json is
-//    written. `--playwright-check` adds the earlier check under
-//    Playwright, which a provider can see as automation, so it is off by
-//    default.
+//    OCR (providers/webmail_signin.ts `verifySignedIn`; not signed in, the
+//    screen is kept as check-screen.png); signin.json is written.
+//    `--playwright-check` adds the earlier check under Playwright, which a
+//    provider can see as automation, so it is off by default.
+// 6. Once every browser on the profile has stopped, the saved passwords
+//    it holds are counted (webmail_profiles.ts `secretsAtRest`, no value
+//    read): any is a failure (exit 8), whatever the sign-in's result.
 //
 // `--typing-check` contacts no provider: the same session and browser,
 // on a throw-away profile, at a loopback page that compares a salted
@@ -93,17 +100,19 @@ import {
   accountName,
   accountProfile,
   checkSignedIn,
+  holdsSecrets,
   PROFILES_ENV,
   profilesRoot,
+  secretsAtRest,
   signinBrowserArgs,
   stopBrowser,
-  suppressBrowserSigninOffer,
   waitSandboxed,
   type WebmailBrowser,
   WEBMAIL_SIGNIN,
   webmailBrowser,
   webmailLaunchOptions,
   writeSigninRecord,
+  writeWebmailProfilePrefs,
 } from "./providers/webmail_profiles.ts";
 import {
   runTypingCheck,
@@ -138,14 +147,16 @@ signin.json.
 
 --vnc               serve the session on an owner-only VNC socket, to
                     watch it (prints the ssh -L line)
---takeover          (implies --vnc) on a challenge or an unrecognised
-                    screen, leave the browser open for a person over VNC;
-                    press Enter here when done, and it is checked
+--takeover          (implies --vnc) on a challenge, a consent page it
+                    cannot answer or an unrecognised screen, leave the
+                    browser open for a person over VNC; press Enter here
+                    when done, and it is checked
 --manual            (implies --vnc) a person signs in over VNC; the
                     recipe types nothing, except the password into the
                     focused password field on request (p, then Enter);
                     not an automated attempt
---check-only        only check (and record) an existing profile
+--check-only        only check (and record) an existing profile; types
+                    nothing; not signed in, keeps check-screen.png
 --typing-check      contacts no provider: types the account's password
                     the way the sign-in does into a loopback page, which
                     compares a salted SHA-256 of what arrived with the
@@ -167,9 +178,11 @@ Exit status: 0 signed in (recorded), or the typing check matched; 1 not
 signed in, or failed (wrong password, unknown account, an unrecognised
 screen, a typing-check mismatch, ...); 2 usage; 3
 pending (no account file); 4 this host cannot run it (no usable sandbox,
-no GuiAssert session, no webmail browser); 5 challenged (a person must
-finish it); 6 refused (cool-down, or the account in use); 7 stopped: the
-password was legible on the screen; 128+N signal N. With several accounts, the first
+no GuiAssert session, no webmail browser); 5 challenged, or a consent
+page it cannot answer (a person must finish it); 6 refused (cool-down, or
+the account in use); 7 stopped: the password was legible on the screen;
+8 the profile holds a saved password (a secret at rest), whatever the
+sign-in's result; 128+N signal N. With several accounts, the first
 account's non-zero status.
 `;
 
@@ -196,6 +209,7 @@ const EXIT = {
   challenged: 5,
   refused: 6,
   secretVisible: 7,
+  secretAtRest: 8,
 } as const;
 
 function exitFor(o: SigninOutcome): number {
@@ -203,6 +217,7 @@ function exitFor(o: SigninOutcome): number {
     case "signed-in":
       return EXIT.signedIn;
     case "challenged":
+    case "consent-required":
       return EXIT.challenged;
     case "secret-visible":
       return EXIT.secretVisible;
@@ -214,6 +229,7 @@ function exitFor(o: SigninOutcome): number {
 /** The outcomes a person can finish over VNC (--takeover). */
 const TAKEOVER_OUTCOMES = new Set([
   "challenged",
+  "consent-required",
   "unknown-screen",
   "stuck",
   "field-not-found",
@@ -275,7 +291,7 @@ async function launchWebmailBrowser(a: {
   label: string;
   onChild: (c: ChildProcess) => void;
 }): Promise<ChildProcess | null> {
-  suppressBrowserSigninOffer(a.userDataDir);
+  writeWebmailProfilePrefs(a.userDataDir);
   let said = "";
   const child = spawn(
     a.chrome.path,
@@ -417,12 +433,47 @@ async function typingCheckAccount(
   }
 }
 
+/**
+ * The account's sign-in, then (once its browsers have stopped) the count
+ * of saved passwords in its profile: any, or a database that cannot be
+ * read, is exit 8 whatever the sign-in's result. Not after a run that
+ * never opened the profile (pending, refused, the typing check).
+ */
 async function signInAccount(
   o: Options,
   host: HostEnv,
   file: string,
   bin: string,
   rl: Interface | null,
+): Promise<number> {
+  const label = `${o.set}/${accountName(file)}`;
+  const opened = { profile: null as string | null };
+  const code = await signInAccountOnce(o, host, file, bin, rl, opened);
+  if (opened.profile === null) return code;
+  let s = secretsAtRest(opened.profile);
+  // A browser stopped a moment ago may still hold a database's lock.
+  if (s.unreadable.length > 0) {
+    await new Promise((r) => setTimeout(r, 3000));
+    s = secretsAtRest(opened.profile);
+  }
+  if (!holdsSecrets(s)) return code;
+  say(
+    `SECRET AT REST: ${label}: the browser profile holds ${s.savedLogins} saved login(s) in Login Data, ${s.accountLogins} in Login Data For Account and ${s.passwordHashes} password hash(es)` +
+      (s.unreadable.length > 0
+        ? `; could not count: ${s.unreadable.join(", ")}`
+        : "") +
+      ` (${opened.profile}). The password must never be persisted by the browser: remove it (Chrome's password manager in a --manual session, or delete the two Login Data files with no browser running; a password hash: delete profile.password_hash_data_list from Default/Preferences with no browser running), then rotate the password if the profile was copied anywhere (runbook docs/webmail-signin.md, "No saved password at rest").`,
+  );
+  return EXIT.secretAtRest;
+}
+
+async function signInAccountOnce(
+  o: Options,
+  host: HostEnv,
+  file: string,
+  bin: string,
+  rl: Interface | null,
+  opened: { profile: string | null },
 ): Promise<number> {
   const label = `${o.set}/${accountName(file)}`;
   const automated = !o.checkOnly && !o.manual;
@@ -523,6 +574,8 @@ async function signInAccount(
     const sga = ga.inSession(session.id);
     const env = sessionEnv(host.env, session);
     if (vnc) for (const l of vncHint(session)) say(l);
+    // From here a browser may open the profile.
+    opened.profile = profile.userDataDir;
 
     const chrome = webmailBrowser(host.env);
     if ("reason" in chrome) throw new Error(chrome.reason);
@@ -616,9 +669,11 @@ async function signInAccount(
           const what =
             outcome.result === "challenged"
               ? `CHALLENGED (${outcome.challenge}): ${label}: "${outcome.phrase}" after ${took}; a person must finish it; ${shot}. Not retried.`
-              : outcome.result === "secret-visible"
-                ? `STOPPED (secret-visible): ${label}: the password was legible on the screen after ${took}; no frame kept. Not retried.`
-                : `FAILED (${outcomeName(outcome)}): ${label}: after ${took}; ${shot}. Not retried.`;
+              : outcome.result === "consent-required"
+                ? `CONSENT REQUIRED (${outcome.consent}): ${label}: a privacy-consent page it cannot answer (${outcome.why}) after ${took}; a person answers it once (--takeover, or --manual), rejecting every optional use; ${shot}. Not retried.`
+                : outcome.result === "secret-visible"
+                  ? `STOPPED (secret-visible): ${label}: the password was legible on the screen after ${took}; no frame kept. Not retried.`
+                  : `FAILED (${outcomeName(outcome)}): ${label}: after ${took}; ${shot}. Not retried.`;
           say(what);
           if (outcome.result === "wrong-password")
             say(
@@ -656,6 +711,8 @@ async function signInAccount(
       verified = await verifySignedIn({
         ga: sga,
         provider,
+        ...(checker.pid === undefined ? {} : { browserPid: checker.pid }),
+        keepPath: join(profile.dir, "check-screen.png"),
         password,
         framesDir,
         timeoutMs: o.timeoutS * 1000,
@@ -709,6 +766,10 @@ async function signInAccount(
     if (!checked.signedIn) {
       finish(`${prefix}not-signed-in`);
       say(`NOT SIGNED IN: ${label}: ${checked.reason}`);
+      if (!verified.signedIn)
+        say(
+          `${label}: the check saw: ${verified.seen ?? "unrecognised"}; ${verified.screen === undefined || verified.screen === null ? "no screenshot kept" : `screenshot: ${verified.screen}`}.`,
+        );
       return outcome !== null && outcome.result !== "signed-in"
         ? exitFor(outcome)
         : EXIT.failed;

@@ -20,17 +20,41 @@ account file's address and password:
   (the page's accessibility tree, as a screen reader turns it on),
   `--force-device-scale-factor=1`, `--lang=en-US` and a fixed window;
   none of them shows a bar or a warning, or is visible to a page as
-  automation. Before each start it turns the browser's own sign-in off
-  in the profile (Chrome's "Allow Chrome sign-in" setting:
-  `signin.allowed` and `signin.allowed_on_next_startup` false in
-  `Default/Preferences`), so Chrome never offers "Make Chrome your own
-  … Continue as …" over the provider's page; that is a user setting, not
-  an automation switch, and a page cannot see it;
+  automation. Before each start it writes the profile's preferences
+  into `Default/Preferences` (every other setting kept): Chrome's
+  password manager off (Settings, "Offer to save passwords", with
+  auto sign-in and the leak check), so Chrome never offers to save the
+  QA password and never keeps it; the web sign-in interception off, so
+  Chrome never offers "Make Chrome your own … Continue as …" over the
+  provider's page, while Chrome's own sign-in stays allowed (its
+  default: turning it off also stops Chrome's account consistency with
+  Google, which changes what Google sees of an already signed-in
+  session); and the pages' languages, `en-US, en`. These are user
+  settings, not automation switches, and a page cannot see them. If
+  the "Continue as …" bubble shows anyway, the recipe closes it once
+  through its button `Use Chrome without an account` (an input to the
+  browser, not to the provider);
 - it reads each screen by OCR, and types the address and the password
   through OS-level input, each only into the field meant for it (read
   from the browser's accessibility tree);
 - it stops at any challenge (a captcha, a code, a phone, a passkey,
-  "verify it's you", ...) and never retries;
+  "verify it's you", ...) and never retries. One exception: Google's
+  password re-verification of an existing session ("Verify it's you"
+  with only the account and a password field, nothing else) is answered
+  once during an automated attempt, with the password, which is still
+  typed at most once per attempt;
+- a provider may show a privacy-consent page (Yahoo's
+  `consent.yahoo.com/…/collectConsent`, Google's `consent.google.com`),
+  sometimes in the language of the host's region whatever the browser
+  asks for. The recipe recognises it by its address (read from the
+  browser's address bar; the port does not matter) and gives the most
+  privacy-preserving answer by exact control names, in English or
+  Bulgarian: a "Reject all" control when there is one; otherwise the
+  "Reject" choice of every row (scrolling to reach them), then
+  "Continue". It never clicks an accept or allow control. A page it
+  cannot answer that way (another language, a choice named otherwise,
+  a check box or switch, no continue control) stops the attempt
+  `consent-required`;
 - after the password, a provider may ask for more account data (Gmail's
   "Set a home address", a recovery phone or email, "protect your
   account", a passkey offer). The recipe only declines such a screen:
@@ -98,7 +122,9 @@ needs a person and days. So:
    - `signin.json`: the last verified sign-in (no secret);
    - `signin-attempt.json`: the last automated attempt (no secret);
    - `signin-screen.png`: the screen kept when an attempt stopped short
-     of the mailbox (checked not to show the password; 0600).
+     of the mailbox (checked not to show the password; 0600);
+   - `check-screen.png`: the screen a check saw when it found the
+     profile not signed in (same guard; 0600).
 
 ## Running it
 
@@ -175,8 +201,10 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `--check-only` tells.
 - **1, `NOT SIGNED IN`**: the sign-in ended but the check did not find
   the mailbox on the inbox URL (it names the screen it saw instead, for
-  example the provider's sign-in or a challenge). Read the reason;
-  `--check-only` repeats the check, which types nothing.
+  example the provider's sign-in, a challenge, a consent page or
+  Google's password re-verification, none of which the check answers)
+  and keeps it as `check-screen.png`. Read the reason; `--check-only`
+  repeats the check, which types nothing.
 - **3, `PENDING`**: no account file, or one without a password.
 - **4, `CANNOT RUN`**: no usable browser sandbox, no `guiassert`, no
   webmail browser (outside the dev shell), or the display session would
@@ -187,6 +215,11 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `verify-identity`, `unusual-activity`, `account-recovery`,
   `protect-account`, `passwordless-default`, `account-locked`,
   `sign-in-refused`. See below.
+- **5, `CONSENT REQUIRED (<name>)`**: a privacy-consent page the recipe
+  could not answer by rejecting every optional use (it names why).
+  Answer it once yourself, rejecting everything optional: `--takeover`
+  on the next attempt, or `--manual` now. Report the page (a language
+  or a control name the table does not list) with `signin-screen.png`.
 - **6, `REFUSED`**: within the cool-down (it says until when), or a
   capture run holds the account.
 - **7, `STOPPED (secret-visible)`**: the password was legible on the
@@ -194,6 +227,10 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   and no frame was kept. Look at what changed on the page with
   `--manual`; treat the password as exposed only if someone was
   watching the session.
+- **8, `SECRET AT REST`**: after the run, the browser profile holds a
+  saved password (or a database the recipe could not count), whatever
+  the sign-in's result. See
+  [No saved password at rest](#no-saved-password-at-rest).
 
 ## Checking the typing: `--typing-check`
 
@@ -255,6 +292,55 @@ cool-down.
   an empty profile (expect the provider to ask for more: a new browser
   is the case providers challenge most). Keep `signin-attempt.json`, so
   the cool-down still holds.
+
+## No saved password at rest
+
+The QA password lives in the credential store and nowhere else. A
+browser that saved it would keep a second copy in the profile, readable
+by anyone who can read the profile directory (`Login Data` is a SQLite
+file, and on a capture host its key is a fixed one). The profile's
+preferences keep the password manager off, and after every run on an
+account's profile, once its browsers have stopped, the recipe checks
+that it worked. It counts, without reading any value:
+
+- the saved logins in `chromium/Default/Login Data` and
+  `chromium/Default/Login Data For Account` ("never save" entries do
+  not count);
+- the entries of `profile.password_hash_data_list` in
+  `chromium/Default/Preferences` (salted hashes of a Google password,
+  kept for Chrome's password-reuse warning).
+
+Any of them, or a database it cannot read, ends the run with exit 8:
+
+```text
+SECRET AT REST: yahoo/qa1: the browser profile holds 1 saved login(s) in Login Data, 0 in Login Data For Account and 0 password hash(es) (…/chromium). …
+```
+
+To clear it:
+
+1. Stop every run on the account (sign-in, check, capture): no browser
+   may run on the profile.
+2. Remove the saved password. Either open the profile in a `--manual`
+   session (`just email-webmail-signin <set> <account> --manual`), go to
+   `chrome://password-manager/passwords` over VNC, and delete the entry;
+   or, with no browser running, delete the two files
+   `chromium/Default/Login Data` and `chromium/Default/Login Data For
+Account` (and their `-journal` files). Deleting them removes saved
+   passwords only, not the provider's session. A password hash is
+   removed, with no browser running, by deleting the key
+   `profile.password_hash_data_list` from `chromium/Default/Preferences`
+   (for example
+   `jq 'del(.profile.password_hash_data_list)' Preferences > Preferences.new`,
+   then `chmod 600 Preferences.new` and `mv Preferences.new Preferences`).
+3. Check: `just email-webmail-signin <set> <account> --check-only`
+   counts again and must not print `SECRET AT REST`.
+4. If the profile was copied anywhere (a backup, another machine, an
+   archive) while the password was in it, treat the password as exposed:
+   [rotate it](#rotating-a-password).
+5. Find out how it got there: only this recipe writes the preferences
+   before a start, so the usual cause is the profile opened by another
+   browser or tool, which starts it without them and lets Chrome offer
+   "Save password?".
 
 ## Open risk: Playwright on a signed-in profile
 

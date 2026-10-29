@@ -7,6 +7,8 @@
 // The OCR texts below are invented in the providers' wording (with the
 // noise OCR adds: the browser's own bar, lost apostrophes, odd line
 // breaks); the live sign-in of each QA account checks the wording itself.
+// Yahoo's privacy-consent page is the measured one (2026-10-28, in
+// Bulgarian), recognised by its address whatever its language.
 // Pure functions: no browser, no GuiAssert, no network.
 // Run with:
 //   node --test tools/capture/providers/webmail_signin_steps.test.ts
@@ -18,12 +20,15 @@ import {
   CHALLENGE_KINDS,
   type ChallengeKind,
   classifyScreen,
+  CONSENT_CONTROLS,
+  consentHinted,
   GMAIL_SIGNIN,
   normalize,
   OUTLOOK_SIGNIN,
   PROVIDER_SIGNIN,
   type ProviderSignin,
   SKIP_CONTROLS,
+  splitLocation,
   YAHOO_SIGNIN,
 } from "./webmail_signin_steps.ts";
 
@@ -36,8 +41,12 @@ const CHROME_BAR =
 const screen = (...lines: string[]): string =>
   [CHROME_BAR, ...lines].join("\n");
 
-const kind = (p: ProviderSignin, text: string): string => {
-  const s = classifyScreen(p, text);
+const kind = (
+  p: ProviderSignin,
+  text: string,
+  location?: string | null,
+): string => {
+  const s = classifyScreen(p, text, location);
   switch (s.kind) {
     case "step":
       return `step:${s.step}`;
@@ -47,6 +56,8 @@ const kind = (p: ProviderSignin, text: string): string => {
       return `error:${s.error}`;
     case "interstitial":
       return `interstitial:${s.interstitial}`;
+    case "consent":
+      return `consent:${s.consent}`;
     default:
       return s.kind;
   }
@@ -652,5 +663,304 @@ describe("the tables", () => {
     assert.ok(!GMAIL_SIGNIN.addressField.test("Address and search bar"));
     assert.ok(!YAHOO_SIGNIN.addressField.test("Address and search bar"));
     assert.ok(!OUTLOOK_SIGNIN.addressField.test("Address and search bar"));
+  });
+});
+
+describe("privacy-consent pages, by address", () => {
+  // As measured 2026-10-28: Chrome's bar shows the address without its
+  // scheme; the page is in Bulgarian although the browser asked for en-US.
+  const CONSENT_URL =
+    "consent.yahoo.com/mailbox/collectConsent?sessionId=3_cc-session_85bc0201";
+  const consentPage = (bar = CONSENT_URL) =>
+    [
+      "Welcome to Mail!\nx\n+",
+      bar,
+      "yahoo!",
+      "Актуализирайте настройките си за поверителност, за да се възползвате максимално от имейлите си",
+      "Използване на информация от всички имейли",
+      "Отхвърляне Разрешаване",
+      "Продължаване",
+    ].join("\n");
+
+  it("reads the address bar's value: host and the rest, scheme or none", () => {
+    assert.deepEqual(splitLocation(CONSENT_URL), {
+      host: "consent.yahoo.com",
+      rest: "/mailbox/collectconsent?sessionid=3_cc-session_85bc0201",
+    });
+    assert.deepEqual(splitLocation("https://Consent.Yahoo.com/v2/x"), {
+      host: "consent.yahoo.com",
+      rest: "/v2/x",
+    });
+    assert.equal(splitLocation("two words"), null);
+  });
+
+  it("reads the host without its port, and nothing else after the host as part of it", () => {
+    assert.deepEqual(
+      splitLocation("consent.localhost:41234/collectConsent?x=1"),
+      {
+        host: "consent.localhost",
+        rest: "/collectconsent?x=1",
+      },
+    );
+    assert.deepEqual(splitLocation("http://consent.yahoo.com:8080"), {
+      host: "consent.yahoo.com",
+      rest: "",
+    });
+    // Not an address of the consent host at all.
+    assert.equal(splitLocation("consent.yahoo.com:evil/x"), null);
+    assert.equal(splitLocation("consent.yahoo.com@example.net/x"), null);
+    // So a consent host on another port is the consent page ...
+    assert.equal(
+      kind(
+        YAHOO_SIGNIN,
+        consentPage(),
+        "consent.yahoo.com:8443/v2/collectConsent",
+      ),
+      "consent:yahoo-consent",
+    );
+    // ... and one that only starts like it is not.
+    assert.equal(
+      kind(
+        YAHOO_SIGNIN,
+        consentPage(),
+        "consent.yahoo.com@example.net/collectConsent",
+      ),
+      "unknown",
+    );
+  });
+
+  it("recognises Yahoo's consent page by the address the browser reports, in any language", () => {
+    for (const p of [YAHOO_SIGNIN, AOL_SIGNIN]) {
+      assert.equal(
+        kind(p, consentPage(), `https://${CONSENT_URL}`),
+        "consent:yahoo-consent",
+      );
+      // The cookie consent's address too.
+      assert.equal(
+        kind(
+          p,
+          consentPage(),
+          "consent.yahoo.com/v2/collectConsent?sessionId=1",
+        ),
+        "consent:yahoo-consent",
+      );
+      assert.equal(
+        kind(p, consentPage(), "guce.aol.com/consent?x=1"),
+        "consent:yahoo-consent",
+      );
+    }
+  });
+
+  it("without the browser's address, needs the OCR text to name the host and the path", () => {
+    assert.equal(kind(YAHOO_SIGNIN, consentPage()), "consent:yahoo-consent");
+    assert.equal(
+      kind(YAHOO_SIGNIN, consentPage(), null),
+      "consent:yahoo-consent",
+    );
+    // The host alone (a page that mentions it) is not enough.
+    assert.equal(
+      kind(YAHOO_SIGNIN, consentPage("consent.yahoo.com")),
+      "unknown",
+    );
+  });
+
+  it("takes the browser's address over the OCR text: another address is not the consent page", () => {
+    assert.equal(
+      kind(YAHOO_SIGNIN, consentPage(), "mail.yahoo.com/n/inbox"),
+      "unknown",
+    );
+    // A consent host with another path is not the consent page either.
+    assert.equal(
+      kind(YAHOO_SIGNIN, consentPage(), "consent.yahoo.com/help"),
+      "unknown",
+    );
+    // A look-alike host is not one of the provider's.
+    assert.equal(
+      kind(
+        YAHOO_SIGNIN,
+        consentPage(),
+        "consent.yahoo.com.example.net/collectConsent",
+      ),
+      "unknown",
+    );
+  });
+
+  it("is looked for only when the OCR text names a consent host", () => {
+    assert.equal(consentHinted(YAHOO_SIGNIN, consentPage()), true);
+    assert.equal(
+      consentHinted(YAHOO_SIGNIN, screen("Sign in to Yahoo Mail")),
+      false,
+    );
+    assert.equal(consentHinted(OUTLOOK_SIGNIN, consentPage()), false);
+  });
+
+  it("is hinted whatever punctuation and port OCR keeps of the host (measured: 'consentlocalhost33875')", () => {
+    const loopback: ProviderSignin = {
+      ...YAHOO_SIGNIN,
+      consent: { name: "loopback", hosts: ["consent.localhost"], paths: [""] },
+    };
+    // As OCR read Chrome's address bar on consent.localhost:33875.
+    const seen = screen(
+      "G @ consentlocalhost33875/collectConsent?sessionld=x",
+      "OTxBbpnsiHe O PaspeluaBaHe",
+    );
+    assert.equal(consentHinted(loopback, seen), true);
+    assert.equal(
+      consentHinted(YAHOO_SIGNIN, screen("consentyahoo com:443/v2")),
+      true,
+    );
+    // A hint only: the address bar decides.
+    assert.equal(
+      kind(
+        loopback,
+        seen,
+        "consent.localhost:33875/collectConsent?sessionId=x",
+      ),
+      "consent:loopback",
+    );
+    assert.equal(kind(loopback, seen, "mail.localhost:33875/x"), "unknown");
+    assert.equal(
+      consentHinted(loopback, screen("Sign in", "localhost")),
+      false,
+    );
+  });
+
+  it("lets a challenge on a consent page win", () => {
+    assert.equal(
+      kind(YAHOO_SIGNIN, `${consentPage()}\nAre you a robot?`, CONSENT_URL),
+      "challenge:captcha",
+    );
+    assert.equal(
+      kind(
+        YAHOO_SIGNIN,
+        `${consentPage()}\nEnter the code we sent`,
+        CONSENT_URL,
+      ),
+      "challenge:code-verification",
+    );
+  });
+
+  it("is not a consent page for a provider without one, and not the mailbox while on one", () => {
+    assert.equal(kind(OUTLOOK_SIGNIN, consentPage(), CONSENT_URL), "unknown");
+    // A blurred mailbox behind the consent dialog read by OCR is not done.
+    assert.equal(
+      kind(YAHOO_SIGNIN, `${consentPage()}\nCompose\nInbox`, CONSENT_URL),
+      "consent:yahoo-consent",
+    );
+    assert.equal(
+      kind(
+        GMAIL_SIGNIN,
+        "consent.google.com/ml?continue=x\nBefore you continue to Google\nReject all\nAccept all",
+        "consent.google.com/ml?continue=x",
+      ),
+      "consent:google-consent",
+    );
+  });
+
+  it("lists, per language, only controls that reject or go on, never one that accepts", () => {
+    const never = CONSENT_CONTROLS.never.map(normalize);
+    const acceptWords =
+      /accept|allow all|agree|приема|разрешаване на всички|съглас/i;
+    for (const list of [
+      CONSENT_CONTROLS.rejectAll,
+      CONSENT_CONTROLS.reject,
+      CONSENT_CONTROLS.proceed,
+    ])
+      for (const c of list) {
+        assert.ok(!never.includes(normalize(c)), c);
+        assert.doesNotMatch(c, acceptWords, c);
+        for (const n of never)
+          assert.ok(!normalize(c).includes(n), `${c} contains ${n}`);
+      }
+    for (const c of CONSENT_CONTROLS.never) assert.match(c, acceptWords, c);
+    // English and Bulgarian, each with every kind of control.
+    for (const list of Object.values(CONSENT_CONTROLS)) {
+      assert.ok(
+        list.some((c) => /^[\x20-\x7e]+$/.test(c)),
+        list.join(),
+      );
+      assert.ok(
+        list.some((c) => /[а-я]/i.test(c)),
+        list.join(),
+      );
+    }
+  });
+});
+
+describe("Google's password re-verification", () => {
+  const g = GMAIL_SIGNIN;
+  it("is the reauth-password step: 'verify it's you' with only a password field", () => {
+    for (const text of [
+      "Verify it's you\nqa.tester@example.com\nEnter your password\nShow password\nForgot password?\nNext",
+      "Hi QA\nqa.tester@example.com\nTo continue, first verify it’s you\nEnter your password\nNext",
+      "Verify it's you\nTo help keep your account safe, Google wants to make sure it's really you trying to sign in\nEnter your password\nTry another way\nNext",
+    ])
+      assert.equal(kind(g, screen(text)), "step:reauth-password", text);
+  });
+
+  it("stays a challenge with any other challenge on it, or without a password field", () => {
+    const cases: [string, string][] = [
+      [
+        "Verify it's you\nEnter your password\nGet a verification code at (•••) •••-••12",
+        "challenge:code-verification",
+      ],
+      [
+        "Verify it's you\nEnter your password\nCheck your phone\nTap Yes on the notification",
+        "challenge:app-approval",
+      ],
+      [
+        "Verify it's you\nEnter your password\nConfirm you're not a robot",
+        "challenge:captcha",
+      ],
+      [
+        "Verify it's you\n2-Step Verification\nEnter your password",
+        "challenge:verify-identity",
+      ],
+      [
+        "Verify it's you\nTo help keep your account safe, Google wants to make sure it's really you",
+        "challenge:verify-identity",
+      ],
+    ];
+    for (const [text, want] of cases)
+      assert.equal(kind(g, screen(text)), want, text);
+  });
+
+  it("gives way to a wrong password on it, and to the mailbox", () => {
+    assert.equal(
+      kind(
+        g,
+        screen(
+          "Verify it's you\nEnter your password\nWrong password. Try again or click Forgot password to reset it.",
+        ),
+      ),
+      "error:wrong-password",
+    );
+    assert.equal(
+      kind(g, screen("Compose\nInbox\nverify it's you\nenter your password")),
+      "done",
+    );
+  });
+
+  it("is Gmail's only: other providers keep 'verify it's you' a challenge", () => {
+    for (const p of [YAHOO_SIGNIN, OUTLOOK_SIGNIN])
+      assert.equal(
+        kind(p, screen("Verify it's you\nEnter your password")),
+        "challenge:verify-identity",
+        p.label,
+      );
+  });
+});
+
+describe("the start URLs ask for English", () => {
+  it("Google with hl=en, Yahoo with .lang=en-US", () => {
+    assert.equal(new URL(GMAIL_SIGNIN.startUrl).searchParams.get("hl"), "en");
+    assert.equal(
+      new URL(YAHOO_SIGNIN.startUrl).searchParams.get(".lang"),
+      "en-US",
+    );
+    assert.equal(
+      new URL(YAHOO_SIGNIN.startUrl).searchParams.get("done"),
+      "https://mail.yahoo.com/",
+    );
   });
 });

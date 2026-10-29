@@ -11,7 +11,17 @@
 // and a line break compare as written here). An OCR text
 // is classified in a fixed order, so that a page carrying words of two
 // screens is read the safe way:
+//   0. a privacy-consent page (`consent`), recognised by its address, not
+//      by its words (a provider may show it in the language of the
+//      visitor's region): a challenge phrase on it still makes it a
+//      challenge; otherwise nothing below is looked for on it;
 //   1. the mailbox (`done`): phrases no sign-in or challenge page has;
+//   1a. Google's password re-verification of an existing session
+//      (`reauth-password`): "Verify it's you" with only a password field;
+//      anything else on such a page is the more precise reason and is
+//      reported as itself (another hard challenge, an error, then a code
+//      or phone challenge), the re-verification's own wording not
+//      counted;
 //   2. hard challenges: whatever else the page says, a person is needed;
 //   3. errors (wrong password, unknown account): stop, never retry;
 //   4. the step screens: address, password, and the two small ones
@@ -32,8 +42,12 @@
 //
 // Every phrase is an expectation until the live sign-in of each QA
 // account confirms it [measure: the first real attempt per provider].
-// The pages are asked for in English (the browser is started with
-// --lang=en-US).
+// The pages are asked for in English (the browser's languages are
+// en-US, en; Google's and Yahoo's start URLs force English too), so the
+// phrases are English. A page a provider localises by region whatever
+// the browser asks for (Yahoo's privacy consent, measured in
+// Bulgarian) is recognised by its address, and its controls by exact
+// names per language (CONSENT_CONTROLS).
 
 export type ChallengeKind =
   | "captcha"
@@ -71,6 +85,7 @@ export type SigninErrorKind = "wrong-password" | "unknown-account";
 export type StepId =
   | "address"
   | "password"
+  | "reauth-password"
   | "choose-password"
   | "stay-signed-in";
 
@@ -116,11 +131,71 @@ export const SKIP_CONTROLS: readonly string[] = [
   "Cancel",
 ];
 
+/**
+ * A provider's privacy-consent pages, by address: the host is one of
+ * `hosts` and the path (with its query) contains one of `paths`, both
+ * compared in lower case ("" matches any path).
+ */
+export interface ConsentRule {
+  /** A short name for logs and results (`yahoo-consent`). */
+  name: string;
+  hosts: string[];
+  paths: string[];
+}
+
+/**
+ * Google's password re-verification of an existing session: the screen
+ * matches `match`, and no challenge phrase but `allowed` (the wording of
+ * the re-verification itself) is on it.
+ */
+export interface ReauthRule {
+  match: ScreenMatch;
+  allowed: string[];
+}
+
+/**
+ * The controls of a privacy-consent page, by exact accessible name (after
+ * `normalize`), per language: English, Bulgarian (the languages met so
+ * far; measured 2026-10-28: Yahoo's mail consent in Bulgarian, its rows'
+ * radio buttons "Отхвърляне" / "Разрешаване", a "Продължаване" button;
+ * Yahoo's cookie consent's "Отхвърляне на всички" / "Приемане на всички"
+ * buttons). The procedure (webmail_signin.ts) clicks a reject-all control,
+ * or every reject choice and then a continue control; it never clicks a
+ * name in `never`, and no other list may contain a word of it (the test
+ * checks it).
+ */
+export const CONSENT_CONTROLS = {
+  /** Buttons or links that reject every optional use at once. */
+  rejectAll: ["Reject all", "Отхвърляне на всички"],
+  /** Radio buttons that reject one row's use. */
+  reject: ["Reject", "Отхвърляне"],
+  /** Radio buttons that allow one row's use: only ever counted, never clicked. */
+  allow: ["Allow", "Разрешаване"],
+  /** Buttons that go on once every row is rejected. */
+  proceed: ["Continue", "Продължаване"],
+  /** Never clicked. */
+  never: [
+    "Accept all",
+    "Allow all",
+    "Agree",
+    "Accept",
+    "I agree",
+    "Приемане на всички",
+    "Разрешаване на всички",
+    "Приемане",
+    "Съгласявам се",
+  ],
+} as const;
+
 export interface ProviderSignin {
   set: string;
   label: string;
   /** Where the sign-in browser starts: the mailbox, by way of the sign-in. */
   startUrl: string;
+  /** Its privacy-consent pages, when it has any. */
+  consent?: ConsentRule;
+  /** Its password re-verification of an existing session, when it has one. */
+  reauth?: ReauthRule;
   done: ScreenMatch;
   /** In order of precedence. */
   steps: StepScreen[];
@@ -172,12 +247,129 @@ export type Screen =
   | { kind: "error"; error: SigninErrorKind; phrase: string }
   | { kind: "step"; step: StepId }
   | { kind: "interstitial"; interstitial: string; phrase: string }
+  | { kind: "consent"; consent: string }
   | { kind: "unknown" };
 
-/** Classifies one OCR text of the display (the order is the header's). */
-export function classifyScreen(p: ProviderSignin, ocrText: string): Screen {
+/**
+ * A page address as the browser's address bar shows it: host (without a
+ * port: a provider's consent host is the same on any port), then the
+ * rest. Anything after the host but a port and a path, query or fragment
+ * (`host:x`, `host@other`) is no address of that host: null.
+ */
+export function splitLocation(
+  location: string,
+): { host: string; rest: string } | null {
+  const m =
+    /^\s*(?:[a-z][a-z0-9+.-]*:\/\/)?([^/?#\s:@]+)(?::\d+)?((?:[/?#][^\s]*)?)\s*$/i.exec(
+      location,
+    );
+  if (m === null) return null;
+  return { host: m[1]!.toLowerCase(), rest: (m[2] ?? "").toLowerCase() };
+}
+
+// Letters and digits only, lower case: OCR of the address bar may drop a
+// host's dots and the colon before its port ("consentlocalhost33875").
+const squash = (text: string): string =>
+  text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * Whether the OCR text may show one of the rule's consent hosts in the
+ * address bar: the host's letters and digits in order, whatever the
+ * punctuation and port around them. Only a hint to read the address
+ * bar, which decides.
+ */
+export function consentHinted(p: ProviderSignin, ocrText: string): boolean {
+  if (p.consent === undefined) return false;
+  const text = squash(ocrText);
+  return p.consent.hosts.some((h) => text.includes(squash(h)));
+}
+
+function isConsentAddress(rule: ConsentRule, location: string): boolean {
+  const l = splitLocation(location);
+  return (
+    l !== null &&
+    rule.hosts.includes(l.host) &&
+    rule.paths.some((x) => l.rest.includes(x.toLowerCase()))
+  );
+}
+
+/**
+ * Whether the page is one of the provider's consent pages: by `location`
+ * (the address bar's value, from the accessibility tree) when there is
+ * one, else by a word of the OCR text that is such an address (a consent
+ * host, then a consent path: a page that only mentions the host is not
+ * the consent page).
+ */
+export function onConsentPage(
+  p: ProviderSignin,
+  ocrText: string,
+  location: string | null | undefined,
+): boolean {
+  const rule = p.consent;
+  if (rule === undefined) return false;
+  if (location !== null && location !== undefined)
+    return isConsentAddress(rule, location);
+  return ocrText
+    .split(/\s+/)
+    .some((w) => w !== "" && isConsentAddress(rule, w));
+}
+
+/**
+ * Classifies one OCR text of the display (the order is the header's).
+ * `location` is the page's address from the browser's address bar, when
+ * the caller read it (only a consent page needs it).
+ */
+export function classifyScreen(
+  p: ProviderSignin,
+  ocrText: string,
+  location?: string | null,
+): Screen {
   const norm = normalize(ocrText);
+  if (onConsentPage(p, ocrText, location)) {
+    // A challenge still wins: hard ones, then the code and phone ones.
+    for (const rules of [p.hardChallenges, p.softChallenges]) {
+      const hit = firstPhrase(norm, rules);
+      if (hit !== null)
+        return {
+          kind: "challenge",
+          challenge: rules[hit.index]!.kind,
+          phrase: hit.phrase,
+        };
+    }
+    return { kind: "consent", consent: p.consent!.name };
+  }
   if (matches(norm, p.done)) return { kind: "done" };
+  if (p.reauth !== undefined && matches(norm, p.reauth.match)) {
+    // Anything else on it is the more precise reason: another hard
+    // challenge, an error, then a code or phone challenge, the
+    // re-verification's own wording not counted.
+    const other = without(p.hardChallenges, p.reauth.allowed);
+    const hit = firstPhrase(norm, other);
+    if (hit !== null)
+      return {
+        kind: "challenge",
+        challenge: other[hit.index]!.kind,
+        phrase: hit.phrase,
+      };
+    const e = firstPhrase(norm, p.errors);
+    if (e !== null)
+      return {
+        kind: "error",
+        error: p.errors[e.index]!.kind,
+        phrase: e.phrase,
+      };
+    const soft = firstPhrase(norm, p.softChallenges);
+    if (soft !== null)
+      return {
+        kind: "challenge",
+        challenge: p.softChallenges[soft.index]!.kind,
+        phrase: soft.phrase,
+      };
+    return { kind: "step", step: "reauth-password" };
+  }
   const hard = firstPhrase(norm, p.hardChallenges);
   if (hard !== null)
     return {
@@ -384,13 +576,42 @@ const GMAIL_INTERSTITIALS: InterstitialRule[] = [
 // The providers
 // ---------------------------------------------------------------------------
 
+// The wording of Google's password re-verification that may share a
+// screen with its password field (and is a challenge everywhere else).
+const GMAIL_REAUTH_WORDING = [
+  "verify it's you",
+  "verify that it's you",
+  "confirm it's you",
+  "first verify it's you",
+  "really you",
+];
+
 export const GMAIL_SIGNIN: ProviderSignin = {
   set: "gmail-workspace",
   label: "Gmail",
   // ServiceLogin lands a signed-in profile on the mailbox and a
-  // signed-out one on the address screen.
+  // signed-out one on the address screen. hl=en: the pages in English
+  // whatever the region (measured 2026-10-28: lang="bg" for a Bulgarian
+  // Accept-Language without it, lang="en" with it).
   startUrl:
-    "https://accounts.google.com/ServiceLogin?service=mail&continue=https%3A%2F%2Fmail.google.com%2Fmail%2Fu%2F0%2F",
+    "https://accounts.google.com/ServiceLogin?service=mail&hl=en&continue=https%3A%2F%2Fmail.google.com%2Fmail%2Fu%2F0%2F",
+  // Google's cookie consent for a signed-out visitor in the EU ("Before
+  // you continue to Google") [measure: as it appears].
+  consent: {
+    name: "google-consent",
+    hosts: ["consent.google.com"],
+    paths: [""],
+  },
+  // "Verify it's you" / "To continue, first verify it's you" over the
+  // account and a password field only: an existing session asked to
+  // confirm its password [measure: as it appears].
+  reauth: {
+    match: {
+      all: ["enter your password"],
+      any: ["verify it's you", "verify that it's you"],
+    },
+    allowed: GMAIL_REAUTH_WORDING,
+  },
   done: { all: ["compose", "inbox"] },
   steps: [
     { step: "password", any: ["enter your password"] },
@@ -416,11 +637,30 @@ export const GMAIL_SIGNIN: ProviderSignin = {
   softChallenges: [...COMMON_SOFT],
 };
 
+// Yahoo's (and AOL's, the same platform's) privacy-consent pages:
+// measured 2026-10-28, consent.yahoo.com/mailbox/collectConsent after the
+// password (the mail consent, in Bulgarian); guce.yahoo.com/consent
+// redirects to consent.yahoo.com/v2/collectConsent (the cookie consent).
+const YAHOO_CONSENT: ConsentRule = {
+  name: "yahoo-consent",
+  hosts: [
+    "consent.yahoo.com",
+    "guce.yahoo.com",
+    "consent.aol.com",
+    "guce.aol.com",
+  ],
+  paths: ["consent"],
+};
+
 export const YAHOO_SIGNIN: ProviderSignin = {
   set: "yahoo",
   label: "Yahoo Mail",
+  // .lang=en-US: the sign-in pages in English whatever the region
+  // (measured 2026-10-28: lang="bg-BG" for a Bulgarian Accept-Language
+  // without it, lang="en-US" with it). The consent pages ignore it.
   startUrl:
-    "https://login.yahoo.com/?.src=ym&done=https%3A%2F%2Fmail.yahoo.com%2F",
+    "https://login.yahoo.com/?.src=ym&.lang=en-US&done=https%3A%2F%2Fmail.yahoo.com%2F",
+  consent: YAHOO_CONSENT,
   done: { all: ["compose", "inbox"] },
   // Measured 2026-10-28: the address screen reads "Sign in to Yahoo
   // Mail", "Username, email or phone number", "Stay signed in", "Next"

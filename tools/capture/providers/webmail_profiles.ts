@@ -51,6 +51,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { BrowserContext } from "playwright-core";
 import { launchOptions, type LaunchOptions } from "../launch.ts";
 import type { HostEnv } from "./requirements.ts";
@@ -260,46 +261,157 @@ export async function checkSignedIn(
   };
 }
 
-// The profile preferences that turn off the browser's own sign-in (its
-// "Allow Chrome sign-in" setting), so Google Chrome never offers to sign
-// the browser in ("Make Chrome your own … Continue as …") over a page
-// once the web sign-in succeeds. Both keys: Chrome resets
-// `signin.allowed` at startup from `signin.allowed_on_next_startup`
-// (measured 2026-10-28, Google Chrome 147: with the first alone it was
-// true again after a start, with both it stayed false and the profile
-// menu offered no "Sign in to Chrome"). A user setting, not an
-// automation switch, and invisible to a page.
-export const SIGNIN_OFFER_PREFS = {
-  allowed: false,
-  allowed_on_next_startup: false,
+// The preferences every browser of the sign-in recipe starts with on a
+// webmail profile, merged into its Default/Preferences (capture spec's
+// "webmail profile's preferences"). Each is a user setting of Chrome's
+// settings page, or the preference an enterprise policy sets; none is an
+// automation switch, and no web API reports one to a page.
+// - The password manager off: Chrome never offers to save the QA
+//   password, and never saves it ("Offer to save passwords",
+//   `PasswordManagerEnabled`; `profile.password_manager_enabled` is the
+//   older name of the same setting), never signs in with a saved one,
+//   and never sends a hash prefix of a submitted password to Google's
+//   leak check. Measured 2026-10-28: Yahoo's sign-in left Chrome's "Save
+//   password?" bubble over the next page.
+// - The web sign-in interception off (`SigninInterceptionEnabled`): no
+//   "Make Chrome your own / Continue as …" bubble over the provider's
+//   page after a Google web sign-in. Chrome's own sign-in stays allowed
+//   (`signin.allowed` and `allowed_on_next_startup` true, Chrome's
+//   default, restoring profiles an earlier recipe set to false): turning
+//   it off disables Chrome's account consistency with Google, so Google
+//   stops receiving the request header the session was signed in with,
+//   a plausible cause of the "verify it's you" a Gmail profile met on its
+//   first launch with it off (2026-10-28).
+// - The pages' languages: en-US, en (Chrome's default for an en-US
+//   interface, written so it does not depend on the host's locale).
+export const WEBMAIL_PROFILE_PREFS = {
+  credentials_enable_service: false,
+  credentials_enable_autosignin: false,
+  profile: {
+    password_manager_enabled: false,
+    password_manager_leak_detection: false,
+  },
+  signin: {
+    interception_enabled: false,
+    allowed: true,
+    allowed_on_next_startup: true,
+  },
+  intl: { accept_languages: "en-US,en" },
 } as const;
 
-// Writes SIGNIN_OFFER_PREFS into the profile's Default/Preferences
+type Json = Record<string, unknown>;
+const isObject = (v: unknown): v is Json =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+// `over` merged into `base`, objects key by key (`over` wins elsewhere).
+function mergePrefs(base: Json, over: Json): Json {
+  const out: Json = { ...base };
+  for (const [k, v] of Object.entries(over))
+    out[k] = isObject(v) && isObject(out[k]) ? mergePrefs(out[k], v) : v;
+  return out;
+}
+
+// Writes WEBMAIL_PROFILE_PREFS into the profile's Default/Preferences
 // before a browser starts on it (none may run on it then), keeping
 // everything else in the file; atomic, 0600. A file that is not a JSON
 // object is an error: it is never replaced.
-export function suppressBrowserSigninOffer(userDataDir: string): void {
+export function writeWebmailProfilePrefs(userDataDir: string): void {
   const dir = join(userDataDir, "Default");
   const path = join(dir, "Preferences");
-  let prefs: Record<string, unknown> = {};
+  let prefs: Json = {};
   if (existsSync(path)) {
     const v: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (v === null || typeof v !== "object" || Array.isArray(v))
-      throw new Error(`${path} is not a JSON object`);
-    prefs = v as Record<string, unknown>;
+    if (!isObject(v)) throw new Error(`${path} is not a JSON object`);
+    prefs = v;
   }
-  const signin = prefs.signin;
-  prefs.signin = {
-    ...(signin !== null && typeof signin === "object" && !Array.isArray(signin)
-      ? (signin as Record<string, unknown>)
-      : {}),
-    ...SIGNIN_OFFER_PREFS,
-  };
+  prefs = mergePrefs(prefs, WEBMAIL_PROFILE_PREFS as unknown as Json);
   privateDir(dir);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(prefs), { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
+}
+
+// What the browser keeps of a password in a profile, counted, never read:
+// saved logins in Login Data and Login Data For Account (rows that are not
+// "never save" entries), and the entries of profile.password_hash_data_list
+// (salted hashes of a Google password, kept for Chrome's password-reuse
+// warning). `unreadable` names what could not be counted (a database that
+// is locked or malformed): that is a failure too, since it proves nothing.
+export interface SecretsAtRest {
+  savedLogins: number;
+  accountLogins: number;
+  passwordHashes: number;
+  unreadable: string[];
+}
+
+export const LOGIN_DATABASES = ["Login Data", "Login Data For Account"];
+
+function countLogins(path: string): number {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    try {
+      const row = db
+        .prepare(
+          "SELECT count(*) AS n FROM logins WHERE blacklisted_by_user = 0",
+        )
+        .get() as { n: number };
+      return Number(row.n);
+    } catch {
+      // A schema without the column: every row counts.
+      const row = db.prepare("SELECT count(*) AS n FROM logins").get() as {
+        n: number;
+      };
+      return Number(row.n);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+// Counts the profile's saved passwords (run with no browser on it).
+export function secretsAtRest(userDataDir: string): SecretsAtRest {
+  const out: SecretsAtRest = {
+    savedLogins: 0,
+    accountLogins: 0,
+    passwordHashes: 0,
+    unreadable: [],
+  };
+  const def = join(userDataDir, "Default");
+  for (const name of LOGIN_DATABASES) {
+    const path = join(def, name);
+    if (!existsSync(path)) continue;
+    try {
+      const n = countLogins(path);
+      if (name === "Login Data") out.savedLogins = n;
+      else out.accountLogins = n;
+    } catch (err) {
+      out.unreadable.push(
+        `${name} (${err instanceof Error ? err.message.split("\n")[0] : String(err)})`,
+      );
+    }
+  }
+  const prefsPath = join(def, "Preferences");
+  if (existsSync(prefsPath)) {
+    try {
+      const v: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
+      const list =
+        isObject(v) && isObject(v.profile)
+          ? v.profile.password_hash_data_list
+          : undefined;
+      out.passwordHashes = Array.isArray(list) ? list.length : 0;
+    } catch {
+      out.unreadable.push("Preferences (not JSON)");
+    }
+  }
+  return out;
+}
+
+export function holdsSecrets(s: SecretsAtRest): boolean {
+  return (
+    s.savedLogins + s.accountLogins + s.passwordHashes > 0 ||
+    s.unreadable.length > 0
+  );
 }
 
 // The command line of the sign-in browser: the webmail browser without

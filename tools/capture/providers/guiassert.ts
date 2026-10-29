@@ -7,10 +7,11 @@
 //
 // Used by the webmail sign-in (email-webmail-signin.ts) to start a
 // private off-screen session, read the screen (OCR), find fields in the
-// accessibility tree, and send OS-level input. Secrets never travel on a
-// command line or in the environment: a `Secret` is only ever written to
-// the child's standard input (`type --stdin`, `--secret-stdin`), and a
-// `Secret` prints as "[secret]" wherever it is formatted by accident.
+// accessibility tree, and send OS-level input (keys, clicks, the wheel).
+// Secrets never travel on a command line or in the environment: a
+// `Secret` is only ever written to the child's standard input (`type
+// --stdin`, `--secret-stdin`), and a `Secret` prints as "[secret]"
+// wherever it is formatted by accident.
 
 import { spawn, spawnSync } from "node:child_process";
 import { inspect } from "node:util";
@@ -118,6 +119,10 @@ export interface GaElement {
   name: string | null;
   bounds: Rect | null;
   states: string[];
+  /** The Value interface's value, or an editable text's content (never a protected field's). */
+  value?: string | null;
+  /** The Text interface's whole content (never a protected field's). */
+  text?: string | null;
 }
 
 export interface FindFilter {
@@ -325,6 +330,20 @@ export class GuiAssert {
 
   async click(x: number, y: number): Promise<void> {
     await this.run("click", ["--at", `${Math.round(x)},${Math.round(y)}`]);
+  }
+
+  /** Scrolls the wheel at (x, y) by `dy` lines (positive: down). */
+  async scroll(x: number, y: number, dy: number): Promise<void> {
+    await this.run("scroll", [
+      "--at",
+      `${Math.round(x)},${Math.round(y)}`,
+      "--dx",
+      "0",
+      "--dy",
+      String(dy),
+      "--unit",
+      "line",
+    ]);
   }
 
   /** Types `text` through OS-level input; it is read from stdin, never argv. */
