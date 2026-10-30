@@ -33,7 +33,11 @@
 // with `below: n` shows only from offset n on, one with `shows: [a, b]`
 // only at offsets a..b; one that does not show is reported `offscreen`
 // with no bounds (as GuiAssert reports an element that is not showing)
-// and takes no click; a click on a `stuck` radio button changes nothing. A frame written by `ocr` / `screenshot` is a text
+// and takes no click; a click on a `stuck` radio button changes nothing.
+// A screen with `moveOn` moves on by itself to its `next` screen once that
+// many frames (`ocr` calls) were read of it since it showed, right after
+// the last of them: the next `find` already sees the next screen (its
+// address), as a page that changes while a frame is read. A frame written by `ocr` / `screenshot` is a text
 // file holding what the simulated display shows, so a test can look into
 // it.
 
@@ -93,6 +97,8 @@ export interface StandinScreen {
   /** The browser's address bar value while the screen shows. */
   location?: string;
   radios?: StandinRadio[];
+  /** Moves on to `next` by itself after this many frames of it. */
+  moveOn?: { frames: number; next: string };
 }
 
 export interface StandinScenario {
@@ -120,6 +126,8 @@ interface State {
   scrolls?: Record<string, number>;
   /** Per screen and radio index: checked. */
   checked?: Record<string, boolean>;
+  /** Frames read of the current screen since it showed. */
+  frames?: number;
 }
 
 function out(verb: string, data: unknown): number {
@@ -206,6 +214,7 @@ export function main(argv: string[]): number {
   const show = (id: string): void => {
     state.screen = id;
     state.focused = scenario.screens[id]?.focus ?? null;
+    state.frames = 0;
   };
 
   const readsStdin = flags.has("--secret-stdin") || flags.has("--stdin");
@@ -317,6 +326,11 @@ export function main(argv: string[]): number {
               text: display(),
             })
           : out(verb, { image });
+      const moveOn = screen().moveOn;
+      if (verb === "ocr" && moveOn !== undefined) {
+        state.frames = (state.frames ?? 0) + 1;
+        if (state.frames >= moveOn.frames) show(moveOn.next);
+      }
       break;
     }
     case "find": {

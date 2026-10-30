@@ -9,7 +9,9 @@
 // breaks); the live sign-in of each QA account checks the wording itself.
 // Yahoo's privacy-consent page is the measured one (2026-10-28, in
 // Bulgarian), recognised by its address whatever its language, and so is
-// Google's sign-in-again page (2026-10-29), by its address and wording.
+// Google's sign-in-again page (2026-10-29), by its address and wording,
+// and the password page after it (2026-10-29 21:12Z, from the kept
+// screenshot).
 // Pure functions: no browser, no GuiAssert, no network.
 // Run with:
 //   node --test tools/capture/providers/webmail_signin_steps.test.ts
@@ -29,6 +31,7 @@ import {
   PROVIDER_SIGNIN,
   type ProviderSignin,
   signInAgainHinted,
+  signInAgainMovingOn,
   SKIP_CONTROLS,
   splitLocation,
   YAHOO_SIGNIN,
@@ -1033,6 +1036,59 @@ describe("Google's sign-in-again page", () => {
     ];
     for (const [extra, want] of cases)
       assert.equal(kind(g, again(extra), AGAIN_AT), want, extra);
+  });
+
+  // The password page Google showed after "Next" (live, 2026-10-29
+  // 21:12Z: the kept screenshot; an invented TL value and account).
+  const PWD_AT =
+    "accounts.google.com/v3/signin/challenge/pwd?TL=AAexampleTL0000&checkConnection=youtube%3A0&flowName=GlifWebSignIn";
+  const pwd = (): string =>
+    [
+      "Welcome\nx\n+",
+      `${PWD_AT.slice(0, 100)}…`,
+      "G",
+      "Welcome",
+      "S qa.tester@example.com",
+      "Enter your password",
+      "|",
+      "Show password",
+      "Forgot password? Next",
+      "English (United States) Help Privacy Terms",
+    ].join("\n");
+
+  it("reads Google's password page on /signin/challenge/pwd as the password step: the word 'challenge' in an address is never looked at", () => {
+    assert.equal(kind(g, pwd(), PWD_AT), "step:password");
+    assert.equal(kind(g, pwd()), "step:password");
+    assert.ok(!signInAgainHinted(g, pwd()));
+    assert.ok(!signInAgainMovingOn(g, pwd(), PWD_AT));
+  });
+
+  it("tells its wording at another address (the page moving on after 'Next') from the page itself", () => {
+    // The old page's text with the password page's address, from the
+    // tree (the address read after the frame) or from the frame itself.
+    const stale = again().replace(
+      `${AGAIN_AT.slice(0, 120)}…`,
+      `${PWD_AT.slice(0, 100)}…`,
+    );
+    assert.ok(signInAgainMovingOn(g, again(), PWD_AT));
+    assert.ok(signInAgainMovingOn(g, stale, PWD_AT));
+    assert.ok(signInAgainMovingOn(g, stale, undefined));
+    assert.ok(signInAgainMovingOn(g, stale, null));
+    // Classified, such a frame is the challenge its wording carries.
+    assert.equal(kind(g, again(), PWD_AT), "challenge:verify-identity");
+    // The page itself, or a page without its wording, is not moving on.
+    assert.ok(!signInAgainMovingOn(g, again(), AGAIN_AT));
+    assert.ok(!signInAgainMovingOn(g, again(), undefined));
+    assert.ok(
+      !signInAgainMovingOn(
+        g,
+        "Verify it's you\n2-Step Verification\nEnter code",
+        PWD_AT,
+      ),
+    );
+    // A provider without the page: never.
+    for (const p of [YAHOO_SIGNIN, OUTLOOK_SIGNIN, AOL_SIGNIN])
+      assert.ok(!signInAgainMovingOn(p, again(), PWD_AT), p.label);
   });
 
   it("is Gmail's only: other providers keep the page a challenge", () => {

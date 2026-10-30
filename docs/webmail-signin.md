@@ -29,14 +29,24 @@ account file's address and password:
   provider's page, while Chrome's own sign-in stays allowed (its
   default: turning it off also stops Chrome's account consistency with
   Google, which changes what Google sees of an already signed-in
-  session); and the pages' languages, `en-US, en`. These are user
-  settings, not automation switches, and a page cannot see them. If
+  session); the pages' languages, `en-US, en`; and page translation
+  off (Settings, "Use Google Translate"), so Chrome never offers its
+  Translate bubble, whose "Always translate" check box would otherwise
+  stop the consent answer below on a page in the host region's
+  language. These are user settings, not automation switches, and a
+  page cannot see them. If
   the "Continue as …" bubble shows anyway, the recipe closes it once
   through its button `Use Chrome without an account` (an input to the
   browser, not to the provider);
 - it reads each screen by OCR, and types the address and the password
   through OS-level input, each only into the field meant for it (read
   from the browser's accessibility tree);
+- it acts on nothing it saw only once: a screen is answered (or the
+  attempt stopped on it) only when two reads in a row, about a second
+  apart, saw the same screen with the same browser address. A page that
+  is changing, or a frame read while the browser was already moving to
+  the next page, is read again with no input. This costs a second or
+  two per screen;
 - it stops at any challenge (a captcha, a code, a phone, a passkey,
   "verify it's you", ...) and never retries. One exception: Google's
   password re-verification of an existing session ("Verify it's you"
@@ -52,10 +62,16 @@ account file's address and password:
   an automated attempt it clicks "Next" once, only when the page has
   exactly one button named exactly `Next` and no field (this click starts
   the attempt), and then signs in on the password screen that follows,
-  the password typed at most once. Any challenge on the page (a code, a
-  phone, a device, a passkey, "2-Step Verification", ...) still stops the
-  attempt. A check (`--check-only`, or the check after a sign-in) clicks
-  nothing and reports it as "signed out: Google asks to sign in again";
+  the password typed at most once. Google may change the page in place:
+  the browser's address moves to the password page
+  (`…/signin/challenge/pwd`) while "Please sign in again" still shows
+  for a few seconds. For 20 s after "Next", that wording under another
+  address is read as the page moving on, with no input; still there
+  after 20 s, it stops the attempt as `verify-identity`. Any challenge
+  on the page (a code, a phone, a device, a passkey, "2-Step
+  Verification", ...) still stops the attempt. A check (`--check-only`,
+  or the check after a sign-in) clicks nothing and reports it as
+  "signed out: Google asks to sign in again";
 - a provider may show a privacy-consent page (Yahoo's
   `consent.yahoo.com/…/collectConsent`, Google's `consent.google.com`),
   sometimes in the language of the host's region whatever the browser
@@ -77,7 +93,13 @@ account file's address and password:
   never clicks an accept or allow control. A page it cannot answer that
   way (another language, a choice named otherwise, a check box or
   switch, a "Reject" that does not stay selected, no save or continue
-  control) stops the attempt `consent-required` with no further input;
+  control) stops the attempt `consent-required` with no further input.
+  It looks for check boxes in the whole browser window, Chrome's own
+  bubbles included: a `consent-required` naming a check box the page
+  does not have (such as "Always translate") means a bubble of
+  Chrome's was open over the page; check that the profile's
+  preferences above were written (the run writes them before each
+  start), and run again after the cool-down;
 - after the password, a provider may ask for more account data (Gmail's
   "Set a home address", a recovery phone or email, "protect your
   account", a passkey offer). The recipe only declines such a screen:

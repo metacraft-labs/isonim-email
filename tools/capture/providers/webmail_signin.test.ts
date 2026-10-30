@@ -61,6 +61,13 @@
 //   its address it stays the challenge `verify-identity`; after the
 //   password it is a challenge; the check and `--check-only` report it as
 //   signed out (exit 1, not a challenge), clicking nothing;
+// - nothing is done on one frame alone: a challenge seen on one frame
+//   and gone on the next stops nothing; after the sign-in-again page's
+//   "Next", its wording under the next page's address (the page moving
+//   on, also when the navigation commits while the frame is read) is
+//   read again with no input, then the password is typed once; a genuine
+//   challenge after "Next" still stops with no input after the click, and
+//   so does the wording still there `stuckMs` after it;
 // - Chrome's own sign-in bubble is closed once through its "Use Chrome
 //   without an account" button, which is not an input to the provider;
 // - the check keeps its screen (check-screen.png, 0600) when it finds no
@@ -130,6 +137,7 @@ import {
   consentChoice,
   consentRadio,
   driveSignin,
+  sameReading,
   type SigninContext,
   type VerifyContext,
   verifySignedIn,
@@ -270,12 +278,14 @@ function outlookScenario(): StandinScenario {
 const AGAIN_AT =
   "accounts.google.com/v3/signin/confirmidentifier?continue=https://mail.google.com/mail/u/0/&hl=en&service=mail&flowName=GlifWebSignIn";
 const NEXT_BUTTON: [number, number, number, number] = [960, 575, 80, 40];
+const againText = (at: string): string =>
+  `Gmail\n${at}\nVerify it’s you\nqa.tester@example.com\nTo help keep your account secure, Google needs to verify\nit’s you. Please sign in again to continue to Gmail.\nNext\nEnglish (United States)\nHelp Privacy Terms`;
 function signInAgainScenario(
   over: Partial<StandinScenario["screens"][string]> = {},
 ): StandinScenario {
   const s = gmailScenario({
     again: {
-      text: `Gmail\n${AGAIN_AT}\nVerify it’s you\nqa.tester@example.com\nTo help keep your account secure, Google needs to verify\nit’s you. Please sign in again to continue to Gmail.\nNext\nEnglish (United States)\nHelp Privacy Terms`,
+      text: againText(AGAIN_AT),
       location: AGAIN_AT,
       buttons: [{ name: "Next", bounds: NEXT_BUTTON, next: "password" }],
       ...over,
@@ -284,6 +294,41 @@ function signInAgainScenario(
   s.start = "again";
   return s;
 }
+
+// The password page Google showed after "Next" (live, 2026-10-29 21:12Z,
+// from the kept screenshot; an invented TL value).
+const PWD_AT =
+  "accounts.google.com/v3/signin/challenge/pwd?TL=AAexampleTL0000&checkConnection=youtube%3A0&flowName=GlifWebSignIn";
+
+/**
+ * The sign-in-again page whose "Next" leads to `leadsTo`, and the password
+ * page on PWD_AT (its address in the bar and in the tree).
+ */
+function signInAgainThen(
+  leadsTo: string,
+  screens: Record<string, StandinScenario["screens"][string]>,
+): StandinScenario {
+  const s = signInAgainScenario({
+    buttons: [{ name: "Next", bounds: NEXT_BUTTON, next: leadsTo }],
+  });
+  const pw = s.screens.password!;
+  s.screens.password = {
+    ...pw,
+    text: `Gmail\n${PWD_AT}\nWelcome\nqa.tester@example.com\nEnter your password\nShow password\nForgot password?\nNext`,
+    location: PWD_AT,
+  };
+  Object.assign(s.screens, screens);
+  return s;
+}
+
+const inputsOn = (h: Harness, screen: string): StandinLogEntry[] =>
+  h
+    .log()
+    .filter(
+      (e) =>
+        e.screen === screen &&
+        ["type", "key", "click", "scroll"].includes(e.verb),
+    );
 
 let runs = 0;
 interface Harness {
@@ -1364,6 +1409,240 @@ describe("the automated sign-in procedure", () => {
     );
   });
 
+  it("waits through the sign-in-again page moving on after its 'Next' (its wording under the password page's address for several frames), then types the password once", async () => {
+    // A page that changes in place: the address is the password page's
+    // at once, the old text stays three frames (measured in Chrome with
+    // history.pushState).
+    const h = harness(
+      signInAgainThen("moving", {
+        moving: {
+          text: againText(PWD_AT),
+          location: PWD_AT,
+          moveOn: { frames: 3, next: "password" },
+        },
+      }),
+    );
+    const lines: string[] = [];
+    // The wait lasts stuckMs after the click: long enough here for three
+    // rounds of the stand-in on a loaded host.
+    const ctx = h.ctx(GMAIL_SIGNIN, { log: (l) => lines.push(l) });
+    const r = await driveSignin({
+      ...ctx,
+      timings: { ...ctx.timings, stuckMs: 60_000 },
+    });
+    assert.deepEqual(
+      r.outcome,
+      { result: "signed-in", typed: true },
+      lines.join("\n"),
+    );
+    assert.deepEqual(r.steps, ["sign-in-again", "password"]);
+    assert.equal(
+      h.log().filter((e) => e.verb === "ocr" && e.screen === "moving").length,
+      3,
+    );
+    assert.deepEqual(inputsOn(h, "moving"), []);
+    assert.equal(inputsOn(h, "again").length, 1);
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+    assert.equal(
+      lines.filter((l) => l.includes("the sign-in-again page moving on"))
+        .length,
+      1,
+      lines.join("\n"),
+    );
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("reads the old page with the next page's address (a navigation committed while the frame was read) again, with no input on it", async () => {
+    // The frame still shows the sign-in-again page and its own address;
+    // the address bar read after it already holds the password page's.
+    const h = harness(
+      signInAgainThen("commit", {
+        commit: {
+          text: againText(AGAIN_AT),
+          location: AGAIN_AT,
+          moveOn: { frames: 1, next: "password" },
+        },
+      }),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, ["sign-in-again", "password"]);
+    assert.deepEqual(inputsOn(h, "commit"), []);
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+  });
+
+  it("stops nothing on one frame: a challenge seen once and gone on the next frame is read again, then the sign-in goes on", async () => {
+    // A frame between the address and the password screens that reads
+    // as a challenge (nothing to do with the sign-in-again page).
+    const s = gmailScenario({
+      flash: {
+        text: "Google\nVerify it's you\nTo continue, first verify it's you",
+        moveOn: { frames: 1, next: "password" },
+      },
+    });
+    s.screens.address!.submit = "flash";
+    const h = harness(s);
+    const lines: string[] = [];
+    const r = await driveSignin(
+      h.ctx(GMAIL_SIGNIN, { log: (l) => lines.push(l) }),
+    );
+    assert.deepEqual(
+      r.outcome,
+      { result: "signed-in", typed: true },
+      lines.join("\n"),
+    );
+    assert.deepEqual(r.steps, ["address", "password"]);
+    assert.ok(
+      lines.some((l) =>
+        /^screen: a challenge \(verify-identity: .*\) on one frame .*read again before stopping$/.test(
+          l,
+        ),
+      ),
+      lines.join("\n"),
+    );
+    assert.equal(typed(h.log()).filter((t) => t.secret).length, 1);
+  });
+
+  it("acts on no screen before it read the same twice: the first input follows the second frame of the address screen", async () => {
+    const h = harness(gmailScenario());
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    const log = h.log();
+    const firstIn = log.findIndex((e) =>
+      ["type", "key", "click"].includes(e.verb),
+    );
+    assert.equal(
+      log.slice(0, firstIn).filter((e) => e.verb === "ocr").length,
+      2,
+    );
+    // The password too: two frames of its screen before it is typed.
+    const pwAt = log.findIndex(
+      (e) => e.verb === "type" && e.stdin === SENTINEL,
+    );
+    assert.equal(
+      log
+        .slice(0, pwAt)
+        .filter((e) => e.verb === "ocr" && e.screen === "password").length,
+      2,
+    );
+  });
+
+  it("still stops at a genuine challenge after 'Next' (2-step verification) with no input after the click", async () => {
+    const h = harness(
+      signInAgainThen("twostep", {
+        twostep: {
+          text: "Gmail\naccounts.google.com/v3/signin/challenge/totp?TL=x\n2-Step Verification\nTo help keep your account safe, Google wants to make sure it's really you trying to sign in\nqa.tester@example.com\nEnter code\nNext",
+          location: "accounts.google.com/v3/signin/challenge/totp?TL=x",
+          fields: [{ name: "Enter code", bounds: ADDRESS_FIELD }],
+          focus: "Enter code",
+        },
+      }),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.equal(r.outcome.result, "challenged");
+    assert.equal(
+      (r.outcome as { challenge: string }).challenge,
+      "verify-identity",
+    );
+    assert.deepEqual(inputsOn(h, "twostep"), []);
+    assert.equal(inputsOn(h, "again").length, 1);
+    assert.equal(typed(h.log()).length, 0);
+  });
+
+  it("stops as the challenge when the sign-in-again wording is still under another address stuckMs after 'Next', with no input after the click", async () => {
+    const h = harness(
+      signInAgainThen("moving", {
+        moving: { text: againText(PWD_AT), location: PWD_AT },
+      }),
+    );
+    const r = await driveSignin(h.ctx(GMAIL_SIGNIN));
+    assert.deepEqual(r.outcome, {
+      result: "challenged",
+      challenge: "verify-identity",
+      phrase: "verify it's you",
+    });
+    assert.ok(r.elapsedMs >= 400, String(r.elapsedMs));
+    assert.deepEqual(inputsOn(h, "moving"), []);
+    assert.equal(inputsOn(h, "again").length, 1);
+    assert.equal(typed(h.log()).length, 0);
+  });
+
+  it("compares readings by what the screen is and the address read with it, not by the phrase that matched", () => {
+    const pw = { kind: "step", step: "password" } as const;
+    const ch = (phrase: string) =>
+      ({ kind: "challenge", challenge: "verify-identity", phrase }) as const;
+    assert.ok(
+      sameReading(
+        { screen: ch("verify it's you"), location: PWD_AT },
+        { screen: ch("really you"), location: PWD_AT },
+      ),
+    );
+    assert.ok(
+      sameReading(
+        { screen: pw, location: undefined },
+        { screen: pw, location: undefined },
+      ),
+    );
+    assert.ok(!sameReading(null, { screen: pw, location: undefined }));
+    // The address moved, or was read on one round only.
+    assert.ok(
+      !sameReading(
+        { screen: pw, location: AGAIN_AT },
+        { screen: pw, location: PWD_AT },
+      ),
+    );
+    assert.ok(
+      !sameReading(
+        { screen: pw, location: undefined },
+        { screen: pw, location: PWD_AT },
+      ),
+    );
+    assert.ok(
+      !sameReading(
+        { screen: pw, location: null },
+        { screen: pw, location: undefined },
+      ),
+    );
+    // Another step, kind or name.
+    for (const other of [
+      { kind: "step", step: "address" },
+      ch("verify it's you"),
+      { kind: "challenge", challenge: "captcha", phrase: "x" },
+      { kind: "error", error: "wrong-password", phrase: "x" },
+      { kind: "interstitial", interstitial: "home-address", phrase: "x" },
+      { kind: "consent", consent: "google-consent" },
+      { kind: "done" },
+      { kind: "unknown" },
+    ] as const)
+      assert.ok(
+        !sameReading(
+          { screen: pw, location: PWD_AT },
+          { screen: other, location: PWD_AT },
+        ),
+        JSON.stringify(other),
+      );
+    assert.ok(
+      !sameReading(
+        {
+          screen: {
+            kind: "interstitial",
+            interstitial: "home-address",
+            phrase: "x",
+          },
+          location: undefined,
+        },
+        {
+          screen: {
+            kind: "interstitial",
+            interstitial: "work-address",
+            phrase: "x",
+          },
+          location: undefined,
+        },
+      ),
+    );
+  });
+
   it("closes Chrome's own sign-in bubble once through its button, not counting it as an input to the provider", async () => {
     const s = gmailScenario();
     s.start = "bubble";
@@ -1686,12 +1965,15 @@ describe("email-webmail-signin (the command line)", () => {
   // It stops on SIGINT (as Chromium does) even while it runs its own
   // commands: a shell that receives SIGINT while waiting for one goes on
   // when that command does not die of it too, so the trap says to stop.
+  // A SIGINT during its setup is held until the setup is done (the
+  // copies, so a hash it is told to write is written), then it stops: a
+  // check that ends after one read may stop it that early.
   const browserLog = join(scratch, "browser-log");
   mkdirSync(browserLog);
   const browserExe = join(scratch, "webmail-browser");
   writeFileSync(
     browserExe,
-    `#!/bin/sh\ntrap "exit 130" INT\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\n[ -n "$STANDIN_BROWSER_PREFS" ] && cp "$STANDIN_BROWSER_PREFS" "$d/Default/Preferences"\nexec sleep 600\n`,
+    `#!/bin/sh\nstop=\ntrap "stop=1" INT\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\n[ -n "$STANDIN_BROWSER_PREFS" ] && cp "$STANDIN_BROWSER_PREFS" "$d/Default/Preferences"\ntrap "exit 130" INT\n[ -n "$stop" ] && exit 130\nexec sleep 600\n`,
     { mode: 0o755 },
   );
 

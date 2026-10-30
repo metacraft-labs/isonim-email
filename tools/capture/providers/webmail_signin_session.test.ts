@@ -48,7 +48,15 @@
 // submitted on Google's sign-in page into the profile's preferences even
 // with the recipe's preferences (the reason for the scrub), the scrub
 // removes it with the browser stopped, and the next start does not bring
-// it back, while the same page off Google's origin gets no hash.
+// it back, while the same page off Google's origin gets no hash; the
+// sign-in-again page changing in place after its "Next" (the address on
+// the password page at once, the old wording on the screen for a few
+// seconds) is waited through with no input, then the password is typed
+// once; with the profile's preferences Chrome offers no translation of a
+// page in Bulgarian (no Translate bubble, so no "Always translate" check
+// box in the browser's tree for the consent round to stop on), while the
+// same preferences with page translation on show the bubble (the
+// positive control).
 //
 // Test double (justification, per the repository's mock policy): the
 // real provider pages cannot be signed in to from a test, so a local
@@ -76,6 +84,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -139,6 +148,13 @@ function readBody(req: IncomingMessage): Promise<URLSearchParams> {
     req.on("end", () => r(new URLSearchParams(b)));
   });
 }
+
+// Google's password page after the sign-in-again page (live 2026-10-29
+// 21:12Z, the kept screenshot): "Welcome", the account, the field, "Show
+// password", "Forgot password?", "Next". Its field is not focused.
+const PASSWORD_FORM = `<h1>Welcome</h1><p>${ADDRESS}</p><form method="post" action="/signin/pwd"><p>Enter your password</p><input type="password" name="Passwd" aria-label="Enter your password" autocomplete="off"><p>Show password</p><p>Forgot password?</p><button>Next</button></form>`;
+// How long the in-place page keeps its old content after "Next".
+const INPLACE_MS = 8000;
 
 describe("the automated sign-in in a real GuiAssert session", () => {
   let server: Server;
@@ -225,6 +241,22 @@ describe("the automated sign-in in a real GuiAssert session", () => {
           res.writeHead(303, { location: "/mail/" });
           return res.end();
         }
+        // A page in Bulgarian, as Yahoo's consent pages are, that says
+        // so (`lang`, Content-Language): Chrome then decides to offer a
+        // translation from the declared language, whether or not its
+        // language-detection model is in the profile yet (a fresh
+        // profile's is not; measured 2026-10-30, Chrome 147: the consent
+        // pages without `lang` got no offer in 60 s, this one the
+        // Translate bubble within about 11 s).
+        if (url.pathname === "/bg") {
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-language": "bg",
+          });
+          return res.end(
+            `<!doctype html><html lang="bg"><head><meta charset="utf-8"><title>Поверителност</title></head><body><h1>Yahoo е част от семейството на Yahoo</h1>${"<p>Ние и нашите партньори използваме бисквитки и подобни технологии, за да съхраняваме и да имаме достъп до информация на Вашето устройство, да подобряваме услугите си и да Ви показваме подходящо съдържание и реклами.</p>".repeat(6)}</body></html>`,
+          );
+        }
         if (url.pathname === "/collectConsent" && req.method === "GET") {
           // Yahoo's layout (measured 2026-10-28): rows of a reject/allow
           // pair of radio buttons, none chosen, then a continue button.
@@ -305,6 +337,22 @@ ${purpose("stats", "За създаване и споделяне на обоб�
           res.writeHead(303, { location: `http://127.0.0.1:${port}/signin` });
           return res.end();
         }
+        // The same page changing in place, as a single-page application
+        // does: "Next" moves the address to the password page's at once
+        // (history.pushState) and replaces the content INPLACE_MS later,
+        // so the old wording stays on the screen, and in the tree, under
+        // the new address for a few rounds (measured 2026-10-30 in this
+        // session's Chrome: two rounds of "Verify it's you … Please sign
+        // in again" with /challenge/pwd before and after the frame).
+        if (
+          url.pathname === "/v3/signin/confirmidentifier" &&
+          url.searchParams.get("inplace") === "1"
+        )
+          return html(
+            `<div id="view"><h1>Verify it’s you</h1><p>${ADDRESS}</p><p>To help keep your account secure, Google needs to verify it’s you. Please sign in again to continue to Gmail.</p><button id="next">Next</button></div><script>document.getElementById('next').addEventListener('click', function () { history.pushState({}, '', '/v3/signin/challenge/pwd?TL=x'); setTimeout(function () { document.getElementById('view').innerHTML = ${JSON.stringify(PASSWORD_FORM)}; }, ${INPLACE_MS}); });</script>`,
+          );
+        if (url.pathname === "/v3/signin/challenge/pwd")
+          return html(PASSWORD_FORM);
         // Google's sign-in-again page as measured on 2026-10-29: the
         // account, the wording, one "Next", nothing to fill.
         if (url.pathname === "/v3/signin/confirmidentifier")
@@ -674,6 +722,7 @@ ${purpose("stats", "За създаване и споделяне на обоб�
       profile: Record<string, unknown>;
       signin: Record<string, unknown>;
       intl: Record<string, unknown>;
+      translate: Record<string, unknown>;
     };
     assert.equal(prefs.credentials_enable_service, false);
     assert.equal(prefs.credentials_enable_autosignin, false);
@@ -683,6 +732,7 @@ ${purpose("stats", "За създаване и споделяне на обоб�
     assert.equal(prefs.signin.allowed, true);
     assert.equal(prefs.signin.allowed_on_next_startup, true);
     assert.equal(prefs.intl.accept_languages, "en-US,en");
+    assert.equal(prefs.translate.enabled, false);
     // The positive control: Chrome's defaults offer to save the password
     // on the same pages after the same steps (nobody answers it).
     const on = await passwordOffer("password-manager-control", false);
@@ -845,6 +895,51 @@ ${purpose("stats", "За създаване и споделяне на обоб�
     }
   });
 
+  it("waits through the sign-in-again page changing in place after its 'Next' (its wording under the password page's address for several seconds), then types the password once", async () => {
+    mode = "ok";
+    received.password.length = 0;
+    const provider: ProviderSignin = {
+      ...standInGmail(),
+      startUrl: `http://127.0.0.1:${port}/v3/signin/confirmidentifier?inplace=1&flowName=GlifWebSignIn`,
+      signInAgain: {
+        ...GMAIL_SIGNIN.signInAgain!,
+        address: { hosts: ["127.0.0.1"], paths: ["/signin/confirmidentifier"] },
+      },
+    };
+    const a = await attempt("sign-in-again-inplace", false, { provider });
+    try {
+      assert.deepEqual(
+        a.result.outcome,
+        { result: "signed-in", typed: true },
+        a.events.join("\n"),
+      );
+      assert.deepEqual(a.result.steps, [
+        "sign-in-again",
+        "password",
+        "interstitial:home-address",
+      ]);
+      assert.deepEqual(received.password, [SENTINEL]);
+      // The race was met: a frame of the old wording under the new
+      // address, read again with no input.
+      const clicked = a.events.indexOf(
+        '  Google asks to sign in again: clicked "Next"',
+      );
+      const waited = a.events.findIndex((e) =>
+        /^screen: the sign-in-again page moving on \(its wording, the address (?:https?:\/\/)?127\.0\.0\.1:\d+\/v3\/signin\/challenge\/pwd\?TL=x\); read again$/.test(
+          e,
+        ),
+      );
+      assert.ok(clicked >= 0 && waited > clicked, a.events.join("\n"));
+      assert.ok(
+        a.events.indexOf("before-password") > waited,
+        a.events.join("\n"),
+      );
+    } finally {
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
+    }
+  });
+
   it("answers a privacy-consent page on a loopback consent host by its address (any port): every row rejected, then its continue control, then the sign-in", async () => {
     mode = "ok";
     received.identifier.length = 0;
@@ -982,6 +1077,80 @@ ${purpose("stats", "За създаване и споделяне на обоб�
       await stopBrowser(a.child);
       await ga.sessionStop(a.session.id);
     }
+  });
+
+  // The webmail browser on a fresh profile with the recipe's preferences
+  // (`translate`, when not null, overrides Chrome's page translation in
+  // them), at the Bulgarian page; no input. Returns the name of the first
+  // check box the browser's tree showed within the watch (what the
+  // consent round looks for, by the browser's process: Chrome's Translate
+  // bubble has "Always translate"), or null.
+  async function translateOffer(name: string, translate: boolean | null) {
+    const profile = join(scratch, name, "chromium");
+    mkdirSync(profile, { recursive: true, mode: 0o700 });
+    writeWebmailProfilePrefs(profile);
+    if (translate !== null) {
+      const path = join(profile, "Default", "Preferences");
+      const p = JSON.parse(readFileSync(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      p.translate = { enabled: translate };
+      writeFileSync(path, JSON.stringify(p), { mode: 0o600 });
+    }
+    const session = await ga.sessionStart({
+      name: `signin-test-${name}-${process.pid}`,
+      width: SIGNIN_SCREEN.width,
+      height: SIGNIN_SCREEN.height,
+      vncSocket: false,
+    });
+    const sga = ga.inSession(session.id);
+    try {
+      const child = await launch(
+        sessionEnv(process.env, session),
+        profile,
+        `http://consent.localhost:${port}/bg`,
+        false,
+      );
+      let box: string | null = null;
+      try {
+        const watchMs = 30_000;
+        const t0 = Date.now();
+        while (box === null && Date.now() - t0 < watchMs) {
+          const boxes = await sga.find({ pid: child.pid!, role: "checkbox" });
+          if (boxes.length > 0) box = boxes[0]!.name ?? "";
+          else await sleep(1000);
+        }
+      } finally {
+        await stopBrowser(child);
+      }
+      return { box, profile };
+    } finally {
+      await ga.sessionStop(session.id);
+    }
+  }
+
+  it("keeps Chrome's Translate bubble (its 'Always translate' check box) off a page in Bulgarian with the profile's preferences; with page translation on, the bubble shows", async () => {
+    const off = await translateOffer("translate-off", null);
+    assert.equal(
+      off.box,
+      null,
+      "a check box in the browser with the preferences",
+    );
+    // Chrome kept the preference across its start (it writes its
+    // preferences back on exit).
+    const prefs = JSON.parse(
+      readFileSync(join(off.profile, "Default", "Preferences"), "utf8"),
+    ) as { translate: Record<string, unknown> };
+    assert.equal(prefs.translate.enabled, false);
+    // The positive control: the same preferences with page translation
+    // on (Chrome's default) show the bubble on the same page.
+    const on = await translateOffer("translate-control", true);
+    assert.match(
+      on.box ?? "",
+      /translate/i,
+      "no Translate bubble with translation on",
+    );
   });
 
   it("types passwords of every printable ASCII character and of non-ASCII letters into the check page exactly (MATCH), and tells a different one (MISMATCH)", async () => {

@@ -26,7 +26,10 @@
 //      address (`accounts.google.com/…/signin/confirmidentifier`, read
 //      from the browser's address bar) and its wording ("Please sign in
 //      again"): the account and a single "Next", nothing to fill; the
-//      same more precise reasons as 1a win over it;
+//      same more precise reasons as 1a win over it; its wording at
+//      another address is a "verify it's you" page (2), except right
+//      after its "Next" (`signInAgainMovingOn`, waited on by the
+//      procedure);
 //   2. hard challenges: whatever else the page says, a person is needed;
 //   3. errors (wrong password, unknown account): stop, never retry;
 //   4. the step screens: address, password, and the two small ones
@@ -375,6 +378,26 @@ export function signInAgainHinted(p: ProviderSignin, ocrText: string): boolean {
   return (
     p.signInAgain !== undefined &&
     matches(normalize(ocrText), p.signInAgain.match)
+  );
+}
+
+/**
+ * Whether the OCR text still carries the wording of the provider's "sign
+ * in again" page while the address is not the page's: after its "Next",
+ * the page moving on (the browser's address already on the next page, its
+ * content not yet: a page that changes in place, or a navigation that
+ * committed while the frame was read). The procedure waits on such a
+ * frame for a while after the step (webmail_signin.ts); classified, it
+ * would read as the challenge its wording carries.
+ */
+export function signInAgainMovingOn(
+  p: ProviderSignin,
+  ocrText: string,
+  location: string | null | undefined,
+): boolean {
+  return (
+    signInAgainHinted(p, ocrText) &&
+    !onAddress(p.signInAgain!.address, ocrText, location)
   );
 }
 

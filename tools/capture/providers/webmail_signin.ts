@@ -51,6 +51,14 @@
 //   button of that exact name and no field to fill; that click is an
 //   input (it starts the attempt), and the password screen that follows
 //   is the ordinary one (the password still typed at most once);
+// - nothing is done on one frame alone: an input, or an end of the
+//   attempt, follows only from a reading (the screen's classification
+//   and the address-bar value read with it) equal to the previous
+//   round's, so the address held through the frame and the page is not
+//   in the middle of changing (`sameReading`); for `stuckMs` after the
+//   sign-in-again step, its wording at another address is that page
+//   moving on, read again with no input (a page that changes in place
+//   keeps its old text under its new address for a few seconds);
 // - Chrome's own sign-in bubble, should it show despite the profile's
 //   preferences, is closed once through its "Use Chrome without an
 //   account" button (a click on the browser, not on the provider's page);
@@ -80,6 +88,7 @@ import {
   type Screen,
   type SigninErrorKind,
   signInAgainHinted,
+  signInAgainMovingOn,
   SKIP_CONTROLS,
   type StepId,
 } from "./webmail_signin_steps.ts";
@@ -417,6 +426,37 @@ async function locationFor(
   )
     return undefined;
   return readLocation(ga, browserPid);
+}
+
+/**
+ * A round's reading, as compared with the previous round's: the screen's
+ * kind and what it names (not the phrase that matched, which OCR may
+ * vary), and the address-bar value read with it (undefined when none was
+ * read). Two equal readings in a row: the address held from before the
+ * second frame to after it, and the screen read the same twice.
+ */
+export function sameReading(
+  a: { screen: Screen; location: string | null | undefined } | null,
+  b: { screen: Screen; location: string | null | undefined },
+): boolean {
+  if (a === null || a.location !== b.location) return false;
+  const what = (x: Screen): string => {
+    switch (x.kind) {
+      case "challenge":
+        return `challenge:${x.challenge}`;
+      case "error":
+        return `error:${x.error}`;
+      case "step":
+        return `step:${x.step}`;
+      case "interstitial":
+        return `interstitial:${x.interstitial}`;
+      case "consent":
+        return `consent:${x.consent}`;
+      default:
+        return x.kind;
+    }
+  };
+  return what(a.screen) === what(b.screen);
 }
 
 /**
@@ -763,6 +803,10 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
   let waitingLogged: string | null = null;
   let unknownSince: number | null = null;
   let reads = 0;
+  // The previous round's reading (null after a frame of a page moving on).
+  let previous: { screen: Screen; location: string | null | undefined } | null =
+    null;
+  let movingOnLogged = false;
 
   const firstInput = (): void => {
     if (!typedAnything) {
@@ -813,9 +857,42 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
       ctx.browserPid,
       text,
     );
-    const screen = classifyScreen(ctx.provider, text, location);
     const now = Date.now();
+    // After its "Next", the sign-in-again page's wording off its address
+    // is the page moving on, not a challenge: read again, for stuckMs.
+    const againAt = acted.get("sign-in-again");
+    if (
+      againAt !== undefined &&
+      now - againAt < ctx.timings.stuckMs &&
+      signInAgainMovingOn(ctx.provider, text, location)
+    ) {
+      if (!movingOnLogged)
+        ctx.log(
+          `screen: the sign-in-again page moving on (its wording, the address ${location ?? "unread"}); read again`,
+        );
+      movingOnLogged = true;
+      previous = null;
+      unknownSince = null;
+      await sleep(ctx.timings.pollMs);
+      continue;
+    }
+    const screen = classifyScreen(ctx.provider, text, location);
     if (screen.kind !== "unknown") unknownSince = null;
+    // Nothing is done on one frame alone: a reading acted on is the
+    // previous round's too.
+    const reading = { screen, location };
+    const holds = sameReading(previous, reading);
+    previous = reading;
+    if (!holds && screen.kind !== "unknown") {
+      // A stop is the one thing worth seeing in the log when it does
+      // not hold on the next frame.
+      if (screen.kind === "challenge" || screen.kind === "error")
+        ctx.log(
+          `screen: ${checkScreenName(screen)} on one frame (the address ${location === undefined ? "not read" : (location ?? "unread")}); read again before stopping`,
+        );
+      await sleep(ctx.timings.pollMs);
+      continue;
+    }
 
     switch (screen.kind) {
       case "done":

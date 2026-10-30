@@ -119,7 +119,7 @@ describe("hosted-webmail browser profiles", () => {
     }
   });
 
-  it("turns the password manager and the sign-in interception off, and Chrome's own sign-in back on, merging key by key", () => {
+  it("turns the password manager, the sign-in interception and page translation off, and Chrome's own sign-in back on, merging key by key", () => {
     // The values themselves (capture spec): a change here is a change of
     // what Chrome is told, and must be deliberate.
     assert.deepEqual(WEBMAIL_PROFILE_PREFS, {
@@ -135,6 +135,7 @@ describe("hosted-webmail browser profiles", () => {
         allowed_on_next_startup: true,
       },
       intl: { accept_languages: "en-US,en" },
+      translate: { enabled: false },
     });
     const dir = mkdtempSync(join(scratch, "prefs-"));
     const prefs = join(dir, "Default", "Preferences");
@@ -148,6 +149,7 @@ describe("hosted-webmail browser profiles", () => {
         credentials_enable_service: true,
         profile: { name: "Person 1", password_manager_enabled: true },
         signin: { allowed: false, allowed_on_next_startup: false, other: 2 },
+        translate: { enabled: true, other: 3 },
       }),
       { mode: 0o644 },
     );
@@ -168,6 +170,7 @@ describe("hosted-webmail browser profiles", () => {
         interception_enabled: false,
       },
       intl: { accept_languages: "en-US,en" },
+      translate: { enabled: false, other: 3 },
     });
     assert.equal(mode(prefs), 0o600);
     // A fresh profile gets them all.

@@ -285,6 +285,13 @@ export async function checkSignedIn(
 //   first launch with it off (2026-10-28).
 // - The pages' languages: en-US, en (Chrome's default for an en-US
 //   interface, written so it does not depend on the host's locale).
+// - Page translation off (Settings, "Use Google Translate";
+//   `translate.enabled`, the `TranslateEnabled` policy's preference):
+//   Chrome offers no translation of a page in another language than its
+//   interface's, so no Translate bubble ("Always translate", a check box
+//   of the browser, not of the page) shows over a consent page in the
+//   host region's language. Measured 2026-10-30: that bubble over a
+//   Bulgarian consent page stopped an attempt consent-required.
 export const WEBMAIL_PROFILE_PREFS = {
   credentials_enable_service: false,
   credentials_enable_autosignin: false,
@@ -298,6 +305,7 @@ export const WEBMAIL_PROFILE_PREFS = {
     allowed_on_next_startup: true,
   },
   intl: { accept_languages: "en-US,en" },
+  translate: { enabled: false },
 } as const;
 
 type Json = Record<string, unknown>;
