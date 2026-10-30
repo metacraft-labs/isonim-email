@@ -28,9 +28,12 @@
 // value). A screen may carry the browser's address (`location`: `find`
 // reports the address bar, "Address and search bar", with it as its
 // value) and radio buttons (`radios`: a click checks one and unchecks
-// the rest of its group; one `below: n` is off the screen, reported
-// `offscreen` and below the display, until the wheel has scrolled the
-// screen down n times). A frame written by `ocr` / `screenshot` is a text
+// the rest of its group). The wheel moves a screen's scroll offset by one
+// per `scroll` call (down: +1, up: -1, from 0); a radio button or button
+// with `below: n` shows only from offset n on, one with `shows: [a, b]`
+// only at offsets a..b; one that does not show is reported `offscreen`
+// with no bounds (as GuiAssert reports an element that is not showing)
+// and takes no click; a click on a `stuck` radio button changes nothing. A frame written by `ocr` / `screenshot` is a text
 // file holding what the simulated display shows, so a test can look into
 // it.
 
@@ -56,6 +59,8 @@ export interface StandinButton {
   role?: string;
   bounds: Rect;
   next: string;
+  /** Shows only at these scroll offsets (inclusive). */
+  shows?: [number, number];
 }
 
 export interface StandinRadio {
@@ -65,6 +70,10 @@ export interface StandinRadio {
   checked?: boolean;
   /** Off the screen until the screen was scrolled down this many times. */
   below?: number;
+  /** Shows only at these scroll offsets (inclusive). */
+  shows?: [number, number];
+  /** A click on it changes nothing (a choice that does not take). */
+  stuck?: boolean;
 }
 
 export type StandinSubmit =
@@ -107,7 +116,7 @@ interface State {
   focused: string | null;
   values: Record<string, string>;
   sessions: Record<string, { state: string; vncSocket: string | null }>;
-  /** Per screen: how many times the wheel scrolled it down. */
+  /** Per screen: the wheel's offset (down +1, up -1 per call). */
   scrolls?: Record<string, number>;
   /** Per screen and radio index: checked. */
   checked?: Record<string, boolean>;
@@ -137,6 +146,14 @@ function fail(
 
 const inside = (b: Rect, x: number, y: number): boolean =>
   x >= b[0] && x < b[0] + b[2] && y >= b[1] && y < b[1] + b[3];
+
+/** Whether an element with `below` / `shows` shows at scroll offset `at`. */
+const showsAt = (
+  e: { below?: number; shows?: [number, number] },
+  at: number,
+): boolean =>
+  (e.below ?? Number.NEGATIVE_INFINITY) <= at &&
+  (e.shows === undefined || (e.shows[0] <= at && at <= e.shows[1]));
 
 export function main(argv: string[]): number {
   // Global flags, then the verb and its flags (the CLI's own order).
@@ -328,24 +345,30 @@ export function main(argv: string[]): number {
             ...(state.focused === f.name ? ["focused"] : []),
           ],
         })),
-        ...(s.buttons ?? []).map((b, i) => ({
-          path: `/app[1]/${b.role ?? "button"}[${i}]`,
-          role: b.role ?? "button",
-          nativeRole: "push button",
-          name: b.name,
-          bounds: b.bounds,
-          states: ["focusable", "enabled", "visible"],
-        })),
+        ...(s.buttons ?? []).map((b, i) => {
+          const off = !showsAt(b, scrolled);
+          return {
+            path: `/app[1]/${b.role ?? "button"}[${i}]`,
+            role: b.role ?? "button",
+            nativeRole: "push button",
+            name: b.name,
+            bounds: (off ? null : b.bounds) as Rect | null,
+            states: [
+              "focusable",
+              "enabled",
+              "visible",
+              ...(off ? ["offscreen"] : []),
+            ],
+          };
+        }),
         ...(s.radios ?? []).map((r, i) => {
-          const off = (r.below ?? 0) > scrolled;
+          const off = !showsAt(r, scrolled);
           return {
             path: `/app[1]/radio[${i}]`,
             role: "radio",
             nativeRole: "radio button",
             name: r.name ?? "",
-            bounds: (off
-              ? [r.bounds[0], r.bounds[1] + 1000, r.bounds[2], r.bounds[3]]
-              : r.bounds) as Rect,
+            bounds: (off ? null : r.bounds) as Rect | null,
             states: [
               "focusable",
               "enabled",
@@ -392,12 +415,16 @@ export function main(argv: string[]): number {
       ];
       const s = screen();
       const field = (s.fields ?? []).find((f) => inside(f.bounds, x, y));
-      const button = (s.buttons ?? []).find((b) => inside(b.bounds, x, y));
       const scrolled = state.scrolls?.[state.screen] ?? 0;
-      const radio = (s.radios ?? []).findIndex(
-        (r) => (r.below ?? 0) <= scrolled && inside(r.bounds, x, y),
+      const button = (s.buttons ?? []).find(
+        (b) => showsAt(b, scrolled) && inside(b.bounds, x, y),
       );
-      if (radio >= 0) {
+      const radio = (s.radios ?? []).findIndex(
+        (r) => showsAt(r, scrolled) && inside(r.bounds, x, y),
+      );
+      if (radio >= 0 && s.radios![radio]!.stuck === true) {
+        // A choice that does not take: nothing changes.
+      } else if (radio >= 0) {
         const group = s.radios![radio]!.group;
         state.checked ??= {};
         s.radios!.forEach((r, i) => {
@@ -423,9 +450,10 @@ export function main(argv: string[]): number {
     }
     case "scroll": {
       const dy = Number(flag("--dy") ?? "0");
-      if (dy > 0) {
+      if (dy !== 0) {
         state.scrolls ??= {};
-        state.scrolls[state.screen] = (state.scrolls[state.screen] ?? 0) + 1;
+        state.scrolls[state.screen] =
+          (state.scrolls[state.screen] ?? 0) + Math.sign(dy);
       }
       code = out(verb, { input: { kind: "scroll", dy } });
       break;

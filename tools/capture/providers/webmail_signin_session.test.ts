@@ -33,7 +33,14 @@
 // page on a loopback consent host (`consent.localhost`, any port),
 // worded in Bulgarian as Yahoo's is, is recognised by the address Chrome's
 // address bar holds and answered by rejecting every row and clicking
-// its continue control, never its allow choices; the
+// its continue control, never its allow choices; Yahoo's second consent
+// page as measured on 2026-10-29 (reached through the first page's
+// "Отхвърляне на всички"), a dialog that scrolls, shown scrolled to its
+// end, whose radio buttons are named "<purpose>, <choice>", is answered
+// by rejecting every purpose (the wheel turned up to the one above the
+// visible part, whose Allow was selected), then its "Запазване на избора"
+// once, and a choice named otherwise stops it consent-required with no
+// input on the dialog and nothing posted; the
 // typing check (a loopback page comparing a salted SHA-256 of what was
 // typed) reports MATCH for passwords of every printable ASCII character
 // and of non-ASCII letters typed through GuiAssert into Google Chrome,
@@ -142,6 +149,7 @@ describe("the automated sign-in in a real GuiAssert session", () => {
     password: [] as string[],
     homeAddressSaved: 0,
     consent: [] as string[],
+    purposes: [] as string[],
     gaia: [] as string[],
   };
   const probes: { webdriver: string; page: string }[] = [];
@@ -230,6 +238,70 @@ describe("the automated sign-in in a real GuiAssert session", () => {
           const b = await readBody(req);
           received.consent.push(`${b.get("r1")},${b.get("r2")}`);
           // On to the sign-in, on the provider's own host.
+          res.writeHead(303, { location: `http://127.0.0.1:${port}/signin` });
+          return res.end();
+        }
+        // Yahoo's two mail consent pages as measured on 2026-10-29: a
+        // page with "Отхвърляне на всички" / "Приемане на всички", then a
+        // dialog that scrolls, shown scrolled to its end, whose radio
+        // buttons are named "<purpose>, <choice>": the smart-features
+        // purpose above the visible part (Allow selected), ads (Reject
+        // selected), statistics (nothing selected), and "Запазване на
+        // избора" at its end. `sessionId=odd` names one choice otherwise.
+        if (url.pathname === "/v2/collectConsent" && req.method === "GET")
+          return html(
+            `<h1>Yahoo е част от семейството на Yahoo</h1><p>Ние и нашите партньори използваме бисквитки.</p><form method="post" action="/v2/collectConsent?sessionId=${url.searchParams.get("sessionId") ?? ""}"><button name="r" value="reject">Отхвърляне на всички</button> <button name="r" value="accept">Приемане на всички</button></form>`,
+          );
+        if (url.pathname === "/v2/collectConsent" && req.method === "POST") {
+          received.purposes.push(`first:${(await readBody(req)).get("r")}`);
+          res.writeHead(303, {
+            location: `/mailbox/collectConsent?sessionId=${url.searchParams.get("sessionId") ?? ""}`,
+          });
+          return res.end();
+        }
+        if (
+          url.pathname === "/mailbox/collectConsent" &&
+          req.method === "GET"
+        ) {
+          const odd = url.searchParams.get("sessionId") === "odd";
+          const filler = (n: number) =>
+            "<p>Използваме информацията, за да подобряваме услугите си и да Ви показваме подходящо съдържание.</p>".repeat(
+              n,
+            );
+          const purpose = (
+            id: string,
+            title: string,
+            on: "reject" | "allow" | null,
+            reject = "Отхвърляне",
+          ) =>
+            `<div class="row"><p class="t"><b>${title}</b> въз основа на нашето предположение за Вашите интереси.</p><span class="c"><input type="radio" name="${id}" value="reject" aria-label="${title}, ${reject}"${on === "reject" ? " checked" : ""}></span><span class="c"><input type="radio" name="${id}" value="allow" aria-label="${title}, Разрешаване"${on === "allow" ? " checked" : ""}></span></div>`;
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          return res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Welcome to Mail!</title>
+<style>body{margin:0;background:#777;font-family:Roboto,sans-serif;font-size:18px}
+.dlg{position:fixed;top:100px;left:260px;width:712px;height:600px;overflow-y:auto;background:#fff;border-radius:8px;padding:0 24px}
+.row{display:flex;align-items:flex-start;margin:20px 0}.t{width:480px;margin:0}
+.c{width:100px;text-align:center}.h{display:flex;justify-content:flex-end}
+input[type=radio]{width:22px;height:22px;margin:4px}button{font-size:18px;padding:10px 28px;margin:20px 0 40px}</style>
+</head><body><div class="dlg"><form method="post" action="/mailbox/collectConsent">
+<h2>yahoo!</h2>${filler(3)}
+${purpose("smart", "За предоставяне на интелигентни функции", "allow", odd ? "Може би" : "Отхвърляне")}
+<h3>Използване на информация само от търговски имейли</h3>${filler(4)}
+<div class="h"><span class="c">Отхвърляне</span><span class="c">Разрешаване</span></div>
+${purpose("ads", "За да Ви показваме персонализирани реклами и съдържание", "reject")}
+${purpose("stats", "За създаване и споделяне на обобщени статистики", null)}
+<p>Вижте нашия Център за поверителност за повече подробности.</p>
+<button>Запазване на избора</button></form></div>
+<script>const d = document.querySelector('.dlg'); d.scrollTop = d.scrollHeight;</script>
+</body></html>`);
+        }
+        if (
+          url.pathname === "/mailbox/collectConsent" &&
+          req.method === "POST"
+        ) {
+          const b = await readBody(req);
+          received.purposes.push(
+            `second:${b.get("smart")},${b.get("ads")},${b.get("stats")}`,
+          );
           res.writeHead(303, { location: `http://127.0.0.1:${port}/signin` });
           return res.end();
         }
@@ -813,6 +885,99 @@ describe("the automated sign-in in a real GuiAssert session", () => {
       assert.ok(chose >= 0 && went > chose, a.events.join("\n"));
       assert.equal(a.events.filter((e) => e === "first-input").length, 1);
       assert.ok(a.events.indexOf("first-input") < chose);
+    } finally {
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
+    }
+  });
+
+  const purposeProvider = (sessionId: string): ProviderSignin => ({
+    ...standInGmail(),
+    startUrl: `http://consent.localhost:${port}/v2/collectConsent?sessionId=${sessionId}`,
+    consent: {
+      name: "loopback-consent",
+      hosts: ["consent.localhost"],
+      paths: ["collectconsent"],
+    },
+  });
+
+  it("answers Yahoo's per-purpose consent dialog after its reject-all page in real Chrome: the off-screen purpose reached by the wheel, every purpose rejected, saved once, then the sign-in", async () => {
+    mode = "ok";
+    received.identifier.length = 0;
+    received.password.length = 0;
+    received.purposes.length = 0;
+    const a = await attempt("purposes", false, {
+      provider: purposeProvider("y"),
+    });
+    try {
+      assert.deepEqual(
+        a.result.outcome,
+        { result: "signed-in", typed: true },
+        a.events.join("\n"),
+      );
+      assert.deepEqual(a.result.steps, [
+        "consent:loopback-consent",
+        "address",
+        "password",
+        "interstitial:home-address",
+      ]);
+      // Reject all on the first page; every purpose rejected on the
+      // second (the smart features' Allow was selected), posted once.
+      assert.deepEqual(
+        received.purposes,
+        ["first:reject", "second:reject,reject,reject"],
+        a.events.join("\n"),
+      );
+      assert.deepEqual(received.password, [SENTINEL]);
+      const up = a.events.findIndex((e) =>
+        /scrolled up to the next reject choices/.test(e),
+      );
+      const smart = a.events.findIndex((e) =>
+        /chose "За предоставяне на интелигентни функции, Отхвърляне" on/.test(
+          e,
+        ),
+      );
+      const saved = a.events.filter((e) =>
+        /every row rejected \(3\); clicked "Запазване на избора"/.test(e),
+      );
+      assert.ok(up >= 0 && smart > up, a.events.join("\n"));
+      assert.equal(saved.length, 1, a.events.join("\n"));
+      assert.ok(a.events.indexOf(saved[0]!) > smart);
+      assert.equal(a.events.filter((e) => e === "first-input").length, 1);
+    } finally {
+      await stopBrowser(a.child);
+      await ga.sessionStop(a.session.id);
+    }
+  });
+
+  it("stops consent-required on the dialog in real Chrome when a purpose's choice is named otherwise, with no input on it and nothing posted", async () => {
+    mode = "ok";
+    received.identifier.length = 0;
+    received.password.length = 0;
+    received.purposes.length = 0;
+    const a = await attempt("purposes-odd", false, {
+      provider: purposeProvider("odd"),
+    });
+    try {
+      assert.equal(
+        a.result.outcome.result,
+        "consent-required",
+        a.events.join("\n"),
+      );
+      assert.ok(a.result.outcome.result === "consent-required");
+      assert.match(
+        a.result.outcome.why,
+        /a choice named "За предоставяне на интелигентни функции, Може би"/,
+      );
+      // Only the first page's reject-all was posted; the dialog got no
+      // input (nothing scrolled or chosen) and was never saved.
+      assert.deepEqual(received.purposes, ["first:reject"]);
+      assert.ok(
+        !a.events.some((e) => /scrolled|chose|Запазване/.test(e)),
+        a.events.join("\n"),
+      );
+      assert.deepEqual(received.identifier, []);
+      assert.deepEqual(received.password, []);
     } finally {
       await stopBrowser(a.child);
       await ga.sessionStop(a.session.id);

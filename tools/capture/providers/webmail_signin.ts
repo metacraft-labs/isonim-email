@@ -34,9 +34,13 @@
 //   browser's address bar in the accessibility tree, whatever language
 //   the page is in) is answered the most privacy-preserving way, by exact
 //   control names (CONSENT_CONTROLS): a reject-all control, or every
-//   row's reject choice and then a continue control; never an accepting
-//   control, and never past a check box or switch; anything it cannot
-//   identify ends the attempt
+//   row's reject choice (a bare pair, or a per-purpose pair named
+//   "<purpose>, <choice>"; those off the screen reached by the wheel, up
+//   or down) and then a save control or a continue control; a reject-all
+//   or save control is clicked once per page address (`stuckMs` for the
+//   page to move on), at most CONSENT_MAX_SUBMITS per attempt; never an
+//   accepting control or an allow choice, and never past a check box or
+//   switch; anything it cannot identify ends the attempt
 //   `consent-required` for a person to answer once;
 // - Google's password re-verification of an existing session is the
 //   step `reauth-password`, typed like the password screen, and the
@@ -439,33 +443,90 @@ const sameName = (a: string | null, b: string): boolean =>
 export const CONSENT_MAX_ACTIONS = 20;
 /** At most this many clicks on a continue control. */
 export const CONSENT_MAX_PROCEED = 3;
+/** At most this many submissions (a reject-all or a save control) per attempt. */
+export const CONSENT_MAX_SUBMITS = 3;
 /** The wheel, in lines, to bring the next rows on screen. */
 export const CONSENT_SCROLL_LINES = 3;
 
+/** What separates a purpose from its choice in a radio button's name. */
+export const CONSENT_SEPARATORS: readonly string[] = [
+  ",",
+  ";",
+  ":",
+  "|",
+  "\u2013",
+  "\u2014",
+  "\u00b7",
+];
+
+/** A consent row's radio button: its choice, and its purpose when named. */
+export interface ConsentRadio {
+  choice: "reject" | "allow";
+  /** The purpose (normalised), for a per-purpose pair; null for a bare one. */
+  purpose: string | null;
+}
+
 /**
  * Which choice a consent row's radio button is, by its accessible name:
- * a listed reject or allow name, exactly or followed by more words that
- * do not name the other choice; null otherwise.
+ * a purpose, a separator (CONSENT_SEPARATORS, the last one in the name)
+ * and exactly a listed reject or allow name (a per-purpose pair, as
+ * Yahoo names them: "За предоставяне на интелигентни функции,
+ * Отхвърляне"); else a listed name, exactly or followed by more words
+ * that do not name the other choice (a bare pair); null otherwise.
  */
-export function consentChoice(name: string | null): "reject" | "allow" | null {
+export function consentRadio(name: string | null): ConsentRadio | null {
   if (name === null) return null;
-  const n = normalize(name);
   const reject = CONSENT_CONTROLS.reject.map(normalize);
   const allow = CONSENT_CONTROLS.allow.map(normalize);
+  const cut = Math.max(...CONSENT_SEPARATORS.map((c) => name.lastIndexOf(c)));
+  if (cut >= 0) {
+    const purpose = normalize(name.slice(0, cut));
+    const word = normalize(name.slice(cut + 1));
+    if (purpose.trim() !== "") {
+      if (reject.includes(word)) return { choice: "reject", purpose };
+      if (allow.includes(word)) return { choice: "allow", purpose };
+    }
+  }
+  const n = normalize(name);
   const startsWith = (ws: string[]) => ws.some((w) => n.startsWith(w));
   const mentions = (ws: string[]) => ws.some((w) => n.includes(w));
-  if (startsWith(reject) && !mentions(allow)) return "reject";
-  if (startsWith(allow) && !mentions(reject)) return "allow";
+  if (startsWith(reject) && !mentions(allow))
+    return { choice: "reject", purpose: null };
+  if (startsWith(allow) && !mentions(reject))
+    return { choice: "allow", purpose: null };
   return null;
+}
+
+/** The choice of `consentRadio`, alone. */
+export function consentChoice(name: string | null): "reject" | "allow" | null {
+  return consentRadio(name)?.choice ?? null;
 }
 
 export interface ConsentState {
   actions: number;
   proceeds: number;
+  /** Submissions clicked (a reject-all or a save control). */
+  submits: number;
+  /** When each submission was clicked, by page address and control name. */
+  submitted: Map<string, number>;
+  /** The reject choices clicked, by page address, name and occurrence. */
+  clicked: Set<string>;
+  /** The reject choice the wheel was last turned towards, and which way. */
+  approach: { key: string; up: boolean } | null;
 }
+
+export const newConsentState = (): ConsentState => ({
+  actions: 0,
+  proceeds: 0,
+  submits: 0,
+  submitted: new Map(),
+  clicked: new Set(),
+  approach: null,
+});
 
 export type ConsentStep =
   | { kind: "acted"; what: string }
+  | { kind: "waiting"; what: string }
   | { kind: "unidentified"; why: string };
 
 /** The first on-screen element of `roles` named exactly as one of `names`. */
@@ -493,31 +554,65 @@ async function clickAt(ga: GuiAssert, b: Rect): Promise<void> {
 
 /**
  * One round on a consent page (the procedure's header says what it
- * does); `before` runs before its first input. Every control is matched
- * by exact name; a name of CONSENT_CONTROLS.never is never clicked.
+ * does); `before` runs before its first input, `page` is the page's
+ * address (null when the browser gave none). Every control is matched
+ * by exact name; a name of CONSENT_CONTROLS.never, and an allow choice,
+ * is never clicked.
  */
 export async function consentRound(
-  ctx: Pick<SigninContext, "ga" | "browserPid">,
+  ctx: Pick<SigninContext, "ga" | "browserPid" | "timings">,
   st: ConsentState,
   before: () => void,
+  page: string | null = null,
 ): Promise<ConsentStep> {
   const never = CONSENT_CONTROLS.never.map(normalize);
   const click = async (el: GaElement & { bounds: Rect }): Promise<void> => {
     if (el.name !== null && never.includes(normalize(el.name)))
       throw new Error(`refusing to click "${el.name}" on a consent page`);
+    if (el.role === "radio" && consentChoice(el.name) !== "reject")
+      throw new Error(`refusing to choose "${el.name}" on a consent page`);
     before();
     await clickAt(ctx.ga, el.bounds);
     st.actions++;
   };
-  const scroll = async (why: string): Promise<ConsentStep> => {
+  const scroll = async (up: boolean, why: string): Promise<ConsentStep> => {
     before();
     await ctx.ga.scroll(
       SIGNIN_SCREEN.width / 2,
       SIGNIN_SCREEN.height / 2,
-      CONSENT_SCROLL_LINES,
+      up ? -CONSENT_SCROLL_LINES : CONSENT_SCROLL_LINES,
     );
     st.actions++;
-    return { kind: "acted", what: `scrolled down ${why}` };
+    return { kind: "acted", what: `scrolled ${up ? "up" : "down"} ${why}` };
+  };
+  // A reject-all or a save control: clicked once per page address; when
+  // it shows again there, the page is given `stuckMs` to move on.
+  const submit = async (
+    found: { el: GaElement & { bounds: Rect }; name: string },
+    what: string,
+  ): Promise<ConsentStep> => {
+    const key = `${page ?? ""}\n${normalize(found.name)}`;
+    const at = st.submitted.get(key);
+    if (at !== undefined) {
+      if (Date.now() - at >= ctx.timings.stuckMs)
+        return {
+          kind: "unidentified",
+          why: `still on the page ${Math.round(ctx.timings.stuckMs / 1000)} s after "${found.name}"`,
+        };
+      return {
+        kind: "waiting",
+        what: `waiting for the page to move on after "${found.name}"`,
+      };
+    }
+    if (st.submits >= CONSENT_MAX_SUBMITS)
+      return {
+        kind: "unidentified",
+        why: `another consent page after ${CONSENT_MAX_SUBMITS} answered in this attempt`,
+      };
+    await click(found.el);
+    st.submits++;
+    st.submitted.set(key, Date.now());
+    return { kind: "acted", what };
   };
   if (st.actions >= CONSENT_MAX_ACTIONS)
     return {
@@ -529,10 +624,7 @@ export async function consentRound(
     ["button", "link"],
     CONSENT_CONTROLS.rejectAll,
   );
-  if (all !== null) {
-    await click(all.el);
-    return { kind: "acted", what: `clicked "${all.name}"` };
-  }
+  if (all !== null) return submit(all, `clicked "${all.name}"`);
   // A check box or a switch (an optional use the page may have on by
   // default) is never answered: only reject choices are clicked, so
   // going on past one would accept its default.
@@ -542,40 +634,106 @@ export async function consentRound(
       kind: "unidentified",
       why: `a check box or switch named ${JSON.stringify(boxes[0]!.name ?? "")}, which it does not answer`,
     };
+  // Every radio button of the page, on the screen or not, in the tree's
+  // order (the page's).
   const radios = await ctx.ga.find({ pid: ctx.browserPid, role: "radio" });
   if (radios.length === 0)
     return {
       kind: "unidentified",
       why: "no reject-all control and no reject choices",
     };
-  const odd = radios.find((r) => consentChoice(r.name) === null);
+  const named = radios.map((r) => ({ r, c: consentRadio(r.name) }));
+  const odd = named.find((x) => x.c === null);
   if (odd !== undefined)
     return {
       kind: "unidentified",
-      why: `a choice named ${JSON.stringify(odd.name ?? "")}, neither a reject nor an allow choice of a listed language`,
+      why: `a choice named ${JSON.stringify(odd.r.name ?? "")}, neither a reject nor an allow choice of a listed language`,
     };
-  const rejects = radios.filter((r) => consentChoice(r.name) === "reject");
-  const allows = radios.filter((r) => consentChoice(r.name) === "allow");
-  if (rejects.length !== allows.length)
+  // Per-purpose choices pair by purpose, bare ones by count.
+  const pairs = new Map<string | null, { reject: number; allow: number }>();
+  for (const { c } of named) {
+    const p = pairs.get(c!.purpose) ?? { reject: 0, allow: 0 };
+    p[c!.choice]++;
+    pairs.set(c!.purpose, p);
+  }
+  for (const [purpose, p] of pairs) {
+    if (purpose !== null && (p.reject !== 1 || p.allow !== 1))
+      return {
+        kind: "unidentified",
+        why: `the purpose ${JSON.stringify(purpose.trim())} has ${p.reject} reject and ${p.allow} allow choices, not one of each`,
+      };
+    if (purpose === null && p.reject !== p.allow)
+      return {
+        kind: "unidentified",
+        why: `${p.reject} reject and ${p.allow} allow choices, not one of each per row`,
+      };
+  }
+  const rejects = radios.filter((_, i) => named[i]!.c!.choice === "reject");
+  const allows = radios.filter((_, i) => named[i]!.c!.choice === "allow");
+  // A reject choice's identity across rounds: the page, its name, and
+  // which of the radio buttons of that name it is.
+  const seen = new Map<string, number>();
+  const keyOf = new Map<GaElement, string>();
+  for (const r of rejects) {
+    const n = normalize(r.name ?? "");
+    const k = seen.get(n) ?? 0;
+    seen.set(n, k + 1);
+    keyOf.set(r, `${page ?? ""}\n${n}\n${k}`);
+  }
+  const todo = rejects.filter((r) => !r.states.includes("checked"));
+  const unconfirmed = todo.find((r) => st.clicked.has(keyOf.get(r)!));
+  if (unconfirmed !== undefined)
     return {
       kind: "unidentified",
-      why: `${rejects.length} reject and ${allows.length} allow choices, not one of each per row`,
+      why: `the reject choice ${JSON.stringify(unconfirmed.name ?? "")} does not read selected after its click`,
     };
-  const todo = rejects.filter((r) => !r.states.includes("checked"));
   const reachable = todo.filter(onScreen);
+  // A choice the wheel has just brought on may still be partly hidden
+  // at the edge of the scrolling area (or under a header that stays):
+  // one more turn the same way before it is clicked.
+  const approached = st.approach;
+  st.approach = null;
+  if (
+    approached !== null &&
+    reachable.some((r) => keyOf.get(r) === approached.key)
+  )
+    return scroll(approached.up, "to bring the next reject choice fully on");
   if (reachable.length > 0) {
-    for (const r of reachable) await click(r);
+    for (const r of reachable) {
+      await click(r);
+      st.clicked.add(keyOf.get(r)!);
+    }
     return {
       kind: "acted",
       what: `chose "${reachable[0]!.name}" on ${reachable.length} row(s)`,
     };
   }
-  if (todo.length > 0) return scroll("to the next reject choices");
+  if (todo.length > 0) {
+    // Off the screen (no bounds): up when it comes before the first
+    // choice that shows, or when none shows but a submit control does.
+    const first = radios.findIndex(onScreen);
+    const up =
+      first >= 0
+        ? radios.indexOf(todo[0]!) < first
+        : (await findNamed(
+            ctx,
+            ["button", "link"],
+            [...CONSENT_CONTROLS.save, ...CONSENT_CONTROLS.proceed],
+          )) !== null;
+    st.approach = { key: keyOf.get(todo[0]!)!, up };
+    return scroll(up, "to the next reject choices");
+  }
   if (allows.some((a) => a.states.includes("checked")))
     return {
       kind: "unidentified",
       why: "an allow choice stays selected with every reject choice checked",
     };
+  const save = await findNamed(ctx, ["button"], CONSENT_CONTROLS.save);
+  if (save !== null)
+    return submit(
+      save,
+      `every row rejected (${rejects.length}); clicked "${save.name}"`,
+    );
   const go = await findNamed(ctx, ["button"], CONSENT_CONTROLS.proceed);
   if (go !== null) {
     if (st.proceeds >= CONSENT_MAX_PROCEED)
@@ -590,7 +748,7 @@ export async function consentRound(
       what: `every row rejected (${rejects.length}); clicked "${go.name}"`,
     };
   }
-  return scroll("to a continue control");
+  return scroll(false, "to a save or continue control");
 }
 
 export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
@@ -601,7 +759,8 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
   let typedAnything = false;
   let passwordTyped = false;
   let bubbleClosed = false;
-  const consent: ConsentState = { actions: 0, proceeds: 0 };
+  const consent = newConsentState();
+  let waitingLogged: string | null = null;
   let unknownSince: number | null = null;
   let reads = 0;
 
@@ -648,11 +807,13 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
         continue;
       }
     }
-    const screen = classifyScreen(
+    const location = await locationFor(
       ctx.provider,
+      ctx.ga,
+      ctx.browserPid,
       text,
-      await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
     );
+    const screen = classifyScreen(ctx.provider, text, location);
     const now = Date.now();
     if (screen.kind !== "unknown") unknownSince = null;
 
@@ -687,7 +848,12 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
           acted.set(id, now);
           steps.push(id);
         }
-        const r = await consentRound(ctx, consent, firstInput);
+        const r = await consentRound(
+          ctx,
+          consent,
+          firstInput,
+          location ?? null,
+        );
         if (r.kind === "unidentified") {
           ctx.log(`  cannot answer it: ${r.why}`);
           return end(
@@ -699,7 +865,13 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
             true,
           );
         }
-        ctx.log(`  ${r.what}`);
+        if (r.kind === "waiting") {
+          if (waitingLogged !== r.what) ctx.log(`  ${r.what}`);
+          waitingLogged = r.what;
+        } else {
+          waitingLogged = null;
+          ctx.log(`  ${r.what}`);
+        }
         break;
       }
       case "interstitial": {

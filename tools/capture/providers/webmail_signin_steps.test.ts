@@ -866,6 +866,7 @@ describe("privacy-consent pages, by address", () => {
     for (const list of [
       CONSENT_CONTROLS.rejectAll,
       CONSENT_CONTROLS.reject,
+      CONSENT_CONTROLS.save,
       CONSENT_CONTROLS.proceed,
     ])
       for (const c of list) {

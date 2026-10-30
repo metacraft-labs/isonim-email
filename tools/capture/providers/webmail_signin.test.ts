@@ -42,10 +42,15 @@
 // - a privacy-consent page (Yahoo's, in Bulgarian, recognised by the
 //   address the browser reports) is answered by clicking every row's
 //   reject choice (scrolling to the ones off the screen) and then its
-//   continue control, or its reject-all control; an allow or accept
-//   control is never clicked; a choice it cannot name, a check box or
-//   switch, or a page that stays, ends the attempt `consent-required`
-//   with no further input;
+//   continue control, or its reject-all control; Yahoo's second consent
+//   page (a dialog whose choices are named "<purpose>, <choice>") by the
+//   reject choice of every purpose (the wheel turned up to the one above
+//   the visible part, then down to the save control) and its save
+//   control once; an allow or accept control is never clicked; a choice
+//   it cannot name, a purpose without one reject and one allow choice, a
+//   check box or switch, a reject that does not read selected after its
+//   click, a page that stays after its save control, or a fourth consent
+//   page ends the attempt `consent-required` with no further input;
 // - Google's password re-verification is answered once, as the attempt's
 //   input, and asked again after the password it is a challenge; the
 //   check reports it, and a consent page, as not signed in with no input;
@@ -121,7 +126,9 @@ import {
 import {
   AUTOMATION_SWITCHES,
   CONSENT_MAX_PROCEED,
+  CONSENT_MAX_SUBMITS,
   consentChoice,
+  consentRadio,
   driveSignin,
   type SigninContext,
   type VerifyContext,
@@ -129,6 +136,7 @@ import {
 } from "./webmail_signin.ts";
 import { attemptPath, readAttempt } from "./webmail_signin_guard.ts";
 import {
+  CONSENT_CONTROLS,
   GMAIL_SIGNIN,
   OUTLOOK_SIGNIN,
   type ProviderSignin,
@@ -764,6 +772,13 @@ describe("the automated sign-in procedure", () => {
           : e.verb,
       );
 
+  // The wheel's direction per scroll call, from its --dy.
+  const wheel = (h: Harness) =>
+    h
+      .log()
+      .filter((e) => e.verb === "scroll")
+      .map((e) => Number(e.argv[e.argv.indexOf("--dy") + 1]));
+
   it("names a consent row's choice only by a listed name, exactly or followed by words that do not name the other", () => {
     assert.equal(consentChoice("Отхвърляне"), "reject");
     assert.equal(consentChoice("Reject"), "reject");
@@ -781,15 +796,18 @@ describe("the automated sign-in procedure", () => {
     const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
     assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
     assert.deepEqual(r.steps, ["consent:yahoo-consent"]);
-    // The two reject choices on the screen, the wheel, the third, then
-    // the continue control: no allow choice (940,…), no accept-all.
+    // The two reject choices on the screen, the wheel until the third
+    // shows and once more, the third, then the continue control: no
+    // allow choice (940,…), no accept-all.
     assert.deepEqual(inputs(h), [
       "click 850,310",
       "click 850,430",
       "scroll",
+      "scroll",
       "click 850,550",
       "click 660,810",
     ]);
+    assert.deepEqual(wheel(h), [3, 3]);
     // The first click was announced as the attempt's first input.
     assert.deepEqual(h.calls, ["first-input after 0 keystroke calls"]);
     // The page's address was read from the browser's address bar.
@@ -899,6 +917,293 @@ describe("the automated sign-in procedure", () => {
     const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
     assert.deepEqual(r.outcome, { result: "unknown-screen" });
     assert.deepEqual(inputs(h), []);
+  });
+
+  // Yahoo's second mail consent as measured on 2026-10-29 (Bulgarian):
+  // reached from the first page's "Отхвърляне на всички", a dialog shown
+  // scrolled to its end, whose radio buttons are named by purpose and
+  // choice; the smart-features purpose above the visible part (its Allow
+  // selected here, so its Reject must be clicked), the two visible ones
+  // (ads: Reject already selected; statistics: nothing selected), and a
+  // "Запазване на избора" button at the end, off the screen once the
+  // dialog is scrolled up to the first purpose.
+  const FIRST_URL =
+    "consent.yahoo.com/v2/collectConsent?sessionId=3_cc-session_x";
+  const SECOND_URL =
+    "consent.yahoo.com/mailbox/collectConsent?sessionId=3_cc-session_x";
+  const SMART = "За предоставяне на интелигентни функции";
+  const ADS =
+    "За да Ви показваме персонализирани реклами и съдържание въз основа на нашето предположение за Вашите интереси";
+  const STATS =
+    "За създаване и споделяне на обобщени статистики с нашите свързани лица и търговски партньори";
+  const P = (
+    row: number,
+    purpose: string,
+    choice: "reject" | "allow",
+    over: Partial<{
+      name: string | null;
+      shows: [number, number];
+      checked: boolean;
+      stuck: boolean;
+    }> = {},
+  ) => ({
+    name: `${purpose}, ${choice === "reject" ? "Отхвърляне" : "Разрешаване"}`,
+    group: `purpose${row}`,
+    bounds: [choice === "reject" ? 842 : 940, 300 + row * 120, 20, 20] as [
+      number,
+      number,
+      number,
+      number,
+    ],
+    ...over,
+  });
+  const SAVE = {
+    name: "Запазване на избора",
+    bounds: [300, 758, 180, 44] as [number, number, number, number],
+    next: "inbox",
+    shows: [-1, 9] as [number, number],
+  };
+  const purposeRadios = () => [
+    P(0, SMART, "reject", { shows: [-9, -2] }),
+    P(0, SMART, "allow", { shows: [-9, -2], checked: true }),
+    P(1, ADS, "reject", { shows: [-3, 9], checked: true }),
+    P(1, ADS, "allow", { shows: [-3, 9] }),
+    P(2, STATS, "reject", { shows: [-1, 9] }),
+    P(2, STATS, "allow", { shows: [-1, 9] }),
+  ];
+  const purposeScenario = (
+    over: Partial<StandinScenario["screens"][string]> = {},
+  ): StandinScenario => ({
+    start: "first",
+    screens: {
+      first: {
+        text: `Welcome to Mail!\n${FIRST_URL}\nyahoo!\nОтхвърляне на всички\nПриемане на всички`,
+        location: FIRST_URL,
+        buttons: [
+          {
+            name: "Приемане на всички",
+            bounds: [100, 790, 200, 40],
+            next: "accepted",
+          },
+          {
+            name: "Отхвърляне на всички",
+            bounds: [400, 790, 200, 40],
+            next: "second",
+          },
+        ],
+      },
+      second: {
+        text: `Welcome to Mail!\n${SECOND_URL}\nyahoo!\nОтхвърляне Разрешаване\nЗапазване на избора`,
+        location: SECOND_URL,
+        radios: purposeRadios(),
+        buttons: [SAVE],
+        ...over,
+      },
+      inbox: { text: "Yahoo Mail\nCompose\nInbox\nUnread" },
+      accepted: { text: "ACCEPTED: the decoy was clicked" },
+    },
+  });
+
+  it("names a per-purpose choice by the exact word after the name's last separator, with a purpose before it", () => {
+    // The names measured on Yahoo's page (2026-10-29).
+    assert.deepEqual(
+      consentRadio("За предоставяне на интелигентни функции, Отхвърляне"),
+      {
+        choice: "reject",
+        purpose: " за предоставяне на интелигентни функции ",
+      },
+    );
+    assert.equal(
+      consentChoice("За предоставяне на интелигентни функции, Разрешаване"),
+      "allow",
+    );
+    assert.equal(consentChoice(`${ADS}, Отхвърляне`), "reject");
+    assert.equal(consentChoice(`${STATS}, Разрешаване`), "allow");
+    // English, every separator, and a purpose that names the other choice.
+    assert.deepEqual(consentRadio("Personalised ads, Reject"), {
+      choice: "reject",
+      purpose: " personalised ads ",
+    });
+    assert.equal(consentChoice("Personalised ads, Allow"), "allow");
+    for (const sep of [",", ";", ":", "|", "–", "—", "·"])
+      assert.equal(consentChoice(`Ads${sep} Reject`), "reject", sep);
+    assert.equal(consentChoice("Allow us to show ads, Reject"), "reject");
+    assert.equal(consentChoice("Ads, Reject, Allow"), "allow");
+    // The bare forms keep their purpose null; an empty purpose is bare.
+    assert.deepEqual(consentRadio("Отхвърляне"), {
+      choice: "reject",
+      purpose: null,
+    });
+    assert.deepEqual(consentRadio(", Отхвърляне"), {
+      choice: "reject",
+      purpose: null,
+    });
+    // A choice word anywhere else, or more than the word, names nothing.
+    for (const name of [
+      "Ads, do not reject",
+      "Ads, Rejected",
+      "Ads, Reject all",
+      "Ads, Отхвърляне на всички",
+      "Ads, Decline",
+      "Personalised ads Reject",
+      `${SMART} Отхвърляне`,
+      `${SMART}, Може би`,
+      "Ads,",
+    ])
+      assert.equal(consentRadio(name), null, name);
+    // Its save control is listed, in both languages.
+    assert.ok(CONSENT_CONTROLS.save.includes("Запазване на избора"));
+    assert.ok(CONSENT_CONTROLS.save.includes("Save choices"));
+    assert.ok(CONSENT_CONTROLS.save.includes("Save and continue"));
+  });
+
+  it("answers Yahoo's per-purpose consent dialog after its reject-all page: every purpose's Reject (scrolling up to the one above), then 'Запазване на избора' once, never an allow choice", async () => {
+    const h = harness(purposeScenario());
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(r.steps, ["consent:yahoo-consent"]);
+    // Reject all on the first page; on the second, the statistics'
+    // Reject (on the screen, nothing selected), the wheel up twice until
+    // the smart features' Reject shows and once more, that Reject, the
+    // wheel down twice to the save button, which is clicked once. The
+    // ads' Reject (already selected), every allow choice (940,…) and the
+    // accept-all decoy are never clicked.
+    assert.deepEqual(inputs(h), [
+      "click 500,810",
+      "click 852,550",
+      "scroll",
+      "scroll",
+      "scroll",
+      "click 852,310",
+      "scroll",
+      "scroll",
+      "click 390,780",
+    ]);
+    assert.deepEqual(wheel(h), [-3, -3, -3, 3, 3]);
+    assert.deepEqual(h.calls, ["first-input after 0 keystroke calls"]);
+    assertSecretOnlyOnItsPipes(h.log());
+  });
+
+  it("answers the dialog with every purpose already on Reject by clicking only its save control", async () => {
+    const h = harness(
+      purposeScenario({
+        radios: [
+          P(0, ADS, "reject", { checked: true }),
+          P(0, ADS, "allow"),
+          P(1, STATS, "reject", { checked: true }),
+          P(1, STATS, "allow"),
+        ],
+        buttons: [{ ...SAVE, shows: [0, 0] }],
+      }),
+    );
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(inputs(h), ["click 500,810", "click 390,780"]);
+  });
+
+  it("stops consent-required with no input on the dialog at a choice it cannot name or a purpose without one reject and one allow", async () => {
+    for (const radios of [
+      // The measured name with another word: neither choice.
+      [
+        P(0, SMART, "reject", { name: `${SMART}, Може би` }),
+        P(0, SMART, "allow"),
+      ],
+      // The choice word without its separator.
+      [
+        P(0, SMART, "reject", { name: `${SMART} Отхвърляне` }),
+        P(0, SMART, "allow"),
+      ],
+      // Two rejects for one purpose, none to allow.
+      [P(0, SMART, "reject"), P(0, SMART, "reject")],
+      // One purpose without its allow choice (the other purpose complete).
+      [P(0, SMART, "reject"), P(1, ADS, "reject"), P(1, ADS, "allow")],
+      // A purpose's pair split across two spellings of the purpose.
+      [P(0, SMART, "reject"), P(0, ADS, "allow")],
+    ]) {
+      const h = harness(purposeScenario({ radios }));
+      const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+      assert.equal(
+        r.outcome.result,
+        "consent-required",
+        JSON.stringify(radios),
+      );
+      assert.ok(r.outcome.result === "consent-required");
+      assert.equal(r.outcome.consent, "yahoo-consent");
+      // Only the first page's reject-all: nothing on the dialog.
+      assert.deepEqual(inputs(h), ["click 500,810"], JSON.stringify(radios));
+      assert.ok(r.screen !== null);
+    }
+  });
+
+  it("stops consent-required when a Reject it clicked does not read selected, clicking it once", async () => {
+    const h = harness(
+      purposeScenario({
+        radios: [
+          P(1, ADS, "reject", { checked: true }),
+          P(1, ADS, "allow"),
+          P(2, STATS, "reject", { stuck: true }),
+          P(2, STATS, "allow", { checked: true }),
+        ],
+      }),
+    );
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.equal(r.outcome.result, "consent-required");
+    assert.ok(r.outcome.result === "consent-required");
+    assert.match(r.outcome.why, /does not read selected after its click/);
+    assert.deepEqual(inputs(h), ["click 500,810", "click 852,550"]);
+  });
+
+  it("clicks the save control once and waits; a page still there after stuckMs is consent-required with no further input", async () => {
+    const s = purposeScenario();
+    s.screens.second!.buttons = [{ ...SAVE, next: "second" }];
+    const h = harness(s);
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.equal(r.outcome.result, "consent-required");
+    assert.ok(r.outcome.result === "consent-required");
+    assert.match(
+      r.outcome.why,
+      /still on the page \d+ s after "Запазване на избора"/,
+    );
+    assert.equal(
+      inputs(h).filter((x) => x === "click 390,780").length,
+      1,
+      inputs(h).join(),
+    );
+    assert.equal(inputs(h).at(-1), "click 390,780");
+  });
+
+  it("answers at most three consent pages per attempt: a fourth is consent-required with no input", async () => {
+    const page = (n: number, next: string) => ({
+      text: `Welcome!\nconsent.yahoo.com/v2/collectConsent?sessionId=${n}\nОтхвърляне на всички`,
+      location: `consent.yahoo.com/v2/collectConsent?sessionId=${n}`,
+      buttons: [
+        {
+          name: "Отхвърляне на всички",
+          bounds: [400, 790, 200, 40] as [number, number, number, number],
+          next,
+        },
+      ],
+    });
+    const h = harness({
+      start: "c1",
+      screens: {
+        c1: page(1, "c2"),
+        c2: page(2, "c3"),
+        c3: page(3, "c4"),
+        c4: page(4, "inbox"),
+        inbox: { text: "Yahoo Mail\nCompose\nInbox\nUnread" },
+      },
+    });
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.equal(r.outcome.result, "consent-required");
+    assert.ok(r.outcome.result === "consent-required");
+    assert.match(r.outcome.why, /after 3 answered in this attempt/);
+    assert.equal(CONSENT_MAX_SUBMITS, 3);
+    assert.deepEqual(inputs(h), [
+      "click 500,810",
+      "click 500,810",
+      "click 500,810",
+    ]);
   });
 
   it("answers Google's password re-verification once, as the attempt's input, and reaches the mailbox", async () => {
@@ -1378,12 +1683,15 @@ describe("email-webmail-signin (the command line)", () => {
   // stopped; with STANDIN_BROWSER_PREFS it then replaces the profile's
   // preferences with that file, as Chrome writes a password hash into them
   // at a successful Google sign-in.
+  // It stops on SIGINT (as Chromium does) even while it runs its own
+  // commands: a shell that receives SIGINT while waiting for one goes on
+  // when that command does not die of it too, so the trap says to stop.
   const browserLog = join(scratch, "browser-log");
   mkdirSync(browserLog);
   const browserExe = join(scratch, "webmail-browser");
   writeFileSync(
     browserExe,
-    `#!/bin/sh\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\n[ -n "$STANDIN_BROWSER_PREFS" ] && cp "$STANDIN_BROWSER_PREFS" "$d/Default/Preferences"\nexec sleep 600\n`,
+    `#!/bin/sh\ntrap "exit 130" INT\nprintf '%s\\n' "$@" > "${browserLog}/args.$$"\nenv > "${browserLog}/env.$$"\nfor a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n[ -f "$d/Default/Preferences" ] && cp "$d/Default/Preferences" "${browserLog}/prefs.$$"\n[ -n "$STANDIN_BROWSER_PREFS" ] && cp "$STANDIN_BROWSER_PREFS" "$d/Default/Preferences"\nexec sleep 600\n`,
     { mode: 0o755 },
   );
 
@@ -1592,9 +1900,28 @@ describe("email-webmail-signin (the command line)", () => {
         assert.equal(a.record.state, "finished");
         assert.equal(a.record.result, "interrupted");
         assert.ok(readLog(c.state).some((e) => e.verb === "session-stop"));
-        // The browser was stopped.
-        await sleep(500);
-        assert.throws(() => process.kill(Number(pid), 0));
+        // The browser was stopped. The run signals it and exits without
+        // waiting (a signal handler), so the browser dies after the run:
+        // on a loaded host that can take more than half a second, and an
+        // exited browser stays a zombie until it is reaped. Its stand-in
+        // would otherwise sleep for 600 s.
+        const gone = (p: number): boolean => {
+          try {
+            process.kill(p, 0);
+          } catch {
+            return true;
+          }
+          try {
+            const stat = readFileSync(`/proc/${p}/stat`, "utf8");
+            return stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z");
+          } catch {
+            // No /proc (macOS), or reaped since: asked again next poll.
+            return false;
+          }
+        };
+        const until = Date.now() + 10_000;
+        while (!gone(Number(pid)) && Date.now() < until) await sleep(100);
+        assert.ok(gone(Number(pid)), `the browser ${pid} still runs`);
       } else {
         // Nothing could run: the record says the attempt started.
         assert.equal(a.record.state, "started");

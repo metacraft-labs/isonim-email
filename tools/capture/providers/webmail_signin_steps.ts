@@ -183,10 +183,16 @@ export interface SignInAgainRule {
  * far; measured 2026-10-28: Yahoo's mail consent in Bulgarian, its rows'
  * radio buttons "Отхвърляне" / "Разрешаване", a "Продължаване" button;
  * Yahoo's cookie consent's "Отхвърляне на всички" / "Приемане на всички"
- * buttons). The procedure (webmail_signin.ts) clicks a reject-all control,
- * or every reject choice and then a continue control; it never clicks a
- * name in `never`, and no other list may contain a word of it (the test
- * checks it).
+ * buttons; measured 2026-10-29: Yahoo's second mail consent, a scrolling
+ * dialog whose radio buttons are named by purpose and choice, "За
+ * предоставяне на интелигентни функции, Отхвърляне", with a "Запазване на
+ * избора" button). A reject or allow choice is a radio button named as the
+ * word alone (or followed by words that do not name the other), or as a
+ * purpose, a separator and exactly the word (webmail_signin.ts
+ * `consentRadio`). The procedure clicks a reject-all control, or every
+ * reject choice and then a save control (once) or a continue control; it
+ * never clicks a name in `never`, and no other list may contain a word of
+ * it (the test checks it).
  */
 export const CONSENT_CONTROLS = {
   /** Buttons or links that reject every optional use at once. */
@@ -195,6 +201,18 @@ export const CONSENT_CONTROLS = {
   reject: ["Reject", "Отхвърляне"],
   /** Radio buttons that allow one row's use: only ever counted, never clicked. */
   allow: ["Allow", "Разрешаване"],
+  /** Buttons that submit the choices once every row is rejected: clicked once. */
+  save: [
+    "Save choices",
+    "Save my choices",
+    "Save and continue",
+    "Save and exit",
+    "Save preferences",
+    "Save settings",
+    "Запазване на избора",
+    "Запазване на настройките",
+    "Запазване и продължаване",
+  ],
   /** Buttons that go on once every row is rejected. */
   proceed: ["Continue", "Продължаване"],
   /** Never clicked. */

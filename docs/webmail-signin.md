@@ -63,11 +63,21 @@ account file's address and password:
   browser's address bar; the port does not matter) and gives the most
   privacy-preserving answer by exact control names, in English or
   Bulgarian: a "Reject all" control when there is one; otherwise the
-  "Reject" choice of every row (scrolling to reach them), then
-  "Continue". It never clicks an accept or allow control. A page it
-  cannot answer that way (another language, a choice named otherwise,
-  a check box or switch, no continue control) stops the attempt
-  `consent-required`;
+  "Reject" choice of every row, then a save control ("Save choices",
+  "Запазване на избора", ...) or "Continue". A row's choices may be
+  named by the choice alone ("Отхвърляне" / "Разрешаване") or by the
+  row's purpose and the choice ("За предоставяне на интелигентни
+  функции, Отхвърляне", as Yahoo's second consent page names them);
+  each purpose must then have exactly one reject and one allow choice.
+  Rows off the screen in a dialog that scrolls are reached with the
+  mouse wheel, up or down, whichever way they lie; a choice already on
+  "Reject" is left as it is. A "Reject all" or save control is clicked
+  once per page: if the page is still there 20 s later, the attempt
+  stops. At most three consent pages are answered per attempt. It
+  never clicks an accept or allow control. A page it cannot answer that
+  way (another language, a choice named otherwise, a check box or
+  switch, a "Reject" that does not stay selected, no save or continue
+  control) stops the attempt `consent-required` with no further input;
 - after the password, a provider may ask for more account data (Gmail's
   "Set a home address", a recovery phone or email, "protect your
   account", a passkey offer). The recipe only declines such a screen:
