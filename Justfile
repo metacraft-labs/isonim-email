@@ -149,7 +149,7 @@ social-icons:
 # regression checks (Tier-1 + Tier-2).
 #
 # The shared prerequisites (the Tailwind map, the story and brief
-# drivers, the billing page example's script) are built first; then the six test recipes run at the same
+# drivers, the billing page example's script) are built first; then the seven test recipes run at the same
 # time (tools/test/run-recipes.sh), each logging to
 # test-logs/<recipe>.log, and the C and JS recipes run their files
 # concurrently too (tools/test/run-nim-tests.sh). Every test keeps its
@@ -159,11 +159,11 @@ social-icons:
 # failing file and test; the exit status is non-zero if any failed.
 # `test-serial` runs the same recipes one after another, as before.
 test: build-tailwind email-shots-build example-page-build
-    tools/test/run-recipes.sh test-c test-js test-ts test-webmail test-desktop test-capture-ci
+    tools/test/run-recipes.sh test-c test-js test-ts test-hosted test-webmail test-desktop test-capture-ci
 
 # The same recipes, one at a time, each streaming its output (slower;
 # for comparing timings or reading one recipe's output live).
-test-serial: build-tailwind test-c test-js test-ts test-webmail test-desktop test-capture-ci
+test-serial: build-tailwind test-c test-js test-ts test-hosted test-webmail test-desktop test-capture-ci
 
 # The capture regression checks as part of the full suite. The
 # baselines (Tier-1 exact hashes above all) are pinned to the
@@ -215,15 +215,24 @@ node-test := "node --test --test-reporter=spec --test-timeout=1500000"
 # own suite):
 # node:test with no runner to install.
 # Quoted so node expands the globs (bare-directory discovery skips .ts).
-# The self-hosted webmail and desktop-client end-to-end files are left
-# to `test-webmail` and `test-desktop`. The web-page suite
+# The hosted-webmail, self-hosted webmail and desktop-client end-to-end
+# files are left to `test-hosted`, `test-webmail` and `test-desktop`. The web-page suite
 # (tools/web/) renders the billing page example and compares it with
 # the invoice email: it needs the page's script and the story driver.
 # The preview server's suite (tools/preview/) runs the server over a copy
 # of the story sources, compiling its own driver, and checks its list
 # against the story driver's.
 test-ts: example-page-build email-shots-build
-    {{node-test}} "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts" "tools/test/*.test.ts" "tools/web/*.test.ts" "tools/preview/*.test.ts"
+    {{node-test}} "tools/capture/*.test.ts" "tools/capture/emulation/*.test.ts" $(ls tools/capture/providers/*.test.ts | grep -v -e '/hosted_webmail\.test\.ts$' -e '/selfhosted_webmail\.test\.ts$' -e '/linux_desktop\.test\.ts$') "tools/review/*.test.ts" "tools/test/*.test.ts" "tools/web/*.test.ts" "tools/preview/*.test.ts"
+
+# The hosted-webmail provider end to end: Google Chrome in GuiAssert
+# sessions against the stand-in webmails, a browser start per account
+# and test (~15-20 min at load ~100-120; a recipe of its own so it can
+# be run alone, and so that its browsers do not run inside test-ts's
+# per-file timeout window beside the capture-ci suite). Needs the story
+# driver (`just email-shots-build`) for its command-line test.
+test-hosted: email-shots-build
+    {{node-test}} tools/capture/providers/hosted_webmail.test.ts
 
 # The self-hosted webmail provider end to end: real Roundcube and
 # SnappyMail on php-fpm and caddy, Dovecot and Chromium (~3 min on a

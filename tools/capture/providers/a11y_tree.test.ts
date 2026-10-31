@@ -13,7 +13,16 @@
 // leaf carries the story's text; the fingerprint ignores names, text and
 // what it is told to skip, but not the page's structure;
 // masks are painted clipped to the crop, and nothing is re-encoded
-// without one; the mean luminance tells dark from light.
+// without one; the mean luminance tells dark from light. The address bar
+// holds a URL when it does percent-decoded (Chrome shows a fragment's
+// `:` and `@` unescaped). A message's row is found by the run token in
+// its accessible text (its name, or its cells' text when Chrome names it
+// after the sender alone), by the first row locator that has one, only
+// inside the page, never in an editable field, the address bar, a
+// suggestions list a row locator does not match, a nested row, or a row
+// of another run; the token on the page outside any row is reported. A
+// failure's tree summary keeps showing nodes only, clipped, capped, with
+// the account's address replaced.
 // Run with:
 //   node --test tools/capture/providers/a11y_tree.test.ts
 
@@ -22,7 +31,9 @@ import assert from "node:assert/strict";
 import { readPng, writePng } from "../contact_sheet.ts";
 import {
   addressBarValue,
+  carriesToken,
   clickTarget,
+  clipText,
   findShowing,
   flatten,
   insideRect,
@@ -32,9 +43,14 @@ import {
   MASK_RGB,
   meanLuminance,
   paintMasks,
+  percentDecoded,
+  rowText,
   sameLocation,
   storyTexts,
   structureFingerprint,
+  tokenNodes,
+  tokenRows,
+  treeSummary,
 } from "./a11y_tree.ts";
 import type { GaNode, Rect } from "./guiassert.ts";
 import { WEBMAIL_CHROME } from "./webmail_adapters.ts";
@@ -201,6 +217,302 @@ describe("locators and the address bar", () => {
       ),
     );
     assert.ok(!sameLocation(null, "https://mail.yahoo.com/"));
+  });
+
+  it("compares the address bar percent-decoded: Chrome shows a fragment's ':' and '@' unescaped", () => {
+    const typed =
+      "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Arun.abcd.n1%40render-test.example";
+    assert.ok(
+      sameLocation(
+        "mail.google.com/mail/u/0/#search/rfc822msgid:run.abcd.n1@render-test.example",
+        typed,
+      ),
+    );
+    assert.ok(sameLocation(typed.replace("https://", ""), typed));
+    // A token search, shown unescaped too.
+    assert.ok(
+      sameLocation(
+        'mail.google.com/mail/u/0/#search/"[es:run1:abcd1234]"',
+        "https://mail.google.com/mail/u/0/#search/%22%5Bes%3Arun1%3Aabcd1234%5D%22",
+      ),
+    );
+    // Another message's id is another location.
+    assert.ok(
+      !sameLocation(
+        "mail.google.com/mail/u/0/#search/rfc822msgid:other@render-test.example",
+        typed,
+      ),
+    );
+    assert.equal(percentDecoded("a%3Ab%40c"), "a:b@c");
+    // An invalid escape is kept as it is.
+    assert.equal(percentDecoded("100%zz%E2"), "100%zz%E2");
+  });
+});
+
+// A list page as Chrome exposes it: the address bar (holding a token
+// search), the page's document with a search field holding the query,
+// a suggestions list echoing it, and a grid of rows.
+function list(
+  over: {
+    rowName?: "content" | "sender";
+    otherRun?: boolean;
+    nested?: boolean;
+    noRows?: boolean;
+  } = {},
+) {
+  const row = (subject: string, y: number): GaNode =>
+    n(
+      "row",
+      "table row",
+      over.rowName === "sender" ? "Acme Billing" : `Acme Billing ${subject}`,
+      [220, y, 800, 30],
+      [
+        n("cell", "table cell", null, [220, y, 200, 30], [], {
+          text: "Acme Billing",
+        }),
+        n("cell", "table cell", null, [420, y, 600, 30], [], {
+          text: `${subject} - Preheader words`,
+        }),
+      ],
+    );
+  const rows = over.noRows
+    ? []
+    : [
+        row("Weekly digest", 300),
+        row(
+          over.otherRun === true
+            ? "[es:run0:abcd1234] Your receipt"
+            : `${TOKEN} Your receipt`,
+          330,
+        ),
+      ];
+  if (over.nested === true)
+    rows[1]!.children.push(
+      n("row", "table row", `${TOKEN} quoted`, [420, 340, 100, 10]),
+    );
+  const doc = n(
+    "unknown",
+    "document web",
+    null,
+    [0, 80, 1240, 2300],
+    [
+      n("text-field", "entry", "Search mail", [220, 90, 600, 26], [], {
+        value: `"${TOKEN}"`,
+      }),
+      n(
+        "list",
+        "list box",
+        "Search suggestions",
+        [220, 116, 600, 30],
+        [n("list-item", "list item", `"${TOKEN}"`, [220, 116, 600, 30])],
+      ),
+      n("table", "table", null, [220, 300, 800, 60], rows),
+    ],
+  );
+  const root = n("application", "application", "Google Chrome", null, [
+    n(
+      "window",
+      "frame",
+      "Gmail",
+      [0, 0, 1240, 2400],
+      [
+        n(
+          "text-field",
+          "entry",
+          "Address and search bar",
+          [140, 50, 900, 26],
+          [],
+          { text: `mail.google.com/mail/u/0/#search/"${TOKEN}"` },
+        ),
+        // Chrome's own popup under the address bar.
+        n(
+          "list",
+          "list box",
+          null,
+          [140, 76, 900, 30],
+          [
+            n(
+              "list-item",
+              "list item",
+              `"${TOKEN}" - Search`,
+              [140, 76, 900, 30],
+            ),
+          ],
+        ),
+        doc,
+      ],
+    ),
+  ]);
+  const flat = flatten(root);
+  return { flat, doc: flat.find((f) => f.node === doc)! };
+}
+
+describe("a message's row, by the run token", () => {
+  const ROW = [{ role: "row" }];
+
+  it("is the row whose accessible text carries the token: its name, or its cells when Chrome names it after the sender", () => {
+    for (const rowName of ["content", "sender"] as const) {
+      const { flat, doc } = list({ rowName });
+      const r = tokenRows(flat, ROW, TOKEN, doc);
+      assert.equal(r.rows.length, 1, rowName);
+      assert.equal(r.rows[0]!.node.bounds![1], 330);
+      assert.equal(r.locator, 0);
+      assert.equal(r.seen.length, 2, "both rows seen");
+    }
+    // The row's text joins its name and its cells' text.
+    const { flat, doc } = list({ rowName: "sender" });
+    const row = tokenRows(flat, ROW, TOKEN, doc).rows[0]!;
+    assert.match(rowText(row.node), /^Acme Billing Acme Billing \[es:run1/);
+  });
+
+  it("is never the search field, the suggestions list, the address bar or Chrome's popup, a nested row, or another run's row", () => {
+    // Only look-alikes carry the token: no row is found.
+    const none = list({ otherRun: true });
+    assert.deepEqual(tokenRows(none.flat, ROW, TOKEN, none.doc).rows, []);
+    // A row locator that matches list items still stays inside the
+    // page: Chrome's popup under the address bar is never a row.
+    const items = tokenRows(
+      none.flat,
+      [{ role: "list-item" }],
+      TOKEN,
+      none.doc,
+    );
+    assert.deepEqual(
+      items.rows.map((f) => f.node.name),
+      [`"${TOKEN}"`],
+      "only the page's own suggestion, which the Gmail adapter's row locator does not match",
+    );
+    // Without a page scope the popup would be taken too.
+    assert.equal(
+      tokenRows(none.flat, [{ role: "list-item" }], TOKEN, null).rows.length,
+      2,
+    );
+    // A row inside a row is the outer row's part, not a second message.
+    const nested = list({ nested: true });
+    assert.equal(tokenRows(nested.flat, ROW, TOKEN, nested.doc).rows.length, 1);
+    // An editable field inside a row (an inline reply holding the
+    // token) is not the row's text.
+    const reply = flatten(
+      n(
+        "unknown",
+        "document web",
+        null,
+        [0, 0, 900, 900],
+        [
+          n(
+            "row",
+            "table row",
+            "Acme Billing",
+            [0, 10, 900, 30],
+            [
+              n("text-field", "entry", "Reply", [0, 10, 400, 30], [], {
+                text: `Re: ${TOKEN}`,
+              }),
+            ],
+          ),
+        ],
+      ),
+    );
+    assert.deepEqual(tokenRows(reply, ROW, TOKEN, reply[0]!).rows, []);
+    assert.deepEqual(tokenNodes(reply, TOKEN), []);
+    // The token is matched whole: a longer token is another message.
+    assert.ok(!carriesToken("Re [es:run1:abcd12345]", TOKEN));
+    assert.ok(carriesToken("Acme [ES:RUN1:ABCD1234] x", TOKEN));
+  });
+
+  it("takes the first row locator that finds one, and reports the token outside any row", () => {
+    const { flat, doc } = list();
+    const r = tokenRows(flat, [{ role: "link" }, { role: "row" }], TOKEN, doc);
+    assert.equal(r.locator, 1);
+    assert.equal(r.rows.length, 1);
+    const empty = list({ noRows: true });
+    const r2 = tokenRows(empty.flat, ROW, TOKEN, empty.doc);
+    assert.deepEqual([r2.rows, r2.seen, r2.locator], [[], [], null]);
+    // The token is on the page (the suggestion), and in the address
+    // bar's popup: the search record names where.
+    assert.deepEqual(
+      tokenNodes(empty.flat, TOKEN).map((f) => f.node.role),
+      ["list-item", "list-item"],
+    );
+  });
+});
+
+describe("a failure's tree summary", () => {
+  it("keeps the showing nodes, clipped and capped, the address bar's value, and never the account's address", () => {
+    const addr = "qa-1@receiver.invalid";
+    const { flat } = list();
+    const long = "x".repeat(400);
+    flat[flat.length - 1]!.node.name =
+      `Signed in as ${addr.toUpperCase()} ${long}`;
+    const hidden = n("button", "push button", "Hidden", [0, 0, 5, 5], [], {
+      states: ["visible", "offscreen"],
+    });
+    flat.push({ node: hidden, parent: null, depth: 0, order: flat.length });
+    const s = treeSummary(
+      {
+        flat,
+        location: `mail.google.com/#search/to:${addr}`,
+        nodes: 99,
+        truncated: false,
+        ms: 12.4,
+      },
+      [addr],
+    );
+    assert.equal(s.schema, "isonim-email/a11y-summary/1");
+    assert.equal(s.location, "mail.google.com/#search/to:<account address>");
+    assert.equal(s.nodes, 99);
+    assert.equal(s.read_ms, 12);
+    assert.ok(!JSON.stringify(s).toLowerCase().includes(addr));
+    assert.ok(!s.showing.some((x) => x.name === "Hidden"));
+    assert.equal(s.showing_count, s.showing.length);
+    const clipped = s.showing.find((x) => x.name.startsWith("Signed in as"))!;
+    assert.equal(clipped.name.length, 161);
+    assert.ok(clipped.name.endsWith("…"));
+    assert.ok(clipped.name.includes("<account address>"));
+    assert.ok(s.showing.some((x) => x.value === `"${TOKEN}"`));
+    const capped = treeSummary(
+      { flat, location: null, nodes: 1, truncated: true, ms: 0 },
+      [],
+      3,
+    );
+    assert.equal(capped.showing.length, 3);
+    assert.ok(capped.showing_count > 3);
+    assert.equal(clipText(" a\n  b ", 10), "a b");
+  });
+
+  it("replaces the address percent-encoded too, and never keeps a password field's value", () => {
+    const addr = "qa-1@receiver.invalid";
+    const { flat } = list();
+    const pw = n(
+      "password-text",
+      "password text",
+      "Password",
+      [10, 10, 200, 20],
+      [],
+      { value: "secret-value" },
+    );
+    flat.push({ node: pw, parent: null, depth: 0, order: flat.length });
+    const s = treeSummary(
+      {
+        flat,
+        location: `login.live.com/oauth?login_hint=${encodeURIComponent(addr)}&x=1`,
+        nodes: 9,
+        truncated: false,
+        ms: 1,
+      },
+      [addr],
+    );
+    assert.equal(
+      s.location,
+      "login.live.com/oauth?login_hint=<account address>&x=1",
+    );
+    const field = s.showing.find((x) => x.name === "Password")!;
+    assert.equal(field.value, "");
+    assert.ok(!JSON.stringify(s).includes("secret-value"));
+    assert.equal(
+      clipText(`to QA-1%40RECEIVER.invalid`, 80, [addr]),
+      "to <account address>",
+    );
   });
 });
 

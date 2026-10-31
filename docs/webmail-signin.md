@@ -443,12 +443,19 @@ same profiles the way the sign-in does, never under Playwright:
   mailbox off the screen (OCR) and the page from the accessibility tree;
   it crops the message body as a region of the display. Nothing is
   evaluated in a page and nothing in one is changed;
-- Outlook.com's browser is started dark, by the profile's colour mode
-  (Chrome's Settings, Appearance, Mode: Dark, written into the profile
-  before the start; no command-line switch), because its light and
-  dark captures are its background toggle in its dark theme; Gmail's
-  and Yahoo's, and every sign-in, run light (written the same way, so a
-  dark capture never leaves a profile dark);
+- the browser runs in the requested scheme, by the profile's colour
+  mode (Chrome's Settings, Appearance, Mode, written into the profile
+  before the start; no command-line switch): light captures in a light
+  browser, dark ones in a dark browser (Outlook.com's only: its light
+  capture comes first, then the browser is restarted dark and the
+  message opened again). Outlook.com follows the browser into its own
+  dark theme only when its Appearance setting follows the system (set
+  it once while signing in: Settings, General, Appearance); each capture
+  checks the theme and fails rather than capture the other scheme. In
+  dark, the reading pane's background toggle is switched off when it is
+  on, and left alone when Outlook.com does not show one; a light capture
+  never touches it. Every sign-in runs light, so a dark capture never
+  leaves a profile dark;
 - a capture never reads an account's password and never types into a
   sign-in page. A profile found signed out is marked `needs-login`: sign
   it in again with this recipe (after the cool-down, if an attempt was
@@ -471,15 +478,22 @@ launcher, which refuses an automation switch before it starts anything.
 
 ### The first capture, per webmail
 
-Run one story, one client at a time, watched, with no cache:
+Run one story, one client at a time, watched, with no cache.
+`receiptTypical` is a reference email, which the story driver registers
+only under `ISONIM_CAPTURE_LAYOUT=1` (without it the run stops at
+`unknown story 'receiptTypical' (registered: canary, receipt, alert)`):
 
 ```sh
-ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-web --viewports desktop --no-cache
-ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients outlook-web --viewports desktop --schemes light,dark --no-cache
-ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-list,outlook-list --viewports desktop --no-cache
+ISONIM_CAPTURE_LAYOUT=1 ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients outlook-web --viewports desktop --schemes light --no-cache
+ISONIM_CAPTURE_LAYOUT=1 ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients outlook-web --viewports desktop --schemes dark --no-cache
+ISONIM_CAPTURE_LAYOUT=1 ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-web --viewports desktop --no-cache
+ISONIM_CAPTURE_LAYOUT=1 ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-list,outlook-list --viewports desktop --no-cache
 ```
 
 and Yahoo's (`yahoo-web`, `yahoo-list`) once its profile is signed in.
+Run them one after another, not at once: each run takes the account's
+lease. After each, read its provenance (below) and the cleanup record
+before the next; a failure leaves its screen behind for you (below).
 With `ISONIM_EMAIL_WEBMAIL_VNC=1` every capture session serves an
 owner-only VNC socket and the run prints where, as the sign-in's
 `--vnc` does: forward it with `ssh -L 5901:<socket> you@capture-host`
@@ -509,7 +523,38 @@ Every PNG has a JSON file beside it. For a first capture, check:
 - `tree`: how many accessibility nodes the page had and how long one
   read took; `timing_ms`: each step;
 - `client.locators`: `unverified-live` until the adapter's locators are
-  confirmed against the live webmail.
+  confirmed against the live webmail;
+- `arrival.looks`: each URL the search typed (Gmail's: the Message-ID
+  search, then the run token's), whether the address bar then held it
+  (`location_matched`), the rows it saw, which row locator found the
+  message (`row_locator`), and `token_nodes`, every element showing the
+  run token; `arrival.row_locator` is the one that found it;
+- `scheme_applied` (Outlook.com): `browser` (the colour mode),
+  `theme_luminance` (the subject heading's: below 128 is dark),
+  `toggle` (`untouched` in light; `unchecked`, `switched` or `absent` in
+  dark), and the crop's `luminance`.
+
+### What a failure leaves behind
+
+When a capture fails with its browser running, the run keeps the
+screen and what the browser told a screen reader, in
+`<run>/hosted-webmail-failures/` (only you can read it):
+
+- `<webmail>-<account>-<step>-<n>.png`: the whole capture display at
+  the moment of failure;
+- `<webmail>-<account>-<step>-<n>.tree.json`: the address bar, and every
+  element shown (role, accessible name, text, value, position, whether
+  it is checked or selected), the account's address replaced by
+  `<account address>`.
+
+The failed request's provenance names both (`failure.frame`,
+`failure.tree`, and the `step`: `arrival`, `list-row`, `restart-dark`,
+`open`, `body-light`, `body-dark`, or a `cleanup-…` step), and a
+delivery failure's provenance carries the last two rounds of looks
+(`search`); a failed cleanup's line in `hosted-webmail-cleanup.jsonl`
+carries the same. The screen may show the QA mailbox; keep these files
+out of tickets and chats, and delete the run directory when you are
+done with it.
 
 ### When a capture fails
 
@@ -517,20 +562,40 @@ Every PNG has a JSON file beside it. For a first capture, check:
   names.
 - `UI drift: <webmail> adapter locator '<name>' (…)`: the webmail no
   longer shows what the adapter's locator names; the adapter is down for
-  the rest of the run. Look at the page over VNC (or at a new run with
-  `ISONIM_EMAIL_WEBMAIL_VNC=1`), then fix the locator in
-  `tools/capture/providers/webmail_adapters.ts`.
+  the rest of the run. Open the failure's frame and tree (above): find
+  the element the locator meant in the tree (its role and name), then
+  fix the locator in `tools/capture/providers/webmail_adapters.ts`.
+- `the page is light … in a dark browser` (or dark in a light one):
+  Outlook.com's Appearance does not follow the system. Set it to follow
+  the system in a sign-in session (`just email-webmail-signin outlook-com
+<account> --manual --vnc`), then capture again.
 - `the message body is … px tall …, past the window's visible part`:
   bodies taller than the window are not captured yet (never cut).
 - `delivery failure: … was not found …`: the message did not show in
-  Inbox or Spam/Junk within 60 s; it may still arrive. Its cleanup
-  record is `not-found`.
+  Inbox or Spam/Junk within 60 s, or the search did not recognise it.
+  Read the provenance's `search`: `location_matched: false` means the
+  webmail rewrote the URL the search typed (compare `url` and
+  `location`); `rows` empty means no row locator matched the list (the
+  frame and tree show what the list is made of); `token_nodes` naming an
+  element means the message was on the screen but not in anything the
+  row locators recognise. Its cleanup record is `not-found`; the message
+  may still be in the mailbox.
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
-  mailbox. Sign nothing in: open the account's profile only through the
+  mailbox; the line names the kept screen, and the cleanup record's
+  `search` the looks that saw it. A removal's `via` says how it went:
+  `trash` (deleted, then deleted again from Trash / Deleted Items),
+  `delete-forever` (Gmail's Spam), or `permanent` (deleted from
+  Outlook.com's Junk Email or Yahoo's Spam, and never seen in Trash:
+  the delete there was for good). Sign nothing in: open the account's profile only through the
   recipes (a check with `--check-only`, or a sign-in with `--manual` over
   VNC to delete it by hand), never by starting a browser on it yourself.
 - `the capture browser cannot run: …`: no GuiAssert session or no
   sandbox, as for the sign-in (Prerequisites).
+- `delivery failed: token: cannot reach oauth2.googleapis.com: … (after
+one retry)`: the Workspace sender's token request got no answer twice,
+  2 s apart (a network problem on this machine; nothing was sent). Run
+  the capture again; an HTTP refusal (`token: HTTP 401 …`) is not
+  retried, and names what to fix.
 
 ## Re-sealing a QA password
 

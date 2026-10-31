@@ -87,6 +87,9 @@ export class WebmailDesktop {
   readonly ga: GuiAssert;
   readonly argv: string[];
   readonly pid: number;
+  /** The session display's size (the window fills it). */
+  readonly width: number;
+  readonly height: number;
   private readonly base: GuiAssert;
   private readonly child: ChildProcess;
   /** Where frames are written while read (each removed at once). */
@@ -102,6 +105,8 @@ export class WebmailDesktop {
     argv: string[];
     framesDir: string;
     maxNodes: number;
+    width: number;
+    height: number;
   }) {
     this.base = o.base;
     this.session = o.session;
@@ -111,6 +116,8 @@ export class WebmailDesktop {
     this.pid = o.child.pid!;
     this.framesDir = o.framesDir;
     this.maxNodes = o.maxNodes;
+    this.width = o.width;
+    this.height = o.height;
   }
 
   /** Starts the session and the browser in it; DesktopUnavailable when it cannot. */
@@ -152,6 +159,8 @@ export class WebmailDesktop {
         argv: started.argv,
         framesDir: mkdtempSync(join(tmpdir(), "webmail-desktop-")),
         maxNodes: o.maxNodes ?? 20_000,
+        width: o.width,
+        height: o.height,
       });
       // The browser registers on the session's accessibility bus a moment
       // after it starts: until then its tree cannot be read.
@@ -218,15 +227,27 @@ export class WebmailDesktop {
 
   /**
    * Goes to `url` through the address bar (F5 when it already holds it),
-   * then reads until the address bar holds it and `ready` holds.
+   * then reads until the address bar holds it and `ready` holds; `how`
+   * says which (the search record's). With `reloadWhen` holding for the
+   * read before, a typed URL is reloaded (F5) once the address bar holds
+   * it ("typed-reload"): a page that swaps its content a moment after
+   * its address changes (a webmail routed by its fragment) would
+   * otherwise still show the previous content under the new address.
    */
   async navigate(
     url: string,
     ready: (s: Snapshot) => boolean,
     timeoutMs: number,
-  ): Promise<{ snap: Snapshot; ok: boolean }> {
+    opts: { reloadWhen?: (before: Snapshot) => boolean } = {},
+  ): Promise<{
+    snap: Snapshot;
+    ok: boolean;
+    how: "typed" | "reload" | "typed-reload";
+  }> {
     const now = await this.snapshot();
-    if (sameLocation(now.location, url)) await this.ga.key("F5");
+    const reload = sameLocation(now.location, url);
+    let how: "typed" | "reload" | "typed-reload" = reload ? "reload" : "typed";
+    if (reload) await this.ga.key("F5");
     else {
       const bar = now.flat.find(
         (f) => f.node.role === "text-field" && f.node.name === ADDRESS_BAR,
@@ -242,11 +263,27 @@ export class WebmailDesktop {
       // An inline completion is selected text after the typed URL.
       await this.ga.key("Delete");
       await this.ga.key("Return");
+      if (opts.reloadWhen?.(now) === true) {
+        const at = await this.waitFor(
+          (s) => sameLocation(s.location, url),
+          timeoutMs,
+        );
+        if (at.ok) {
+          await this.ga.key("F5");
+          how = "typed-reload";
+        }
+      }
     }
-    return this.waitFor(
+    const r = await this.waitFor(
       (s) => sameLocation(s.location, url) && ready(s),
       timeoutMs,
     );
+    return { ...r, how };
+  }
+
+  /** The whole display, as a PNG (a failure's last frame). */
+  async displayFrame(): Promise<Uint8Array> {
+    return this.capture([0, 0, this.width, this.height]);
   }
 
   /** One click at the centre of `r`. */

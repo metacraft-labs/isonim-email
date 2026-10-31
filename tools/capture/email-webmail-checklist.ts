@@ -136,7 +136,7 @@ function main(): number {
     }
     if (adapter.id === "outlook-com")
       out.push(
-        "           Outlook.com: the dark captures expect the app theme dark (or following the system); set it once in the webmail's settings while signing in",
+        "           Outlook.com: its theme must follow the system (Settings, General, Appearance), so that it is light in a light capture and dark in a dark one (each is checked); set it once in the webmail's settings while signing in",
       );
     if (anyReady) readySets++;
   }

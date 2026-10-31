@@ -25,8 +25,9 @@ Enter the dev shell first (`direnv allow`, or prefix with
 
 ```sh
 just build           # compile the library and every test (no run)
-just test            # full suite: C, JS, the TS tooling tests, the webmail and
-                     # desktop end-to-end tests, capture checks (concurrently)
+just test            # full suite: C, JS, the TS tooling tests, the hosted and
+                     # self-hosted webmail and desktop end-to-end tests,
+                     # capture checks (concurrently)
 just test-serial     # the same recipes one at a time, output streamed
 just test-file tests/t4_styles.nim  # one Nim test file on the C backend
 just email-shots     # screenshot captures through the capture providers
@@ -45,9 +46,9 @@ just bench-baseline  # make the last `just bench` the committed baseline
 just t               # alias for test
 ```
 
-`just test` builds the shared prerequisites, then runs its six recipes
-(`test-c`, `test-js`, `test-ts`, `test-webmail`, `test-desktop`,
-`test-capture-ci`) at the same time, and `test-c`/`test-js` compile and
+`just test` builds the shared prerequisites, then runs its seven recipes
+(`test-c`, `test-js`, `test-ts`, `test-hosted`, `test-webmail`,
+`test-desktop`, `test-capture-ci`) at the same time, and `test-c`/`test-js` compile and
 run their files several at a time (`ISONIM_EMAIL_TEST_JOBS` sets how
 many; by default it follows the host's cores and load). Output goes to
 `test-logs/<recipe>.log` and `test-logs/<file>-<c|js>.log`; the terminal
@@ -323,10 +324,18 @@ a QA account through the Gmail API (`workspace_send.ts`), the adapter
 finds it in Inbox or Spam/Junk by its Message-ID or run token, captures
 its inbox-list row (`--clients gmail-list,yahoo-list,outlook-list`, only
 when named) and its body (`gmail-web`, `yahoo-web` and `outlook-web`,
-light, and dark on Outlook.com by its background toggle in a browser
-whose profile's colour mode is dark; there are no mobile-web clients, since a phone cannot be
+light, and dark on Outlook.com in a browser whose profile's colour mode
+is dark, its theme checked and its background toggle optional; light
+captures never touch the toggle; there are no mobile-web clients, since a phone cannot be
 imitated without DevTools or a user-agent switch), then deletes it in
-the UI and from Trash.
+the UI and from Trash. A failed capture keeps the screen and the
+accessibility tree of the failing step under
+`<run>/hosted-webmail-failures/` (0600), named in its provenance with
+the searches it made. The first live capture per webmail is
+`ISONIM_CAPTURE_LAYOUT=1 ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots
+receiptTypical --backends b --clients <client> --viewports desktop
+--no-cache` (the reference stories register only under
+`ISONIM_CAPTURE_LAYOUT=1`; the full list is in `docs/webmail-signin.md`).
 Backend `b` is opt-in: it runs only with `--backends b` or one of its
 `--clients`, because each capture sends real mail and spends the
 account's daily budget (`ISONIM_EMAIL_WEBMAIL_DAILY_BUDGET`, default

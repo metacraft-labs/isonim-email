@@ -3,18 +3,22 @@
 //
 // One adapter per webmail (Gmail, Yahoo Mail, Outlook.com): the folder
 // URLs the arrival search opens (Inbox, then Spam/Junk; Trash for the
-// removal), and accessibility locators (a11y_tree.ts) for a message
-// row, the opened message's subject and body, the delete controls,
-// Outlook.com's tabs and per-message background toggle, plus how much
-// wider than the requested width the window is so that the body gets
-// the requested width, and the browser's colour scheme. The capture
+// removal; alternatives, tried in order), and accessibility locators
+// (a11y_tree.ts) for a message row (alternatives too), the opened
+// message's subject and body, the delete controls, Outlook.com's tabs
+// and its optional reading-pane background toggle, where a delete may
+// be permanent, plus how much wider than the requested width the window
+// is so that the body gets the requested width. The capture
 // procedure (hosted_webmail.ts) is one implementation over these,
 // driving the webmail browser through GuiAssert (webmail_desktop.ts):
 // the page is read from the browser's accessibility tree, as a screen
 // reader reads it, never from its DOM.
 //
-// - A row is the row-role node whose accessible name carries the run
-//   token (rows, options and links take their name from their content).
+// - A row is a node one of the row locators matches inside the page
+//   whose accessible text (its name, or the names and text inside it)
+//   carries the run token (a11y_tree.ts `tokenRows`): Chrome names some
+//   rows from their content and folds pruned containers' text into the
+//   cells, so the token may be in either.
 // - The opened message is the delivered one when a heading's name
 //   carries the token.
 // - The body is the node `opened.body` names, or, when the webmail gives
@@ -25,10 +29,10 @@
 //   sits in, so there is no body node). WEBMAIL_CHROME are the
 //   webmail's own controls, never part of a body.
 //
-// EVERY LOCATOR HERE IS UNVERIFIED-LIVE. They are written from the
-// webmails' public descriptions and their known ARIA markup, not
-// measured against the live UIs. Each carries its status (`status:
-// "unverified-live"`), and the provenance of every capture records the
+// The locators are written from the webmails' public descriptions and
+// their known ARIA markup. Each carries its status: "unverified-live"
+// until a live capture used it successfully, "verified-live" after (with
+// the run that did, below); the provenance of every capture records the
 // adapter's status, so a capture made with an unconfirmed locator says
 // so. The first live capture of each adapter confirms or corrects them;
 // a locator that matches nothing or more than one element fails the
@@ -48,10 +52,16 @@ export interface WebmailLocator extends A11yLocator {
   status: LocatorStatus;
 }
 
-// Every locator of this file is made by this: none is confirmed yet.
+// A locator no live capture has used yet.
 const u = (loc: A11yLocator): WebmailLocator => ({
   ...loc,
   status: "unverified-live",
+});
+// A locator a live capture used successfully (the run is named where it
+// is used).
+const v = (loc: A11yLocator): WebmailLocator => ({
+  ...loc,
+  status: "verified-live",
 });
 
 /** A locator as one line, for diagnostics. */
@@ -72,7 +82,9 @@ export interface FolderSpec {
   // What the provenance and the reports call it ("Inbox", "Spam",
   // "Junk Email", …).
   label: string;
-  url: string;
+  // The URLs that list the folder (or search it), tried in order within
+  // one look until one shows a row carrying the token.
+  urls: string[];
   // Tabs to look in as well, in order (Outlook.com's Focused/Other).
   tabs: WebmailLocator[];
 }
@@ -80,9 +92,10 @@ export interface FolderSpec {
 export interface AdapterUi {
   device: "desktop";
   folders: Record<FolderName, FolderSpec>;
-  // One message in a folder or search list; the arrival search keeps
-  // the one whose accessible name carries the run token.
-  row: WebmailLocator;
+  // One message in a folder or search list, as alternatives tried in
+  // order; the arrival search keeps the row whose accessible text
+  // carries the run token (a11y_tree.ts `tokenRows`).
+  rows: WebmailLocator[];
   opened: {
     // The opened message's subject (its name must carry the run token).
     subject: WebmailLocator;
@@ -102,20 +115,25 @@ export interface AdapterUi {
     // (`deleteForever`, no Trash step): Gmail's Spam, whose toolbar
     // reads "Delete forever" and "Not spam" [unverified-live].
     permanentIn: FolderName[];
+    // The folders from which the delete may itself be permanent: a
+    // message deleted there that never shows up in Trash / Deleted
+    // Items is removed (`via: "permanent"`), not a failed cleanup.
+    // [unverified-live: which of the two happens, the first live
+    // cleanup records say]
+    mayBePermanentIn: FolderName[];
   };
-  // The opened message's background toggle (Outlook.com), checked when
-  // the body is shown on a light background; null when the webmail does
-  // not recolour the body.
-  darkToggle: WebmailLocator | null;
+  // A webmail that recolours a body in its dark theme (Outlook.com):
+  // its theme follows the browser's colour mode (light in a light
+  // capture, dark in a dark one, each checked by the subject heading's
+  // luminance), and in dark its reading-pane background toggle, when
+  // one is shown, must be unchecked (checked: the body switched back to
+  // light). null: the webmail does not recolour the body.
+  dark: { toggle: WebmailLocator } | null;
   // Pixels the window is wider than the requested width, so that the
   // reading pane gives the body the requested width (folders, side
   // bars). [calibrate on the first live capture; the provenance records
   // the body width actually measured]
   windowAllowance: number;
-  // The browser's colour scheme, fixed when it starts: "dark" for a
-  // webmail that runs its dark theme for both of its states (the body
-  // toggle decides the body).
-  browserScheme: Scheme;
 }
 
 export interface AdapterClient {
@@ -167,31 +185,36 @@ export const CAPTURE_WINDOW_HEIGHT = 2400;
 
 const folder = (
   label: string,
-  url: string,
+  urls: string[],
   tabs: WebmailLocator[] = [],
-): FolderSpec => ({ label, url, tabs });
+): FolderSpec => ({ label, urls, tabs });
 
 // Gmail (consumer or Workspace; the same web UI). A Gmail search leaves
 // Spam and Trash out unless the query names them, so each folder is a
-// search URL; rfc822msgid: finds exactly the delivered message. Its list
-// is a grid of rows; the opened subject an h2; the body unnamed.
+// search URL: rfc822msgid: first (exactly the delivered message, if
+// Gmail kept the submitted Message-ID: not measured), then the run token
+// as a quoted phrase. Its list is a grid of rows (a table row in
+// Chrome's tree); the opened subject an h2; the body unnamed.
+const GMAIL = "https://mail.google.com/mail/u/0/#search/";
 const GMAIL_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: {
-    inbox: folder(
-      "Inbox",
-      "https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{mid}",
-    ),
-    spam: folder(
-      "Spam",
-      "https://mail.google.com/mail/u/0/#search/in%3Aspam+rfc822msgid%3A{mid}",
-    ),
-    trash: folder(
-      "Trash",
-      "https://mail.google.com/mail/u/0/#search/in%3Atrash+rfc822msgid%3A{mid}",
-    ),
+    inbox: folder("Inbox", [
+      `${GMAIL}rfc822msgid%3A{mid}`,
+      `${GMAIL}%22{token}%22`,
+    ]),
+    spam: folder("Spam", [
+      `${GMAIL}in%3Aspam+rfc822msgid%3A{mid}`,
+      `${GMAIL}in%3Aspam+%22{token}%22`,
+    ]),
+    trash: folder("Trash", [
+      `${GMAIL}in%3Atrash+rfc822msgid%3A{mid}`,
+      `${GMAIL}in%3Atrash+%22{token}%22`,
+    ]),
   },
-  row: u({ role: "row" }),
+  // A grid row ("table row" in Chrome's tree); its accessible text holds
+  // the subject whether Chrome names the row from its cells or not.
+  rows: [u({ role: "row" })],
   opened: {
     subject: u({ nativeRole: "heading" }),
     body: null,
@@ -202,21 +225,21 @@ const GMAIL_DESKTOP: AdapterUi = {
     deleteForever: u({ role: "button", name: "Delete forever" }),
     confirm: null,
     permanentIn: ["spam"],
+    mayBePermanentIn: [],
   },
-  darkToggle: null,
+  dark: null,
   windowAllowance: 440,
-  browserScheme: "light",
 };
 
 const YAHOO_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: {
-    inbox: folder("Inbox", "https://mail.yahoo.com/d/folders/1"),
-    spam: folder("Spam", "https://mail.yahoo.com/d/folders/6"),
-    trash: folder("Trash", "https://mail.yahoo.com/d/folders/4"),
+    inbox: folder("Inbox", ["https://mail.yahoo.com/d/folders/1"]),
+    spam: folder("Spam", ["https://mail.yahoo.com/d/folders/6"]),
+    trash: folder("Trash", ["https://mail.yahoo.com/d/folders/4"]),
   },
-  // Each message of a folder is a link to it.
-  row: u({ role: "link" }),
+  // Each message of a folder is a link to it (or an option of a list).
+  rows: [u({ role: "link" }), u({ role: "list-item" })],
   opened: {
     subject: u({ nativeRole: "heading" }),
     body: null,
@@ -227,30 +250,35 @@ const YAHOO_DESKTOP: AdapterUi = {
     deleteForever: u({ role: "button", name: "Delete" }),
     confirm: u({ role: "button", name: "OK" }),
     permanentIn: [],
+    mayBePermanentIn: ["spam"],
   },
-  darkToggle: null,
+  dark: null,
   windowAllowance: 560,
-  browserScheme: "light",
 };
 
 const OUTLOOK_FOLDERS = (base: string): Record<FolderName, FolderSpec> => ({
-  inbox: folder("Inbox", `${base}/inbox`, [
-    u({ role: "tab", name: "Focused" }),
-    u({ role: "tab", name: "Other" }),
-  ]),
-  spam: folder("Junk Email", `${base}/junkemail`),
-  trash: folder("Deleted Items", `${base}/deleteditems`),
+  inbox: folder(
+    "Inbox",
+    [`${base}/inbox`],
+    [u({ role: "tab", name: "Focused" }), u({ role: "tab", name: "Other" })],
+  ),
+  spam: folder("Junk Email", [`${base}/junkemail`]),
+  trash: folder("Deleted Items", [`${base}/deleteditems`]),
 });
 
 // Outlook.com: a listbox of options, the opened subject a heading, the
-// body named "Message body"; its dark theme for both states, the
-// per-message background toggle deciding the body.
+// body named "Message body"; its theme follows the browser's colour
+// mode, and in dark the reading pane's background toggle, if shown,
+// keeps the body in its dark state. The row and the subject were used
+// by the first live capture (2026-10-31, run a1-20261031T083958Z: the
+// message found in Junk Email and opened, its heading carrying the run
+// token).
 const OUTLOOK_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: OUTLOOK_FOLDERS("https://outlook.live.com/mail/0"),
-  row: u({ role: "list-item" }),
+  rows: [v({ role: "list-item" })],
   opened: {
-    subject: u({ nativeRole: "heading" }),
+    subject: v({ nativeRole: "heading" }),
     body: u({ name: "Message body" }),
     masks: [],
   },
@@ -259,10 +287,10 @@ const OUTLOOK_DESKTOP: AdapterUi = {
     deleteForever: u({ role: "button", name: "Delete" }),
     confirm: u({ role: "button", name: "OK" }),
     permanentIn: [],
+    mayBePermanentIn: ["spam"],
   },
-  darkToggle: u({ role: "button", namePattern: "background" }),
+  dark: { toggle: u({ role: "button", namePattern: "background" }) },
   windowAllowance: 640,
-  browserScheme: "dark",
 };
 
 export const WEBMAIL_ADAPTERS: WebmailAdapter[] = [
@@ -333,8 +361,9 @@ export const WEBMAIL_ADAPTERS: WebmailAdapter[] = [
         kind: "message",
         ui: "desktop",
         viewports: [DESKTOP_VIEWPORT],
-        // Dark: the app theme dark, the body in its dark state; light:
-        // the per-message background toggle on.
+        // Light in a light browser, the toggle untouched; dark in a dark
+        // browser, the body in its dark state (the toggle, if shown,
+        // unchecked); each theme checked.
         schemes: ["light", "dark"],
       },
       {
@@ -359,15 +388,17 @@ export function adapterFor(clientId: string): {
   return null;
 }
 
-// A folder URL for one message.
-export function folderUrl(
+// A folder's URLs for one message, in order.
+export function folderUrls(
   f: FolderSpec,
   h: { messageId: string; token: string },
-): string {
+): string[] {
   const mid = h.messageId.replace(/^</, "").replace(/>$/, "");
-  return f.url
-    .replaceAll("{mid}", encodeURIComponent(mid))
-    .replaceAll("{token}", encodeURIComponent(h.token));
+  return f.urls.map((url) =>
+    url
+      .replaceAll("{mid}", encodeURIComponent(mid))
+      .replaceAll("{token}", encodeURIComponent(h.token)),
+  );
 }
 
 // Every locator of an adapter, named (for the status report and the
@@ -380,14 +411,14 @@ export function adapterLocators(
   const add = (name: string, l: WebmailLocator | null): void => {
     if (l !== null) out.push({ name: `desktop.${name}`, locator: l });
   };
-  add("row", ui.row);
+  ui.rows.forEach((r, i) => add(`rows${i}`, r));
   add("opened.subject", ui.opened.subject);
   add("opened.body", ui.opened.body);
   ui.opened.masks.forEach((m, i) => add(`opened.mask${i}`, m));
   add("remove.delete", ui.remove.del);
   add("remove.deleteForever", ui.remove.deleteForever);
   add("remove.confirm", ui.remove.confirm);
-  add("darkToggle", ui.darkToggle);
+  add("dark.toggle", ui.dark?.toggle ?? null);
   for (const [name, f] of Object.entries(ui.folders))
     f.tabs.forEach((t, i) => add(`folders.${name}.tab${i}`, t));
   return out;
@@ -419,9 +450,9 @@ export function rebaseAdapter(
     desktop: {
       ...x,
       folders: {
-        inbox: { ...x.folders.inbox, url: move(x.folders.inbox.url) },
-        spam: { ...x.folders.spam, url: move(x.folders.spam.url) },
-        trash: { ...x.folders.trash, url: move(x.folders.trash.url) },
+        inbox: { ...x.folders.inbox, urls: x.folders.inbox.urls.map(move) },
+        spam: { ...x.folders.spam, urls: x.folders.spam.urls.map(move) },
+        trash: { ...x.folders.trash, urls: x.folders.trash.urls.map(move) },
       },
     },
   };

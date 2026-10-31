@@ -16,8 +16,9 @@
 //
 // A delivery: a token by the JWT bearer grant (RFC 7523), signed RS256
 // with the service account's key (iss = the service account, sub = the
-// subject, scope = gmail.send, aud = the token endpoint, exp = an hour),
-// then `POST /gmail/v1/users/{subject}/messages/send` with the copy
+// subject, scope = gmail.send, aud = the token endpoint, exp = an hour;
+// a token request that got no HTTP answer is made once more, never the
+// send), then `POST /gmail/v1/users/{subject}/messages/send` with the copy
 // hosted_delivery.ts's submittedCopy() builds (From = the sender
 // address, To = the QA account, a fresh Message-ID, the run token in
 // the subject), base64url-encoded. The receiving mailbox cannot be read
@@ -87,6 +88,16 @@ export class WorkspaceSendError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkspaceSendError";
+  }
+}
+
+// A request that got no HTTP answer at all: no connection, a reset, or
+// no answer within the I/O timeout (the only kind a token request
+// retries).
+export class WorkspaceNetworkError extends WorkspaceSendError {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceNetworkError";
   }
 }
 
@@ -361,7 +372,7 @@ function https(
     );
     req.on("timeout", () =>
       req.destroy(
-        new WorkspaceSendError(
+        new WorkspaceNetworkError(
           `${init.stage}: no answer from ${u.host} within ${init.timeoutMs} ms`,
         ),
       ),
@@ -370,7 +381,7 @@ function https(
       reject(
         err instanceof WorkspaceSendError
           ? err
-          : new WorkspaceSendError(
+          : new WorkspaceNetworkError(
               `${init.stage}: cannot reach ${u.host}: ${(err as NodeJS.ErrnoException).code ?? err.message}`,
             ),
       ),
@@ -425,7 +436,13 @@ export interface WorkspaceOptions {
   ioTimeoutMs?: number;
   // The clock, in ms (tests).
   now?: () => number;
+  // How long a token request that got no HTTP answer waits before its
+  // one retry (default TOKEN_RETRY_MS; tests).
+  tokenRetryMs?: number;
 }
+
+// A token request that got no HTTP answer is made once more after this.
+export const TOKEN_RETRY_MS = 2_000;
 
 const b64url = (b: Buffer | string): string =>
   Buffer.from(b).toString("base64url");
@@ -483,20 +500,35 @@ export async function delegatedToken(
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
     assertion,
   }).toString();
-  let res: HttpResult;
-  try {
-    res = await https(ep.tokenUrl, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-      trust: opts.trust,
-      timeoutMs: opts.ioTimeoutMs ?? 30_000,
-      stage: "token",
-    });
-  } catch (err) {
-    throw new WorkspaceSendError(
-      redact(err instanceof Error ? err.message : String(err), secrets),
-    );
+  // One bounded retry, only of a request that got no HTTP answer (a
+  // token is not a provider input: asking again changes nothing but the
+  // network's luck); an HTTP answer, a refusal included, is final.
+  let res: HttpResult | null = null;
+  for (let attempt = 0; res === null; attempt++) {
+    try {
+      res = await https(ep.tokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+        trust: opts.trust,
+        timeoutMs: opts.ioTimeoutMs ?? 30_000,
+        stage: "token",
+      });
+    } catch (err) {
+      if (err instanceof WorkspaceNetworkError && attempt === 0) {
+        await new Promise((r) =>
+          setTimeout(r, opts.tokenRetryMs ?? TOKEN_RETRY_MS),
+        );
+        continue;
+      }
+      const text = redact(
+        err instanceof Error ? err.message : String(err),
+        secrets,
+      );
+      throw new WorkspaceSendError(
+        attempt > 0 ? `${text} (after one retry)` : text,
+      );
+    }
   }
   if (res.status === 200) {
     let o: Record<string, unknown> = {};

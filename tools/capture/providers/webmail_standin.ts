@@ -16,11 +16,14 @@
 // - delivery: the fake Gmail API's send decodes `raw` and files the
 //   message for the account its To names, in Inbox, Spam (or Outlook's
 //   Other tab), or withholds it, after a delay;
-// - Gmail's search (rfc822msgid:, in:spam, in:trash; no Spam or Trash
-//   unless asked), Yahoo's and Outlook.com's folders, opening a message,
-//   delete (to Trash) and delete forever (with Yahoo's and Outlook's
-//   confirmation; Gmail's Spam, as Gmail's, offers only delete forever), Outlook.com's background toggle (dark: the body
-//   recoloured and marked data-ogsc);
+// - Gmail's search (rfc822msgid:, a quoted phrase of the subject,
+//   in:spam, in:trash; no Spam or Trash unless asked; the search field
+//   holding the query), Yahoo's and Outlook.com's folders, opening a
+//   message, delete (to Trash) and delete forever (with Yahoo's and
+//   Outlook's confirmation; Gmail's Spam, as Gmail's, offers only delete
+//   forever), Outlook.com's theme following the browser's colour scheme
+//   and, in dark only, its background toggle (unpressed: the body
+//   recoloured dark and marked data-ogsc; pressed: the body light);
 // - every page reports what it sees of the browser (`probes`:
 //   navigator.webdriver, prefers-color-scheme, the user agent);
 // - test switches: drift (the body is hidden from the accessibility tree,
@@ -28,7 +31,13 @@
 //   when a message is opened,
 //   show an opened Gmail message under another subject (a message the
 //   adapter must not take for the delivered one), keep a message whose
-//   delete-forever was answered.
+//   delete-forever was answered; Gmail rewriting the Message-ID (so
+//   rfc822msgid: finds nothing), naming its rows after the sender only,
+//   or showing a search-suggestions list echoing the query (a
+//   look-alike carrying the token); Outlook.com without its toggle,
+//   ignoring the browser's dark scheme, or deleting Junk for good; a
+//   delete that answers but leaves the message in its folder; Gmail's
+//   views answering late (the previous list shown under the new address).
 // The webmail browser, GuiAssert, the profiles, TLS and the provider are
 // real.
 
@@ -139,8 +148,8 @@ function readBody(req: IncomingMessage): Promise<string> {
 // Every page reports what it sees of the browser once (`probes`).
 const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent));`;
 
-const page = (body: string, script = ""): string =>
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Mail</title><style>body{font:16px sans-serif;margin:0;background:#fff;color:#111}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee;padding:8px}.main{margin-left:220px;padding:8px;width:800px}@media (prefers-color-scheme: dark){body{background:#202020;color:#eee}.nav{background:#333}}</style><script>${PROBE}</script></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
+const page = (body: string, script = "", followsDark = true): string =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Mail</title><style>body{font:16px sans-serif;margin:0;background:#fff;color:#111}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee;padding:8px}.main{margin-left:220px;padding:8px;width:800px}${followsDark ? "@media (prefers-color-scheme: dark){body{background:#202020;color:#eee}.nav{background:#333}}" : ""}</style><script>${PROBE}</script></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
 
 export interface StandinProbe {
   webdriver: string;
@@ -175,6 +184,30 @@ export class StandinWebmail {
   probes: StandinProbe[] = [];
   // Every delete-forever, with when.
   destroyed: { id: string; at: number }[] = [];
+  // Gmail: the delivered message's Message-ID replaced (rfc822msgid:
+  // finds nothing; the token search does).
+  rewriteMessageId = false;
+  // Gmail: each row named after its sender alone (aria-labelledby); the
+  // subject is only in its cells.
+  rowNamedBySender = false;
+  // Gmail: a search-suggestions list under the search field, echoing
+  // the query (it carries the token in a token search).
+  suggestions = false;
+  // Outlook.com: no background toggle in dark.
+  noToggle = false;
+  // Outlook.com: the toggle starts pressed (the body switched to light).
+  togglePressed = false;
+  // Outlook.com: its theme stays light in a dark browser.
+  ignoresDark = false;
+  // Outlook.com: a delete in Junk Email is for good (no Deleted Items).
+  junkDeletePermanent = false;
+  // A delete (to Trash) that answers but leaves the message where it is.
+  deleteIgnored = false;
+  // Gmail: how long a view takes to answer (the previous list stays on
+  // the page meanwhile, under the new address).
+  viewDelayMs = 0;
+  // What the pages reported doing (e.g. "toggle": a toggle click).
+  events: string[] = [];
 
   constructor(skin: Skin) {
     this.skin = skin;
@@ -218,7 +251,9 @@ export class StandinWebmail {
       subject,
       preview: previewOf(html, text),
       html: html === "" ? `<pre>${esc(text)}</pre>` : html,
-      messageId: header(head, "Message-ID"),
+      messageId: this.rewriteMessageId
+        ? `<rewritten-${randomBytes(4).toString("hex")}@mail.invalid>`
+        : header(head, "Message-ID"),
       deliveredAt: Date.now(),
     };
     setTimeout(() => this.messages.push(msg), this.deliveryDelayMs);
@@ -284,6 +319,10 @@ export class StandinWebmail {
       });
       return this.send(res, 204, "text/plain", "");
     }
+    if (url.pathname === "/event") {
+      this.events.push(url.searchParams.get("what") ?? "");
+      return this.send(res, 204, "text/plain", "");
+    }
     // The sign-in page, on another host: it records any typing.
     if (url.pathname === "/signin") {
       this.signinVisits++;
@@ -339,7 +378,14 @@ export class StandinWebmail {
     const id = url.searchParams.get("id") ?? "";
     if (url.pathname === "/api/delete" && req.method === "POST") {
       const m = this.find(account, id);
-      if (m !== undefined) m.folder = "trash";
+      if (this.deleteIgnored) void 0;
+      else if (
+        m !== undefined &&
+        m.folder === "spam" &&
+        this.junkDeletePermanent
+      )
+        this.messages = this.messages.filter((x) => x !== m);
+      else if (m !== undefined) m.folder = "trash";
       return this.send(res, 200, "application/json", "{}");
     }
     if (url.pathname === "/api/destroy" && req.method === "POST") {
@@ -350,7 +396,11 @@ export class StandinWebmail {
       this.destroyed.push({ id, at: Date.now() });
       return this.send(res, 200, "application/json", "{}");
     }
-    if (url.pathname === "/api/view") return this.gmailView(url, account, res);
+    if (url.pathname === "/api/view") {
+      if (this.viewDelayMs > 0)
+        await new Promise((r) => setTimeout(r, this.viewDelayMs));
+      return this.gmailView(url, account, res);
+    }
     return this.send(res, 404, "application/json", "{}");
   }
 
@@ -364,6 +414,8 @@ export class StandinWebmail {
     const script = `
       async function render(id) {
         const h = location.hash;
+        const q = document.querySelector('[name="q"]');
+        q.value = h.startsWith("#search/") ? decodeURIComponent(h.slice(8).replace(/[+]/g, " ")) : "";
         const r = await fetch("/api/view?hash=" + encodeURIComponent(h) + (id ? "&id=" + id : ""));
         if (r.status === 401) { location.href = ${JSON.stringify(this.signinUrl())}; return; }
         document.getElementById("main").innerHTML = await r.text();
@@ -395,6 +447,14 @@ export class StandinWebmail {
     const inSpam = /(^| )in:spam( |$)/.test(q);
     const inTrash = /(^| )in:trash( |$)/.test(q);
     const mid = /rfc822msgid:(\S+)/.exec(q)?.[1] ?? null;
+    // A quoted phrase: the subject must hold it (as Gmail's, punctuation
+    // and case ignored).
+    const phrase = /"([^"]+)"/.exec(q)?.[1] ?? null;
+    const norm = (t: string): string =>
+      t
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
     const folder: StandinFolder[] = inSpam
       ? ["spam"]
       : inTrash
@@ -403,6 +463,10 @@ export class StandinWebmail {
     let list = this.mine(account, folder);
     if (mid !== null)
       list = list.filter((m) => m.messageId.replace(/^<|>$/g, "") === mid);
+    if (phrase !== null)
+      list = list.filter((m) =>
+        ` ${norm(m.subject)} `.includes(` ${norm(phrase)} `),
+      );
     if (id !== null) {
       const m = this.find(account, id);
       if (m === undefined)
@@ -429,14 +493,19 @@ export class StandinWebmail {
     const rows = list
       .map(
         (m) =>
-          `<tr class="zA zE" role="row" data-open="${m.id}"><td role="gridcell"><span class="yP" email="sender@standin.invalid">${esc(m.fromName)}</span></td><td role="gridcell"><span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
+          `<tr class="zA zE" role="row" data-open="${m.id}"${this.rowNamedBySender ? ` aria-labelledby="from-${m.id}"` : ""}><td role="gridcell"><span class="yP" id="from-${m.id}" email="sender@standin.invalid">${esc(m.fromName)}</span></td><td role="gridcell"><span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
       )
       .join("");
+    // The look-alike: the query echoed as a suggestion (an option).
+    const suggest =
+      this.suggestions && q !== ""
+        ? `<div role="listbox" aria-label="Search suggestions"><div role="option" tabindex="-1">${esc(q)}</div></div>`
+        : "";
     this.send(
       res,
       200,
       "text/html",
-      `<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
+      `${suggest}<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
     );
   }
 
@@ -534,11 +603,21 @@ export class StandinWebmail {
           location: `/mail/0/${fname}`,
         });
       const trash = m.folder === "trash";
+      // Its theme follows the browser's scheme (unless ignoresDark); the
+      // toggle exists only in dark (and not with noToggle).
       const script = `
         const body = document.querySelector('[data-body]');
-        const toggle = document.querySelector('[data-toggle]');
+        const dark = ${!this.ignoresDark} && matchMedia("(prefers-color-scheme: dark)").matches;
+        let toggle = null;
+        if (dark && ${!this.noToggle}) {
+          toggle = document.createElement("button");
+          toggle.setAttribute("aria-label", "Switch background");
+          toggle.setAttribute("aria-pressed", "${this.togglePressed}");
+          toggle.textContent = "Background";
+          document.querySelector('[data-del]').after(toggle);
+        }
         function paint() {
-          const light = toggle.getAttribute("aria-pressed") === "true";
+          const light = !dark || (toggle !== null && toggle.getAttribute("aria-pressed") === "true");
           body.style.background = light ? "#ffffff" : "#1f1f1f";
           body.style.color = light ? "" : "#f0f0f0";
           for (const el of body.querySelectorAll("*")) {
@@ -546,7 +625,7 @@ export class StandinWebmail {
             else if (getComputedStyle(el).backgroundColor !== "rgba(0, 0, 0, 0)" || el.style.color) { el.setAttribute("data-ogsc", ""); el.style.setProperty("filter", "invert(0.9) hue-rotate(180deg)"); }
           }
         }
-        toggle.addEventListener("click", () => { toggle.setAttribute("aria-pressed", toggle.getAttribute("aria-pressed") === "true" ? "false" : "true"); paint(); });
+        if (toggle !== null) toggle.addEventListener("click", () => { fetch("/event?what=toggle"); toggle.setAttribute("aria-pressed", toggle.getAttribute("aria-pressed") === "true" ? "false" : "true"); paint(); });
         paint();
         document.querySelector('[data-del]').addEventListener("click", async () => {
           if (${trash}) {
@@ -568,8 +647,9 @@ export class StandinWebmail {
         200,
         "text/html",
         page(
-          `${nav}<div class="main" role="main"><div role="heading" aria-level="2">${esc(m.subject)}</div><button aria-label="Delete" data-del>Delete</button> <button aria-label="Switch background" aria-pressed="false" data-toggle>Background</button><div role="document" aria-label="${bodyLabel}" data-body>${m.html}</div></div>`,
+          `${nav}<div class="main" role="main"><div role="heading" aria-level="2">${esc(m.subject)}</div><button aria-label="Delete" data-del>Delete</button> <div role="document" aria-label="${bodyLabel}" data-body>${m.html}</div></div>`,
           script,
+          !this.ignoresDark,
         ),
       );
     }
@@ -593,6 +673,8 @@ export class StandinWebmail {
       "text/html",
       page(
         `${nav}<div class="main" role="main">${tabs}<div role="listbox">${rows}</div></div>`,
+        "",
+        !this.ignoresDark,
       ),
     );
   }

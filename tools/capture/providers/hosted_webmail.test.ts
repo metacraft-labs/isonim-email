@@ -41,17 +41,32 @@
 //   taken over and recorded;
 // - budgets: an account at 90% of its daily budget drops out, and a set
 //   with none left fails with "budget:";
-// - Outlook.com: its browser runs dark (its pages see
-//   prefers-color-scheme dark, Gmail's light); a message in the Other
-//   tab is found; light is the background toggle checked, dark the body
-//   darker;
+// - Outlook.com: a message in the Other tab is found; light is
+//   captured in a light browser (its pages see prefers-color-scheme
+//   light, Gmail's always), dark in a dark one, the body darker;
 // - the fidelity comparison: the same MIME delivered twice matches, a
 //   MIME differing in one colour does not;
 // - through the harness: once the first capture has learnt the UI
 //   fingerprint (part of the client build), a repeat run is a cache hit
 //   and delivers nothing;
 // - the CLI: `email-shots --backends b` without credentials fails
-//   cleanly with the remedy, and the checklist says what is pending.
+//   cleanly with the remedy, and the checklist says what is pending;
+// - failure evidence: a message that never arrives, UI drift and a
+//   failed cleanup each keep the last display frame (a PNG of the
+//   session's display) and the accessibility-tree summary, 0600 in a
+//   0700 directory under the run directory, named in the provenance or
+//   the cleanup record, and the search record says what each look
+//   navigated to and saw;
+// - Gmail's search: a message whose Message-ID Gmail rewrote is found
+//   by the run token's search, its row named after the sender alone is
+//   recognised by its cells' text, and a suggestions list echoing the
+//   token query is not taken for a row;
+// - Outlook.com: a light capture in a light browser never touches the
+//   background toggle; a dark one restarts the browser dark and switches
+//   a pressed toggle off once; without a toggle the dark theme is the
+//   evidence; a theme that does not follow the browser fails the
+//   capture in that scheme, never a capture in the other; a delete in
+//   Junk Email that is permanent is recorded `via: "permanent"`.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails need a real account signed in and the Gmail API sends
@@ -62,7 +77,7 @@
 // provider, the Workspace delivery code, the leases, budgets and the
 // harness are real.
 // Run (inside `nix develop`, which puts guiassert and the webmail browser
-// on PATH) with:
+// on PATH) with `just test-hosted` (part of `just test`), or:
 //   node --test tools/capture/providers/hosted_webmail.test.ts
 
 import { describe, it, after } from "node:test";
@@ -77,6 +92,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -85,6 +101,7 @@ import { readPng } from "../contact_sheet.ts";
 import { GuiAssert, sessionEnv } from "./guiassert.ts";
 import { executePlan, routeRequests, type MatrixSpec } from "./harness.ts";
 import {
+  FAILURES_DIR,
   fidelityVerdict,
   HostedWebmailProvider,
   type HostedWebmailTimings,
@@ -519,6 +536,30 @@ function cleanup(w: World): Record<string, unknown>[] {
 const prov = (r: CaptureResult): Record<string, any> =>
   r.provenance as Record<string, any>;
 
+// A failure's kept evidence: the frame a PNG of the session's display
+// and the tree summary JSON, both 0600 in a 0700 directory under the
+// run directory; returns the summary.
+function evidence(w: World, f: Record<string, any> | undefined) {
+  assert.ok(f !== undefined && f !== null, "a failure's evidence is named");
+  assert.equal(statSync(join(w.runDir, FAILURES_DIR)).mode & 0o777, 0o700);
+  const frame = join(w.runDir, f.frame);
+  const tree = join(w.runDir, f.tree);
+  for (const p of [frame, tree])
+    assert.equal(statSync(p).mode & 0o777, 0o600, p);
+  const img = readPng(new Uint8Array(readFileSync(frame)));
+  assert.ok(
+    img.width >= 800 && img.height === WINDOW_HEIGHT,
+    `${img.width}x${img.height}`,
+  );
+  const summary = JSON.parse(readFileSync(tree, "utf8"));
+  assert.equal(summary.schema, "isonim-email/a11y-summary/1");
+  assert.equal(summary.step, f.step);
+  assert.ok(summary.showing.length > 0);
+  assert.equal(summary.location, f.location);
+  assert.doesNotMatch(JSON.stringify(summary), /@receiver\.invalid/);
+  return summary;
+}
+
 function luminance(png: Uint8Array): number {
   const img = readPng(png);
   let sum = 0;
@@ -603,6 +644,18 @@ describe("the hosted-webmail capture procedure", () => {
         d.submitted_sha256,
       );
       assert.equal(prov(body).arrival.folder, "inbox");
+      // The search record: the Message-ID search typed, the address bar
+      // holding it, the row found by the first row locator.
+      const look = prov(body).arrival.looks.at(-1);
+      assert.match(look.url, /#search\/rfc822msgid%3A/);
+      assert.equal(look.how, "typed");
+      assert.equal(look.location_matched, true);
+      assert.equal(look.token_rows, 1);
+      assert.equal(look.row_locator, "role=row");
+      assert.equal(prov(body).arrival.row_locator, "role=row");
+      assert.ok(look.rows.some((r: string) => r.includes(d.subject_token)));
+      assert.equal(prov(body).failure, undefined);
+      assert.equal(existsSync(join(w.runDir, FAILURES_DIR)), false);
       assert.equal(prov(body).client.account, "qa1");
       assert.equal(prov(body).client.locators, "unverified-live");
       // Cropped to the body: the PNG is the body's box.
@@ -699,6 +752,23 @@ describe("the hosted-webmail capture procedure", () => {
         /^delivery failure: <.*> \(sent through the Gmail API as api\d\) was not found in Gmail's Inbox or Spam within 8 s/,
       );
       assert.equal(rb.png, undefined);
+      // What was looked at, and the screen when it gave up.
+      const search = prov(rb).search as Record<string, any>[];
+      assert.ok(search.length >= 2, JSON.stringify(search));
+      assert.deepEqual([...new Set(search.map((l) => l.folder))].sort(), [
+        "inbox",
+        "spam",
+      ]);
+      for (const l of search) {
+        assert.equal(l.location_matched, true, JSON.stringify(l));
+        assert.equal(l.token_rows, 0);
+      }
+      assert.ok(search.some((l) => /%22%5Bes%3At1%3A/.test(l.url)));
+      const sum = evidence(w, prov(rb).failure);
+      assert.equal(prov(rb).failure.step, "arrival");
+      assert.ok(sum.showing.some((x: any) => x.name === "Search mail"));
+      const notFound = cleanup(w).find((c) => c.state === "not-found")!;
+      assert.deepEqual(notFound.failure, prov(rb).failure);
       const states = cleanup(w)
         .map((c) => c.state)
         .sort();
@@ -850,6 +920,9 @@ describe("hosted-webmail session loss and UI drift", () => {
     try {
       const gm = w.webmails["gmail-workspace"];
       gm.keepDestroyed = true;
+      // Gmail's lists swap late: the Trash list still showing under the
+      // Inbox's address is not the message "still in Inbox".
+      gm.viewDelayMs = 1_000;
       const m = mime("kept");
       const results = await captureAll(
         w.provider(),
@@ -866,6 +939,49 @@ describe("hosted-webmail session loss and UI drift", () => {
         ["failed"],
       );
       assert.match(String(rec[0]!.reason), /still in Trash after the delete/);
+      // The screen and the looks that saw it still there.
+      evidence(w, rec[0]!.failure as Record<string, any>);
+      assert.equal((rec[0]!.failure as any).step, "cleanup-check");
+      const looks = rec[0]!.search as Record<string, any>[];
+      assert.ok(looks.some((l) => l.folder === "trash" && l.token_rows === 1));
+      // The final check's first look left a page showing the message:
+      // its typed URL was reloaded, and the Inbox read empty.
+      assert.ok(
+        looks.some(
+          (l) =>
+            l.folder === "inbox" &&
+            l.how === "typed-reload" &&
+            l.token_rows === 0,
+        ),
+        JSON.stringify(looks.map((l) => [l.folder, l.how, l.token_rows])),
+      );
+      assert.ok(w.logs.some((l) => /the screen kept at .*\.png\)$/.test(l)));
+
+      // A delete that leaves the message in its folder is a failed
+      // cleanup saying so, before Trash is ever looked in.
+      gm.keepDestroyed = false;
+      gm.viewDelayMs = 0;
+      gm.deleteIgnored = true;
+      const m2 = mime("kept-2");
+      const again = await captureAll(
+        w.provider(),
+        w,
+        [req("s2", m2, "gmail-web")],
+        [message("s2", m2)],
+        "t2",
+      );
+      assert.equal(again[0]!.status, "done", again[0]!.reason);
+      const rec2 = cleanup(w).at(-1)!;
+      assert.equal(rec2.state, "failed");
+      assert.match(
+        String(rec2.reason),
+        /^the delete left the message in Inbox \(still there after 8 s\)$/,
+      );
+      assert.equal((rec2.failure as any).step, "cleanup-left-folder");
+      assert.ok(
+        !(rec2.search as any[]).some((l) => l.folder === "trash"),
+        "Trash not looked in",
+      );
       assert.ok(
         w.logs.some((l) =>
           /cleanup FAILED for <.*> in gmail-workspace\/qa1: still in Trash/.test(
@@ -902,6 +1018,12 @@ describe("hosted-webmail session loss and UI drift", () => {
       }
       // The second story was not delivered: the adapter was down.
       assert.equal(w.api.sent.length, 1);
+      // One frame and one tree, for the failure that took it down.
+      const withEvidence = results.filter((r) => prov(r).failure);
+      assert.equal(withEvidence.length, 1);
+      evidence(w, prov(withEvidence[0]!).failure);
+      assert.equal(prov(withEvidence[0]!).failure.step, "body-light");
+      assert.equal(readdirSync(join(w.runDir, FAILURES_DIR)).length, 2);
       assert.equal(w.logs.filter((l) => /UI drift/.test(l)).length, 1);
     } finally {
       await w.stop();
@@ -1064,17 +1186,19 @@ describe("hosted-webmail leases and budgets", () => {
 });
 
 describe("hosted-webmail variants", () => {
-  it("Outlook.com: a dark browser; found in the Other tab; light is the background toggle checked, dark the body darker", async () => {
+  it("Outlook.com: found in the Other tab; light in a light browser, the toggle never touched; dark in a dark browser, a pressed toggle switched off once", async () => {
     const w = await world("outlook", { only: ["outlook-com"] });
     try {
-      w.webmails["outlook-com"].filing = () => "other";
+      const ol = w.webmails["outlook-com"];
+      ol.filing = () => "other";
+      ol.togglePressed = true;
       const m = mime("outlook");
       const results = await captureAll(
         w.provider(),
         w,
         [
-          req("s", m, "outlook-web", DESKTOP, "light"),
           req("s", m, "outlook-web", DESKTOP, "dark"),
+          req("s", m, "outlook-web", DESKTOP, "light"),
         ],
         [message("s", m)],
       );
@@ -1084,26 +1208,31 @@ describe("hosted-webmail variants", () => {
       assert.equal(dark.status, "done", dark.reason);
       assert.equal(w.api.sent.length, 1);
       assert.equal(prov(light).arrival.folder, "inbox");
-      assert.equal(
-        prov(light).scheme_applied.evidence,
-        "background toggle checked=true",
+      assert.ok(
+        prov(light).arrival.looks.some((l: any) => l.how === "tab"),
+        "found in a tab",
       );
-      assert.equal(
-        prov(dark).scheme_applied.evidence,
-        "background toggle checked=false",
-      );
-      assert.equal(prov(light).scheme_applied.browser, "dark");
+      // Light: a light browser, the theme light, the toggle untouched.
+      assert.equal(prov(light).scheme_applied.browser, "light");
+      assert.equal(prov(light).scheme_applied.toggle, "untouched");
+      assert.ok(prov(light).scheme_applied.theme_luminance >= 128);
+      assert.equal(prov(light).restart, undefined);
+      // Dark: the browser restarted dark, the message found and opened
+      // again, the pressed toggle switched off by one click.
+      assert.equal(prov(dark).scheme_applied.browser, "dark");
+      assert.equal(prov(dark).scheme_applied.toggle, "switched");
+      assert.ok(prov(dark).scheme_applied.theme_luminance < 128);
+      assert.equal(prov(dark).restart.scheme, "dark");
+      assert.deepEqual(ol.events, ["toggle"]);
       assert.equal(prov(light).crop.locator, 'name="Message body"');
       assert.equal(prov(light).width_check.measured, 800);
-      // The browser runs dark (the profile's colour mode, after the
-      // person's light sign-in on the same profile): every Outlook page
-      // saw it.
-      const probes = w.webmails["outlook-com"].probes;
-      assert.ok(probes.length > 0);
-      assert.ok(
-        probes.every((p) => p.dark),
-        JSON.stringify(probes),
-      );
+      // Light pages first (the light capture ran first although asked
+      // second), then dark ones, never light again.
+      const seen = ol.probes.map((p) => p.dark);
+      assert.equal(seen[0], false, JSON.stringify(ol.probes));
+      assert.equal(seen.at(-1), true);
+      assert.ok(seen.indexOf(true) > 0);
+      assert.ok(!seen.slice(seen.indexOf(true)).includes(false));
       assert.ok(
         prov(dark).scheme_applied.luminance + 40 <
           prov(light).scheme_applied.luminance,
@@ -1112,11 +1241,145 @@ describe("hosted-webmail variants", () => {
         luminance(dark.png!) + 40 < luminance(light.png!),
         `dark ${luminance(dark.png!)} vs light ${luminance(light.png!)}`,
       );
+      assert.deepEqual(ol.messages, [], JSON.stringify(cleanup(w)));
       assert.deepEqual(
-        w.webmails["outlook-com"].messages,
-        [],
-        JSON.stringify(cleanup(w)),
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
       );
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Outlook.com: dark without a toggle is the dark theme's evidence; a delete in Junk Email that is permanent is removed; a theme that ignores the browser fails that scheme only", async () => {
+    const w = await world("outlook2", { only: ["outlook-com"] });
+    try {
+      const ol = w.webmails["outlook-com"];
+      ol.noToggle = true;
+      ol.filing = () => "spam";
+      ol.junkDeletePermanent = true;
+      const a = mime("outlook-junk");
+      // A second story on the same worker after the dark one: its list
+      // row is captured in a light browser, not the one left dark.
+      const c = mime("outlook-after-dark");
+      const firstRun = await captureAll(
+        w.provider(),
+        w,
+        [
+          req("a", a, "outlook-web", DESKTOP, "dark"),
+          req("c", c, "outlook-list", DESKTOP, "light"),
+        ],
+        [message("a", a), message("c", c)],
+      );
+      const r = firstRun.find((x) => x.request.clientId === "outlook-web");
+      const listRow = firstRun.find(
+        (x) => x.request.clientId === "outlook-list",
+      )!;
+      assert.equal(listRow.status, "done", listRow.reason);
+      // (The session check's start page is light; then the dark story,
+      // then the second story's pages, all light.)
+      const seen = ol.probes.map((p) => p.dark);
+      const lastDark = seen.lastIndexOf(true);
+      assert.ok(lastDark > 0, JSON.stringify(seen));
+      assert.ok(lastDark < seen.length - 1, JSON.stringify(seen));
+      assert.ok(seen.slice(lastDark + 1).every((d) => d === false));
+      assert.ok(
+        ol.probes
+          .slice(lastDark + 1)
+          .some((p) => p.page.includes("/junkemail")),
+        "the second story's list read light",
+      );
+      assert.equal(r!.status, "done", r!.reason);
+      assert.equal(prov(r!).arrival.folder_label, "Junk Email");
+      assert.equal(prov(r!).scheme_applied.toggle, "absent");
+      assert.match(
+        prov(r!).scheme_applied.evidence,
+        /no background toggle shown/,
+      );
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.folder, c.via]),
+        [
+          ["removed", "spam", "permanent"],
+          ["removed", "spam", "permanent"],
+        ],
+      );
+      assert.deepEqual(ol.messages, []);
+
+      // A theme that stays light in a dark browser: the dark capture
+      // fails naming why, with the screen kept; the light one stands.
+      ol.ignoresDark = true;
+      ol.filing = () => "inbox";
+      const b = mime("outlook-ignores");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [
+          req("b", b, "outlook-web", DESKTOP, "light"),
+          req("b", b, "outlook-web", DESKTOP, "dark"),
+        ],
+        [message("b", b)],
+        "t2",
+      );
+      const light = results.find((x) => x.request.scheme === "light")!;
+      const dark = results.find((x) => x.request.scheme === "dark")!;
+      assert.equal(light.status, "done", light.reason);
+      assert.equal(dark.status, "failed");
+      assert.equal(dark.png, undefined);
+      assert.match(
+        dark.reason!,
+        /the page is light \(its subject heading's mean luminance \d+\) in a dark browser, for a dark capture: the webmail's theme does not follow the browser's colour mode/,
+      );
+      evidence(w, prov(dark).failure);
+      assert.equal(prov(dark).failure.step, "body-dark");
+      assert.deepEqual(
+        cleanup(w).map((c) => c.state),
+        ["removed", "removed", "removed"],
+      );
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Gmail: a rewritten Message-ID is found by the run token; a row named after its sender is recognised by its cells; a suggestions list echoing the query is not a row", async () => {
+    const w = await world("gmail-search", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.rewriteMessageId = true;
+      gm.rowNamedBySender = true;
+      gm.suggestions = true;
+      const m = mime("search");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "gmail-web"), req("s", m, "gmail-list")],
+        [message("s", m)],
+      );
+      for (const r of results) assert.equal(r.status, "done", r.reason);
+      const body = results.find((r) => r.request.clientId === "gmail-web")!;
+      const row = results.find((r) => r.request.clientId === "gmail-list")!;
+      const token = prov(body).delivery.subject_token;
+      const looks = prov(body).arrival.looks as Record<string, any>[];
+      // The Message-ID search finds nothing, the token search the row.
+      assert.match(looks[0]!.url, /#search\/rfc822msgid%3A/);
+      assert.equal(looks[0]!.token_rows, 0);
+      assert.equal(looks[0]!.location_matched, true);
+      const hit = looks.at(-1)!;
+      assert.match(hit.url, /#search\/%22%5Bes%3At1%3A[0-9a-f]{8}%5D%22$/);
+      assert.equal(hit.token_rows, 1);
+      // The row's own name is the sender only; the token is in its text.
+      assert.ok(hit.rows.includes("Acme Billing"), JSON.stringify(hit.rows));
+      // The suggestion carries the token but is no row.
+      assert.ok(
+        hit.token_nodes.some((n: string) => n.startsWith("list-item/")),
+        JSON.stringify(hit.token_nodes),
+      );
+      assert.ok(prov(row).list_row.name.includes(token));
+      assert.match(prov(row).list_row.name, /Preheader words for search/);
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+      assert.deepEqual(gm.messages, []);
     } finally {
       await w.stop();
     }

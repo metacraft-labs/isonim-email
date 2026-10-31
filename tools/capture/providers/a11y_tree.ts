@@ -4,12 +4,17 @@
 // as pure functions over the tree a call returned:
 // - accessibility locators (a normalized or platform role, an exact,
 //   contained or patterned accessible name) and the nodes they match;
-// - the address bar's value (Chrome's "Address and search bar");
+// - the address bar's value (Chrome's "Address and search bar"), and
+//   whether it holds a URL (compared percent-decoded);
+// - a message's row in a list: a row whose accessible text (its name,
+//   or the names and text inside it) carries the run token, by the
+//   first of several row locators that finds one;
 // - the story region: where an opened message's body is when the
 //   webmail gives it no name of its own, from the story's own text;
 // - the UI fingerprint of a reading pane: its roles and depths, the
 //   body and the list's rows left out, every name and text ignored;
-// - masks painted over a captured region.
+// - masks painted over a captured region;
+// - a summary of the tree for a failure's evidence.
 // Nothing here talks to GuiAssert or the browser (webmail_desktop.ts
 // does), so every rule is tested on synthetic trees.
 
@@ -107,7 +112,7 @@ export function closest(f: Flat, loc: A11yLocator): Flat | null {
 
 /**
  * Where to click a node: the centre of its deepest showing descendant
- * whose name carries `text` (a row's subject), else the node's own
+ * whose name or text carries `text` (a row's subject), else the node's own
  * bounds. An inline element that wraps (a link over two lines) has a
  * bounding box whose centre may lie between its fragments, on nothing.
  */
@@ -118,7 +123,10 @@ export function clickTarget(
   let best: { b: Rect; depth: number } | null = null;
   const walk = (n: GaNode, depth: number): void => {
     for (const c of n.children ?? []) {
-      if (showing(c) && (c.name ?? "").includes(text))
+      if (
+        showing(c) &&
+        ((c.name ?? "").includes(text) || (c.text ?? "").includes(text))
+      )
         if (best === null || depth + 1 > best.depth)
           best = { b: c.bounds, depth: depth + 1 };
       walk(c, depth + 1);
@@ -162,17 +170,33 @@ export function locationHost(value: string): string | null {
   }
 }
 
+/** `s` with every valid percent-escape decoded (an invalid one kept). */
+export function percentDecoded(s: string): string {
+  return s.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+
 /**
  * Whether the address bar holds `url`: the same host and the same path,
- * query and fragment, whatever scheme Chrome leaves out of its display.
+ * query and fragment, whatever scheme Chrome leaves out of its display,
+ * compared percent-decoded (Chrome shows a fragment's `:` and `@`
+ * unescaped, so `#search/rfc822msgid:a@b` is the typed
+ * `#search/rfc822msgid%3Aa%40b`).
  */
 export function sameLocation(value: string | null, url: string): boolean {
   if (value === null) return false;
   const strip = (u: string): string =>
-    u
-      .trim()
-      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
-      .replace(/\/(?=[#?]|$)/, "");
+    percentDecoded(
+      u
+        .trim()
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+        .replace(/\/(?=[#?]|$)/, ""),
+    );
   return strip(value) === strip(url);
 }
 
@@ -267,6 +291,191 @@ export function storyTexts(html: string): string[] {
 /** A node's own text: its name and its text content, normalized. */
 export function nodeText(n: GaNode): string {
   return normText(`${n.name ?? ""} ${n.text ?? ""}`);
+}
+
+// ---------------------------------------------------------------------------
+// A message's row in a list, by the run token
+// ---------------------------------------------------------------------------
+
+/** Roles whose content is typed: never a row's text. */
+const EDITABLE_ROLES = new Set(["text-field", "text-area", "combo-box"]);
+
+/**
+ * A row's accessible text: its own name and the names and text of every
+ * node inside it, in order, white space collapsed. Editable fields and
+ * what is inside them are left out: a search field holding a token
+ * query does not make its row the message's. Chrome folds the text of
+ * the generic containers it prunes into the nearest kept node, so a row
+ * named after its sender alone still carries the subject in its cells.
+ */
+export function rowText(row: GaNode): string {
+  const parts: string[] = [];
+  const walk = (n: GaNode): void => {
+    if (EDITABLE_ROLES.has(n.role)) return;
+    for (const t of [n.name, n.text]) if (t) parts.push(t);
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(row);
+  return parts
+    .join(" ")
+    .replace(/\uFFFC/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Whether `text` carries `token`, both normalized (normText). */
+export function carriesToken(text: string, token: string): boolean {
+  const t = normText(token);
+  return t !== "" && ` ${normText(text)} `.includes(` ${t} `);
+}
+
+export interface TokenRows {
+  /** The rows carrying the token, by the first alternative that has any. */
+  rows: Flat[];
+  /** That alternative's index; null when none has a row carrying it. */
+  locator: number | null;
+  /** Every row any alternative matched (the search record's `rows`). */
+  seen: Flat[];
+}
+
+/**
+ * The rows of a list that carry `token` (module doc: "a row carries the
+ * token when its accessible text does"): per alternative locator, in
+ * order, the showing nodes it matches inside `scope` that are not inside
+ * another node it matches, kept when their accessible text carries the
+ * token; the first alternative that keeps any wins.
+ */
+export function tokenRows(
+  flat: Flat[],
+  alternatives: A11yLocator[],
+  token: string,
+  scope: Flat | null,
+): TokenRows {
+  const seen: Flat[] = [];
+  let found: { rows: Flat[]; locator: number } | null = null;
+  alternatives.forEach((loc, i) => {
+    const all = findShowing(flat, loc, scope);
+    const set = new Set(all);
+    const outer = all.filter((f) => {
+      for (let a = f.parent; a !== null; a = a.parent)
+        if (set.has(a)) return false;
+      return true;
+    });
+    for (const f of outer) if (!seen.includes(f)) seen.push(f);
+    if (found !== null) return;
+    const rows = outer.filter((f) => carriesToken(rowText(f.node), token));
+    if (rows.length > 0) found = { rows, locator: i };
+  });
+  const f = found as { rows: Flat[]; locator: number } | null;
+  return f === null
+    ? { rows: [], locator: null, seen }
+    : { rows: f.rows, locator: f.locator, seen };
+}
+
+/**
+ * Every showing node whose own name or text carries `token`, editable
+ * fields left out (the address bar and a search field hold a token
+ * search's query).
+ */
+export function tokenNodes(flat: Flat[], token: string): Flat[] {
+  return flat.filter(
+    (f) =>
+      showing(f.node) &&
+      !EDITABLE_ROLES.has(f.node.role) &&
+      (carriesToken(f.node.name ?? "", token) ||
+        carriesToken(f.node.text ?? "", token)),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The tree, summarised for a failure's evidence
+// ---------------------------------------------------------------------------
+
+/** `s` cut to `n` characters (an ellipsis marks a cut), with every
+ * `redact` string replaced (the account's address), as written and
+ * percent-encoded (a sign-in redirect's `login_hint=qa%40…`). */
+export function clipText(s: string, n: number, redact: string[] = []): string {
+  let t = s
+    .replace(/\uFFFC/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const r of redact)
+    for (const form of new Set([r, encodeURIComponent(r)]))
+      if (form !== "")
+        t = t.replace(
+          new RegExp(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"),
+          "<account address>",
+        );
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+export interface TreeSummary {
+  schema: "isonim-email/a11y-summary/1";
+  location: string | null;
+  nodes: number;
+  truncated: boolean;
+  read_ms: number;
+  /** How many showing nodes there were (`showing` holds at most the cap). */
+  showing_count: number;
+  showing: {
+    depth: number;
+    role: string;
+    native: string;
+    name: string;
+    text: string;
+    value: string;
+    bounds: Rect;
+    states: string[];
+  }[];
+}
+
+/** A password field, by its role or platform role ("password text"). */
+const PASSWORD_ROLE = /password/i;
+
+/** The states a summary keeps (the others are implied by "showing"). */
+const SUMMARY_STATES = ["checked", "selected", "focused", "expanded"];
+
+/**
+ * A failing step's accessibility tree, summarised for its evidence: the address bar's value, the read's size, and every
+ * showing node as depth, roles, name, text and value (each clipped to
+ * 160 characters, `redact` replaced; a password field's value left
+ * out), bounds and the states that say
+ * what is chosen, up to `cap` nodes.
+ */
+export function treeSummary(
+  read: {
+    flat: Flat[];
+    location: string | null;
+    nodes: number;
+    truncated: boolean;
+    ms: number;
+  },
+  redact: string[] = [],
+  cap = 2000,
+): TreeSummary {
+  const shown = read.flat.filter((f) => showing(f.node));
+  return {
+    schema: "isonim-email/a11y-summary/1",
+    location:
+      read.location === null ? null : clipText(read.location, 400, redact),
+    nodes: read.nodes,
+    truncated: read.truncated,
+    read_ms: Math.round(read.ms),
+    showing_count: shown.length,
+    showing: shown.slice(0, cap).map((f) => ({
+      depth: f.depth,
+      role: f.node.role,
+      native: f.node.nativeRole,
+      name: clipText(f.node.name ?? "", 160, redact),
+      text: clipText(f.node.text ?? "", 160, redact),
+      // A password field's value is never kept, whatever it reads.
+      value: PASSWORD_ROLE.test(`${f.node.role} ${f.node.nativeRole}`)
+        ? ""
+        : clipText(f.node.value ?? "", 160, redact),
+      bounds: f.node.bounds as Rect,
+      states: f.node.states.filter((x) => SUMMARY_STATES.includes(x)),
+    })),
+  };
 }
 
 /**

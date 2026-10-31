@@ -14,7 +14,9 @@
 // reported naming the scope and the domain-wide delegation; and no
 // error, stack or command output carries the key (a sentinel key id,
 // each PEM line), the assertion or the token, even when the endpoints
-// echo them. The smoke command sends a given message, announces the
+// echo them. A token request that gets no HTTP answer (the connection
+// reset) is made once more, and succeeds then; twice is a failure that
+// says so; an HTTP refusal is never retried. The smoke command sends a given message, announces the
 // operator override, sends only to the QA accounts with it, and
 // verifies the Sent copy with gmail.metadata.
 //
@@ -152,6 +154,10 @@ class FakeGoogle {
   headers: Record<string, unknown>[] = [];
   signatureValid: boolean[] = [];
   sent: { path: string; auth: string; raw: string }[] = [];
+  // Token requests answered by a reset of the connection, before any
+  // HTTP answer (a network failure), and every token request seen.
+  dropTokens = 0;
+  tokenRequests = 0;
   // Message-ID and From of each sent message, by API id.
   byId = new Map<string, { messageId: string; from: string }>();
   readonly pki = makeTestPki("workspace-send test CA");
@@ -165,6 +171,14 @@ class FakeGoogle {
     this.server = createServer(
       { key: this.pki.keyPem, cert: this.pki.certChainPem },
       (req, res) => {
+        if (req.url === "/token") {
+          this.tokenRequests++;
+          if (this.dropTokens > 0) {
+            this.dropTokens--;
+            req.socket.destroy();
+            return;
+          }
+        }
         const chunks: Buffer[] = [];
         req.on("data", (c: Buffer) => chunks.push(c));
         req.on("end", () => {
@@ -517,6 +531,62 @@ describe("Workspace send through the Gmail API", () => {
         return true;
       },
     );
+    google.mode = "ok";
+  });
+
+  it("makes a token request that got no HTTP answer once more, and never retries a refusal or the send", async () => {
+    google.mode = "ok";
+    const { host } = credentialsDir("retry");
+    const receiver = loadHostedAccount("gmail-workspace", host, {
+      needsAppPassword: false,
+    });
+    const opts = { ...options(), tokenRetryMs: 50 };
+    // One reset: the retry gets the token, and one message is sent.
+    google.dropTokens = 1;
+    google.tokenRequests = 0;
+    const sent = google.sent.length;
+    await deliverWorkspace(
+      new Uint8Array(STORY),
+      loadWorkspaceSender(host),
+      receiver,
+      opts,
+    );
+    assert.equal(google.tokenRequests, 2);
+    assert.equal(google.sent.length, sent + 1);
+    // Two resets: a failure that says it retried once, nothing sent.
+    google.dropTokens = 2;
+    google.tokenRequests = 0;
+    await assert.rejects(
+      deliverWorkspace(
+        new Uint8Array(STORY),
+        loadWorkspaceSender(host),
+        receiver,
+        opts,
+      ),
+      (err: Error) => {
+        assert.ok(err instanceof WorkspaceSendError);
+        assert.match(err.message, /^token: cannot reach localhost:\d+: /);
+        assert.match(err.message, /\(after one retry\)$/);
+        assert.deepEqual(secretsIn(`${err.message}\n${err.stack}`), []);
+        return true;
+      },
+    );
+    assert.equal(google.tokenRequests, 2);
+    assert.equal(google.sent.length, sent + 1);
+    // An HTTP refusal is an answer: asked once.
+    google.dropTokens = 0;
+    google.mode = "refuse-delegation";
+    google.tokenRequests = 0;
+    await assert.rejects(
+      deliverWorkspace(
+        new Uint8Array(STORY),
+        loadWorkspaceSender(host),
+        receiver,
+        opts,
+      ),
+      /^WorkspaceSendError: token: HTTP 401/,
+    );
+    assert.equal(google.tokenRequests, 1);
     google.mode = "ok";
   });
 

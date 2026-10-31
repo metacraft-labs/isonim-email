@@ -5,7 +5,7 @@
 #
 # `just test` uses this to run its test recipes concurrently once their
 # shared prerequisites are built (each recipe runs with --no-deps, so the
-# Tailwind map and the story drivers are not rebuilt by six recipes at
+# Tailwind map and the story drivers are not rebuilt by several recipes at
 # once). The recipes are independent by construction: every test keeps
 # its services, browsers, desktop sessions, ports and scratch state under
 # directories of its own, and the checks that no process or state is left
