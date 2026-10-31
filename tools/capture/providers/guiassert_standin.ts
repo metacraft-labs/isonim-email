@@ -39,7 +39,10 @@
 // the last of them: the next `find` already sees the next screen (its
 // address), as a page that changes while a frame is read. A frame written by `ocr` / `screenshot` is a text
 // file holding what the simulated display shows, so a test can look into
-// it.
+// it; `screenshot --region x,y,w,h` writes a real PNG of that size (the
+// screen's `fill` colour, grey by default), as the captures read it.
+// `tree --pid` answers the elements `find` would list (or the screen's
+// own `tree` nodes, when it has them) under one application node.
 
 import {
   appendFileSync,
@@ -49,6 +52,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { writePng } from "../contact_sheet.ts";
 
 type Rect = [number, number, number, number];
 
@@ -99,6 +103,10 @@ export interface StandinScreen {
   radios?: StandinRadio[];
   /** Moves on to `next` by itself after this many frames of it. */
   moveOn?: { frames: number; next: string };
+  /** The colour a region screenshot is filled with ([r, g, b]). */
+  fill?: [number, number, number];
+  /** Extra accessibility nodes `tree` reports (each with its children). */
+  tree?: unknown[];
 }
 
 export interface StandinScenario {
@@ -174,6 +182,7 @@ export function main(argv: string[]): number {
     "--stdin",
     "--ignore-case",
     "--force",
+    "--no-cursor",
   ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -307,6 +316,22 @@ export function main(argv: string[]): number {
         break;
       }
       const path = flag("--out") ?? "";
+      const region = flag("--region");
+      if (verb === "screenshot" && region !== undefined) {
+        const [, , w, h] = region.split(",").map(Number) as Rect;
+        const [r, g, b] = screen().fill ?? [128, 128, 128];
+        const data = new Uint8Array(w * h * 3);
+        for (let i = 0; i < data.length; i += 3) {
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+        }
+        writeFileSync(path, writePng({ width: w, height: h, data }));
+        code = out(verb, {
+          image: { path, format: "png", width: w, height: h, scale: 1 },
+        });
+        break;
+      }
       writeFileSync(path, display());
       const image = {
         path,
@@ -333,6 +358,7 @@ export function main(argv: string[]): number {
       }
       break;
     }
+    case "tree":
     case "find": {
       const s = screen();
       const scrolled = state.scrolls?.[state.screen] ?? 0;
@@ -406,7 +432,28 @@ export function main(argv: string[]): number {
                 text: s.location,
               },
             ]),
-      ].filter(
+      ];
+      if (verb === "tree") {
+        const children = [
+          ...els.map((e) => ({ ...e, children: [] })),
+          ...((s.tree ?? []) as object[]),
+        ];
+        code = out(verb, {
+          root: {
+            path: "/app[1]",
+            role: "application",
+            nativeRole: "application",
+            name: "standin",
+            bounds: null,
+            states: [],
+            children,
+          },
+          nodeCount: children.length + 1,
+          truncated: false,
+        });
+        break;
+      }
+      const matched = els.filter(
         (e) =>
           (role === undefined || e.role === role) &&
           (name === undefined ||
@@ -419,7 +466,7 @@ export function main(argv: string[]): number {
               : e.name.includes(contains))) &&
           states.every((st) => e.states.includes(st)),
       );
-      code = out(verb, { elements: els, truncated: false });
+      code = out(verb, { elements: matched, truncated: false });
       break;
     }
     case "click": {

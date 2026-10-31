@@ -27,9 +27,9 @@
 //    check: the same browser started again in the same session, without
 //    automation, on the inbox URL, and the mailbox read off the screen by
 //    OCR (providers/webmail_signin.ts `verifySignedIn`; not signed in, the
-//    screen is kept as check-screen.png); signin.json is written.
-//    `--playwright-check` adds the earlier check under Playwright, which a
-//    provider can see as automation, so it is off by default.
+//    screen is kept as check-screen.png); signin.json is written. No
+//    browser on a webmail profile is ever started under Playwright, the
+//    DevTools protocol or WebDriver (providers/webmail_browser.ts).
 // 6. Once every browser on the profile has stopped, the password hashes
 //    Chrome keeps for its password-reuse warning are removed from the
 //    profile (webmail_profiles.ts `scrubPasswordHashes`: Chrome writes the
@@ -54,7 +54,7 @@
 // never on a command line, in an environment, on stdout or stderr, in a
 // record, or in a kept screenshot (each one passes GuiAssert's guard).
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -65,8 +65,6 @@ import {
 import { hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
-import { resolveDriver } from "./providers/browser_emulation.ts";
 import {
   type GaSession,
   GuiAssert,
@@ -110,26 +108,22 @@ import {
   guardAttempt,
   markPasswordTyped,
 } from "./providers/webmail_signin_guard.ts";
+import { startWebmailBrowser } from "./providers/webmail_browser.ts";
 import { PROVIDER_SIGNIN } from "./providers/webmail_signin_steps.ts";
 import {
   accountName,
   accountProfile,
   browsersOn,
-  checkSignedIn,
   holdsSecrets,
   PROFILES_ENV,
   profilesRoot,
   scrubPasswordHashes,
   secretsAtRest,
-  signinBrowserArgs,
   stopBrowser,
-  waitSandboxed,
   type WebmailBrowser,
   WEBMAIL_SIGNIN,
   webmailBrowser,
-  webmailLaunchOptions,
   writeSigninRecord,
-  writeWebmailProfilePrefs,
 } from "./providers/webmail_profiles.ts";
 import {
   runTypingCheck,
@@ -142,8 +136,7 @@ const SETS = Object.keys(PROVIDER_SIGNIN).filter((s) => s in WEBMAIL_SIGNIN);
 const USAGE = `usage: email-webmail-signin SET [ACCOUNT] [--account NAME]
                             [--vnc] [--takeover] [--manual] [--check-only]
                             [--typing-check] [--override-cooldown] [--dir DIR]
-                            [--timeout SECONDS] [--playwright-check]
-                            [--unsafe-no-sandbox]
+                            [--timeout SECONDS] [--unsafe-no-sandbox]
 usage: email-webmail-signin SET ACCOUNT --scrub-profile
 
 Signs a hosted-webmail QA account's browser profile in, by itself, with
@@ -180,9 +173,6 @@ signin.json.
                     compares a salted SHA-256 of what arrived with the
                     account file's; prints MATCH or MISMATCH (and whether
                     the lengths match), nothing else; not an attempt
---playwright-check  also check the profile under Playwright (RISK: the
-                    provider sees an automated browser on the account's
-                    session: navigator.webdriver, --enable-automation)
 --override-cooldown OPERATOR OVERRIDE: attempt even within the cool-down
                     (each password sign-in a provider challenges raises
                     the chance it locks the account)
@@ -221,7 +211,6 @@ interface Options {
   manual: boolean;
   overrideCooldown: boolean;
   timeoutS: number;
-  playwrightCheck: boolean;
   unsafeNoSandbox: boolean;
   scrubProfile: boolean;
 }
@@ -317,35 +306,24 @@ async function launchWebmailBrowser(a: {
   label: string;
   onChild: (c: ChildProcess) => void;
 }): Promise<ChildProcess | null> {
-  // No password hash is loaded into the browser, and its preferences.
-  scrubPasswordHashes(a.userDataDir);
-  writeWebmailProfilePrefs(a.userDataDir);
-  let said = "";
-  const child = spawn(
-    a.chrome.path,
-    signinBrowserArgs(a.userDataDir, a.url, {
-      unsafeNoSandbox: a.unsafeNoSandbox,
-      extra: [...SIGNIN_SESSION_SWITCHES],
-    }),
-    { env: a.env, stdio: ["ignore", "ignore", "pipe"] },
-  );
-  a.onChild(child);
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (d: string) => {
-    said = (said + d).slice(-8192);
-  });
-  if (a.unsafeNoSandbox) {
+  if (a.unsafeNoSandbox)
     say(
       `WARNING: ${a.label}: --unsafe-no-sandbox: the browser runs WITHOUT Chromium's sandbox.`,
     );
-    return child;
-  }
-  const sandboxed = await waitSandboxed(child, a.userDataDir, () => said);
-  if (sandboxed.ok) return child;
-  await stopBrowser(child);
+  const started = await startWebmailBrowser({
+    chrome: a.chrome,
+    userDataDir: a.userDataDir,
+    url: a.url,
+    env: a.env,
+    extra: [...SIGNIN_SESSION_SWITCHES],
+    // The sign-in reads the provider's pages by OCR, in light.
+    scheme: "light",
+    unsafeNoSandbox: a.unsafeNoSandbox,
+    onChild: a.onChild,
+  });
+  if (started.ok) return started.child;
   say(
-    `CANNOT RUN: ${a.label}: Chromium's sandbox is not running (${sandboxed.reason}). ` +
-      "It needs unprivileged user namespaces (or a setuid sandbox named by CHROME_DEVEL_SANDBOX); --unsafe-no-sandbox runs without it, unsafely.",
+    `CANNOT RUN: ${a.label}: ${started.reason}; --unsafe-no-sandbox runs without it, unsafely.`,
   );
   return null;
 }
@@ -831,7 +809,7 @@ async function signInAccountOnce(
     } finally {
       await stopBrowser(checker);
     }
-    let checked:
+    const checked:
       | { signedIn: true; host: string }
       | {
           signedIn: false;
@@ -840,33 +818,6 @@ async function signInAccountOnce(
       ? { signedIn: true, host: new URL(w.inboxUrl).host }
       : verified;
 
-    // Opt-in only: Playwright's launch is visible to the provider as an
-    // automated browser on the account's session (navigator.webdriver,
-    // --enable-automation), which risks the session the check is for.
-    if (checked.signedIn && o.playwrightCheck) {
-      say(
-        `WARNING: ${label}: --playwright-check: opening the profile under Playwright; the provider can see it as automation.`,
-      );
-      const driver = resolveDriver(host.env);
-      if ("reason" in driver) throw new Error(driver.reason);
-      const pw: typeof import("playwright-core") = await import(
-        pathToFileURL(join(driver.dir, "index.mjs")).href
-      );
-      const context = await pw.chromium.launchPersistentContext(
-        profile.userDataDir,
-        {
-          ...webmailLaunchOptions(host.env, false, {
-            unsafeNoSandbox: o.unsafeNoSandbox,
-          }),
-          env,
-        },
-      );
-      try {
-        checked = await checkSignedIn(context, w, o.timeoutS * 1000);
-      } finally {
-        await context.close();
-      }
-    }
     const prefix =
       outcome === null || outcome.result === "signed-in"
         ? ""
@@ -890,7 +841,7 @@ async function signInAccountOnce(
       signed_in_at: new Date().toISOString(),
       host: checked.host,
       browser: `${chrome.label} (${chrome.path})`,
-      verified_by: o.playwrightCheck ? "ocr+playwright" : "ocr",
+      verified_by: "ocr",
     });
     say(
       `SIGNED IN: ${label} on ${checked.host}; recorded in ${profile.record}`,
@@ -913,7 +864,6 @@ function parseArgs(args: string[]): Options | string {
     manual: false,
     overrideCooldown: false,
     timeoutS: 45,
-    playwrightCheck: false,
     unsafeNoSandbox: false,
     scrubProfile: false,
   };
@@ -934,7 +884,6 @@ function parseArgs(args: string[]): Options | string {
     else if (a === "--dir")
       process.env.ISONIM_EMAIL_CREDENTIALS_DIR = resolve(value());
     else if (a === "--timeout") o.timeoutS = Number(value());
-    else if (a === "--playwright-check") o.playwrightCheck = true;
     else if (a === "--unsafe-no-sandbox") o.unsafeNoSandbox = true;
     else if (a === "--scrub-profile") o.scrubProfile = true;
     else if (a.startsWith("-")) return `unknown option ${a}`;
@@ -952,11 +901,7 @@ function parseArgs(args: string[]): Options | string {
     return "--override-cooldown applies to an automated attempt only";
   if (
     o.typingCheck &&
-    (o.manual ||
-      o.checkOnly ||
-      o.takeover ||
-      o.overrideCooldown ||
-      o.playwrightCheck)
+    (o.manual || o.checkOnly || o.takeover || o.overrideCooldown)
   )
     return "--typing-check takes only --vnc, --dir, --timeout and --unsafe-no-sandbox";
   if (o.scrubProfile) {

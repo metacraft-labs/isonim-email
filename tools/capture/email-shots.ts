@@ -172,8 +172,7 @@ options:
                         clients are roundcube,snappymail; the desktop
                         clients are thunderbird,evolution,geary,kmail,
                         claws-mail; backend b's are gmail-web,
-                        gmail-mobile-web,yahoo-web,outlook-web,
-                        outlook-mobile-web, and the inbox-list rows
+                        yahoo-web,outlook-web, and the inbox-list rows
                         gmail-list,yahoo-list,outlook-list (captured only
                         when named here). On an --affected
                         run a named client whose families the change did

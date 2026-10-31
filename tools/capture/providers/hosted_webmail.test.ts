@@ -1,18 +1,25 @@
 // tools/capture/providers/hosted_webmail.test.ts — the hosted-webmail
-// provider (backend b) end to end, against local stand-ins.
+// provider (backend b) end to end, against local stand-ins, in the real
+// webmail browser driven through GuiAssert.
 //
-// What is proven, each over the real procedure in real Chromium under
-// Playwright, on persistent profiles signed in beforehand (by the test
-// playing the person):
-// - routing: backend b joins a run only when named, and its list rows
-//   only when --clients names them;
+// What is proven, each over the real procedure in Google Chrome (the dev
+// shell's webmail browser, started by the sign-in's launcher) in a real
+// GuiAssert session (Xvfb, AT-SPI, XTest, tesseract), on persistent
+// profiles signed in beforehand by the test playing the person (the same
+// browser started normally on a /login page, stopped with SIGINT):
+// - no automation, in every test: every browser the provider starts
+//   carries no automation switch, and every page it loads sees
+//   navigator.webdriver false and a user agent that is not headless;
+// - routing: backend b joins a run only when named, its list rows only
+//   when --clients names them, and it has no mobile-web clients;
 // - a story is delivered once by Workspace send (the fake Gmail API
 //   receives exactly the submitted copy for the QA address), found in
 //   Inbox by its Message-ID, its list row captured before it is opened
-//   (sender, subject with the run token, the preheader as the preview),
-//   opened, its body cropped, and then removed from every folder (Trash
-//   included), the cleanup record saying so; the provenance names the
-//   account by its file's name, never its address;
+//   (its accessible name and OCR text: sender, the run token, the
+//   preheader as the preview), opened, its body cropped as the story
+//   region to exactly the requested width, and then removed from every
+//   folder (Trash included), the cleanup record saying so; the
+//   provenance names the account by its file's name, never its address;
 // - a message filed as Spam is found there and the provenance says so;
 //   one that never arrives fails as a delivery failure after the bounded
 //   wait, never a capture of nothing;
@@ -20,21 +27,24 @@
 //   needs-login, fails its requests with "session lost:" naming the
 //   sign-in recipe, says so on the log at once, and nothing is ever
 //   typed into the sign-in page; mid-capture it is a lost session, not
-//   UI drift; an inbox that does not load at all is not a lost session;
-// - a message that cannot be shown to be the delivered one (its opened
-//   subject lacks the run token) is neither captured nor deleted;
+//   UI drift; an inbox that does not load at all (the browser's error
+//   page) is not a lost session;
+// - a message that cannot be shown to be the delivered one (no heading
+//   carries the run token) is neither captured nor deleted;
 // - a removal that leaves the message in a folder is a failed cleanup;
-// - UI drift: a body locator that matches nothing fails loudly naming
-//   the adapter, the locator and its selector, and takes the adapter
-//   down for the rest of the run (its next story is not even delivered);
+// - UI drift: a body hidden from the accessibility tree fails loudly
+//   naming the adapter and the locator, and takes the adapter down for
+//   the rest of the run (its next story is not even delivered);
 // - leases: two stories for Gmail with two accounts are captured at the
-//   same time on different accounts; an account leased by a running
-//   process is left to it; a stale lease is taken over and recorded;
+//   same time on different accounts (two sessions, two browsers); an
+//   account leased by a running process is left to it; a stale lease is
+//   taken over and recorded;
 // - budgets: an account at 90% of its daily budget drops out, and a set
 //   with none left fails with "budget:";
-// - Outlook.com: a message in the Other tab is found; light is the
-//   background toggle on, dark the body recoloured (data-ogsc) and
-//   darker; the mobile-web variant reopens the profile as a phone;
+// - Outlook.com: its browser runs dark (its pages see
+//   prefers-color-scheme dark, Gmail's light); a message in the Other
+//   tab is found; light is the background toggle checked, dark the body
+//   darker;
 // - the fidelity comparison: the same MIME delivered twice matches, a
 //   MIME differing in one colour does not;
 // - through the harness: once the first capture has learnt the UI
@@ -46,11 +56,13 @@
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails need a real account signed in and the Gmail API sends
 // real mail, so neither can be used from a test. webmail_standin.ts plays
-// each webmail with the adapter's DOM contract on loopback, and Google's
-// token endpoint and Gmail send over TLS with a throwaway authority.
-// Chromium, Playwright, the persistent profiles, the provider, the
-// Workspace delivery code, the leases, budgets and the harness are real.
-// Run with:
+// each webmail with the adapter's accessibility contract on loopback, and
+// Google's token endpoint and Gmail send over TLS with a throwaway
+// authority. Google Chrome, GuiAssert, the persistent profiles, the
+// provider, the Workspace delivery code, the leases, budgets and the
+// harness are real.
+// Run (inside `nix develop`, which puts guiassert and the webmail browser
+// on PATH) with:
 //   node --test tools/capture/providers/hosted_webmail.test.ts
 
 import { describe, it, after } from "node:test";
@@ -69,9 +81,8 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { readPng } from "../contact_sheet.ts";
-import { resolveDriver } from "./browser_emulation.ts";
+import { GuiAssert, sessionEnv } from "./guiassert.ts";
 import { executePlan, routeRequests, type MatrixSpec } from "./harness.ts";
 import {
   fidelityVerdict,
@@ -79,7 +90,7 @@ import {
   type HostedWebmailTimings,
 } from "./hosted_webmail.ts";
 import { registeredProviders } from "./registry.ts";
-import { CREDENTIALS_SCHEMA } from "./requirements.ts";
+import { CREDENTIALS_SCHEMA, findExecutable } from "./requirements.ts";
 import type {
   CaptureRequest,
   CaptureResult,
@@ -91,11 +102,22 @@ import type {
 import { utcDay } from "./webmail_accounts.ts";
 import { rebaseAdapter, WEBMAIL_ADAPTERS } from "./webmail_adapters.ts";
 import {
+  automationSwitchesIn,
+  sessionSwitches,
+  startWebmailBrowser,
+} from "./webmail_browser.ts";
+import {
   accountProfile,
-  webmailLaunchOptions,
+  stopBrowser,
+  webmailBrowser,
   writeSigninRecord,
 } from "./webmail_profiles.ts";
-import { FakeGmailApi, StandinWebmail, type Skin } from "./webmail_standin.ts";
+import {
+  FakeGmailApi,
+  htmlOf,
+  StandinWebmail,
+  type Skin,
+} from "./webmail_standin.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
 const repoRoot = resolve(scriptDir, "..", "..", "..");
@@ -133,21 +155,34 @@ const SA_KEY = {
   client_email: "sender@project.iam.invalid",
 };
 
+// Shorter than the live bounds, long enough for a loaded host: every
+// step is a GuiAssert call (a process) and a tree read, and the full
+// suite runs many browsers at once (an 8 s step bound was measured too
+// short there: a Yahoo page opened by a click took longer to show).
 const FAST: Partial<HostedWebmailTimings> = {
-  arrivalTimeoutMs: 6_000,
-  pollMs: 200,
-  listSettleMs: 700,
-  stepTimeoutMs: 4_000,
+  arrivalTimeoutMs: 8_000,
+  pollMs: 300,
+  listSettleMs: 2_500,
+  stepTimeoutMs: 15_000,
   leaseWaitMs: 1_500,
   leasePollMs: 100,
-  signinCheckMs: 8_000,
-  imageTimeoutMs: 300,
-  stableMs: 50,
-  cleanupFindMs: 4_000,
+  signinCheckMs: 30_000,
+  offHostMs: 1_500,
+  imageTimeoutMs: 3_000,
+  stableMs: 150,
+  cleanupFindMs: 8_000,
 };
+// The stand-ins lay their reading pane out to give the body 800 px; a
+// lower window keeps the session's display small.
+const WINDOW_HEIGHT = 1000;
 
 const DESKTOP: ViewportSpec = { name: "desktop", width: 800, dpr: 1 };
 const MOBILE: ViewportSpec = { name: "mobile", width: 375, dpr: 3 };
+
+const GA_BIN = findExecutable("guiassert", {
+  env: process.env,
+  platform: process.platform,
+});
 
 function mime(name: string, colour = "#336699"): Uint8Array {
   return new Uint8Array(
@@ -180,13 +215,18 @@ function mime(name: string, colour = "#336699"): Uint8Array {
 const sha = (b: Uint8Array): string =>
   createHash("sha256").update(b).digest("hex");
 
+// The story's HTML part, as the harness hands it to a provider: the
+// story region is found from its text.
 function message(story: string, bytes: Uint8Array): StoryMessage {
-  return { story, mime: bytes, html: "" };
+  return {
+    story,
+    mime: bytes,
+    html: htmlOf(Buffer.from(bytes).toString("latin1")).html,
+  };
 }
 
 const FAMILY: Record<string, string> = {
   "gmail-web": "gmailWeb",
-  "gmail-mobile-web": "gmailWeb",
   "gmail-list": "gmailWeb",
   "yahoo-web": "yahoo",
   "outlook-web": "outlookWeb",
@@ -231,6 +271,8 @@ interface World {
   webmails: Record<SetId, StandinWebmail>;
   api: FakeGmailApi;
   logs: string[];
+  // The command line of every browser the provider started.
+  argvs: string[][];
   provider(extra?: {
     env?: Record<string, string>;
     timings?: Partial<HostedWebmailTimings>;
@@ -238,21 +280,70 @@ interface World {
   stop(): Promise<void>;
 }
 
-let pw: typeof import("playwright-core") | null = null;
-async function playwright(): Promise<typeof import("playwright-core")> {
-  if (pw !== null) return pw;
-  const driver = resolveDriver(process.env);
-  if ("reason" in driver) throw new Error(driver.reason);
-  pw = (await import(
-    pathToFileURL(join(driver.dir, "index.mjs")).href
-  )) as typeof import("playwright-core");
-  return pw;
+// The person's sign-in, played by the test: the webmail browser started
+// normally on the account's profile at the stand-in's /login page, which
+// sets the session cookie and redirects to the mailbox; once the mailbox
+// was requested with it, the browser is stopped with SIGINT so that it
+// writes the cookie.
+async function signInAsAPerson(
+  env: Record<string, string | undefined>,
+  stateDir: string,
+  accounts: { userDataDir: string; webmail: StandinWebmail; account: string }[],
+): Promise<void> {
+  if (accounts.length === 0) return;
+  const chrome = webmailBrowser(env);
+  if ("reason" in chrome) throw new Error(chrome.reason);
+  if (GA_BIN === null) throw new Error("no guiassert on PATH");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const ga = new GuiAssert({ bin: GA_BIN, stateDir, env, timeoutMs: 60_000 });
+  const session = await ga.sessionStart({
+    name: `person-${process.pid}-${Date.now()}`,
+    width: 1280,
+    height: 900,
+    vncSocket: false,
+  });
+  try {
+    for (const a of accounts) {
+      const seen = a.webmail.userAgents.length;
+      const started = await startWebmailBrowser({
+        chrome,
+        userDataDir: a.userDataDir,
+        url: `${a.webmail.origin}/login?account=${a.account}`,
+        env: sessionEnv(env, session),
+        extra: sessionSwitches(1280, 900),
+        scheme: "light",
+        unsafeNoSandbox: false,
+      });
+      if (!started.ok) throw new Error(started.reason);
+      try {
+        const deadline = Date.now() + 60_000;
+        while (a.webmail.userAgents.length === seen) {
+          if (Date.now() > deadline)
+            throw new Error(
+              `the person's sign-in to ${a.webmail.skin} did not reach the mailbox`,
+            );
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      } finally {
+        await stopBrowser(started.child);
+      }
+    }
+  } finally {
+    await ga.sessionStop(session.id).catch(() => undefined);
+  }
 }
 
 // A credentials directory, signed-in profiles and the stand-ins.
 async function world(
   name: string,
-  opts: { accounts?: Partial<Record<SetId, number>>; signIn?: boolean } = {},
+  opts: {
+    accounts?: Partial<Record<SetId, number>>;
+    signIn?: boolean;
+    // The sets whose profiles a person signs in (default every set):
+    // a test that uses one webmail spends no browser start on the rest.
+    only?: SetId[];
+  } = {},
 ): Promise<World> {
   const dir = join(scratch, name);
   const creds = join(dir, "creds");
@@ -305,26 +396,32 @@ async function world(
   // The sign-in, played by the test: a session cookie in each account's
   // profile, then the record the sign-in recipe writes.
   if (opts.signIn !== false) {
-    const p = await playwright();
+    const people: {
+      userDataDir: string;
+      webmail: StandinWebmail;
+      account: string;
+    }[] = [];
     for (const set of Object.keys(QA) as SetId[])
       for (let i = 0; i < accounts[set]; i++) {
         const file = `${set}/qa${i + 1}.json`;
         const prof = accountProfile(host, set, file, true);
-        const ctx = await p.chromium.launchPersistentContext(
-          prof.userDataDir,
-          webmailLaunchOptions(env, true),
-        );
-        const pg = ctx.pages()[0] ?? (await ctx.newPage());
-        await pg.goto(`${webmails[set].origin}/login?account=qa${i + 1}`);
-        await ctx.close();
+        if ((opts.only ?? [set]).includes(set))
+          people.push({
+            userDataDir: prof.userDataDir,
+            webmail: webmails[set],
+            account: `qa${i + 1}`,
+          });
         writeSigninRecord(prof, {
           set,
           account_file: file,
           signed_in_at: new Date().toISOString(),
           host: new URL(webmails[set].origin).host,
-          browser: "chromium (test)",
+          browser: "google-chrome (test)",
         });
       }
+    await signInAsAPerson(env, join(dir, "person-ga"), people);
+    // What the person's browser saw is not the provider's.
+    for (const wm of Object.values(webmails)) wm.probes = [];
   }
   const origins = Object.fromEntries(
     (Object.keys(QA) as SetId[]).map((s) => [
@@ -334,6 +431,7 @@ async function world(
   );
   const adapters = WEBMAIL_ADAPTERS.map((a) => rebaseAdapter(a, origins));
   const logs: string[] = [];
+  const argvs: string[][] = [];
   return {
     name,
     dir,
@@ -344,14 +442,16 @@ async function world(
     webmails,
     api,
     logs,
+    argvs,
     provider: (extra = {}) =>
       new HostedWebmailProvider({
         env: { ...env, ...extra.env },
         adapters,
         workspace: { endpoints, trust: { ca: api.pki.caPem } },
         timings: { ...FAST, ...extra.timings },
-        headless: true,
+        windowHeight: WINDOW_HEIGHT,
         log: (l) => logs.push(l),
+        onDesktop: (d) => argvs.push(d.argv),
       }),
     stop: async () => {
       for (const w of Object.values(webmails)) await w.stop();
@@ -388,7 +488,22 @@ async function captureAll(
   } finally {
     await p.dispose();
   }
+  noAutomation(w);
   return out;
+}
+
+// Every browser the provider started carried no automation switch, and
+// every page it loaded saw no automation.
+function noAutomation(w: World): void {
+  for (const argv of w.argvs) {
+    assert.deepEqual(automationSwitchesIn(argv), [], argv.join(" "));
+    assert.ok(!argv.some((a) => /remote-debugging|automation/i.test(a)));
+  }
+  for (const wm of Object.values(w.webmails))
+    for (const p of wm.probes) {
+      assert.equal(p.webdriver, "false", `${wm.skin} ${p.page}`);
+      assert.doesNotMatch(p.ua, /HeadlessChrome/);
+    }
 }
 
 function cleanup(w: World): Record<string, unknown>[] {
@@ -441,12 +556,11 @@ describe("hosted-webmail routing", () => {
       ),
     ].sort();
 
-  it("routes backend b only when named, and its list rows only when --clients names them", () => {
+  it("routes backend b only when named, and its list rows only when --clients names them; it has no mobile-web clients", () => {
     assert.deepEqual(clientsOf(spec({})), []);
+    // No mobile-web client: a phone is not imitated without DevTools.
     assert.deepEqual(clientsOf(spec({ backends: ["a", "b"] })), [
-      "gmail-mobile-web",
       "gmail-web",
-      "outlook-mobile-web",
       "outlook-web",
       "yahoo-web",
     ]);
@@ -461,7 +575,7 @@ describe("hosted-webmail routing", () => {
 
 describe("the hosted-webmail capture procedure", () => {
   it("delivers once, finds the message in Inbox, captures its list row and body, then removes it from every folder", async () => {
-    const w = await world("e2e");
+    const w = await world("e2e", { only: ["gmail-workspace"] });
     try {
       const m = mime("e2e");
       const p = w.provider();
@@ -501,19 +615,44 @@ describe("the hosted-webmail capture procedure", () => {
         Math.abs(img.height - prov(body).crop.height) <= 1,
         `${img.height} vs ${prov(body).crop.height}`,
       );
-      assert.equal(prov(body).width_check.requested, 800);
+      // The story region is the body's whole box, at the requested width.
+      assert.equal(prov(body).crop.locator, "story region");
+      assert.deepEqual(prov(body).width_check, {
+        requested: 800,
+        measured: 800,
+        delta: 0,
+      });
+      assert.equal(img.width, 800);
+      assert.equal(prov(body).settle.settled, true);
       assert.match(prov(body).ui_fingerprint.value, /^[0-9a-f]{12}$/);
-      // The row, before opening: sender, subject with the token, the
-      // preheader as the preview.
-      assert.equal(prov(row).list_row.sender, "Acme Billing");
-      assert.ok(prov(row).list_row.subject.startsWith(d.subject_token));
-      assert.match(prov(row).list_row.preview, /Preheader words for e2e/);
+      assert.equal(prov(body).browser.automation, "none");
+      // The story's own colour block is in the crop.
+      const px = (x: number, y: number) =>
+        Array.from(
+          img.data.slice((y * img.width + x) * 4, (y * img.width + x) * 4 + 3),
+        );
+      // The story's colour block starts the crop (away from its text),
+      // and the crop holds the story's last line, not the page beside.
+      assert.deepEqual(px(4, 100), [0x33, 0x66, 0x99]);
+      assert.deepEqual(px(600, 100), [0xff, 0xff, 0xff]);
+      assert.ok(img.height >= 180 && img.height < 260, String(img.height));
+      // The row, before opening: its accessible name carries the sender,
+      // the run token and the preheader as the preview; OCR reads it.
+      assert.match(prov(row).list_row.name, /Acme Billing/);
+      assert.ok(prov(row).list_row.name.includes(d.subject_token));
+      assert.match(prov(row).list_row.name, /Preheader words for e2e/);
+      // OCR reads the row as shown (its reading order is the engine's).
+      for (const word of ["Acme", "Billing", "Preheader words"])
+        assert.ok(
+          prov(row).list_row.ocr.includes(word),
+          prov(row).list_row.ocr,
+        );
       assert.ok(readPng(row.png!).height < img.height);
       // Removed: nothing left in any folder, and the record says so.
       assert.deepEqual(w.webmails["gmail-workspace"].messages, []);
       assert.deepEqual(
-        cleanup(w).map((c) => [c.state, c.folder, c.account]),
-        [["removed", "inbox", "qa1"]],
+        cleanup(w).map((c) => [c.state, c.folder, c.account, c.via]),
+        [["removed", "inbox", "qa1", "trash"]],
       );
       // Named by file, never by address; the lease is released.
       for (const r of results)
@@ -535,7 +674,7 @@ describe("the hosted-webmail capture procedure", () => {
   });
 
   it("finds a message filed as Spam there and says so; one that never arrives is a delivery failure", async () => {
-    const w = await world("spam");
+    const w = await world("spam", { only: ["gmail-workspace"] });
     try {
       const gm = w.webmails["gmail-workspace"];
       gm.filing = ({ subject }) =>
@@ -557,13 +696,18 @@ describe("the hosted-webmail capture procedure", () => {
       assert.equal(rb.status, "failed");
       assert.match(
         rb.reason!,
-        /^delivery failure: <.*> \(sent through the Gmail API as api\d\) was not found in Gmail's Inbox or Spam within 6 s/,
+        /^delivery failure: <.*> \(sent through the Gmail API as api\d\) was not found in Gmail's Inbox or Spam within 8 s/,
       );
       assert.equal(rb.png, undefined);
       const states = cleanup(w)
         .map((c) => c.state)
         .sort();
       assert.deepEqual(states, ["not-found", "removed"]);
+      // Gmail's Spam offers only the permanent delete: no Trash step.
+      const removed = cleanup(w).find((c) => c.state === "removed")!;
+      assert.equal(removed.folder, "spam");
+      assert.equal(removed.via, "delete-forever");
+      assert.equal(gm.destroyed.length, 1);
       assert.deepEqual(gm.messages, []);
     } finally {
       await w.stop();
@@ -573,7 +717,7 @@ describe("the hosted-webmail capture procedure", () => {
 
 describe("hosted-webmail session loss and UI drift", () => {
   it("a session lost before delivery marks the account needs-login, names the sign-in, and types nothing", async () => {
-    const w = await world("lost");
+    const w = await world("lost", { only: ["yahoo"] });
     try {
       const y = w.webmails.yahoo;
       y.expire("qa1");
@@ -615,7 +759,7 @@ describe("hosted-webmail session loss and UI drift", () => {
   });
 
   it("a session lost mid-capture is a lost session, not UI drift", async () => {
-    const w = await world("lost-mid");
+    const w = await world("lost-mid", { only: ["gmail-workspace"] });
     try {
       const gm = w.webmails["gmail-workspace"];
       gm.expireOnOpen = true;
@@ -641,7 +785,7 @@ describe("hosted-webmail session loss and UI drift", () => {
   });
 
   it("an inbox that does not load is not a lost session: the account is not marked", async () => {
-    const w = await world("unreachable");
+    const w = await world("unreachable", { only: ["yahoo"] });
     try {
       await w.webmails.yahoo.stop();
       const m = mime("unreachable");
@@ -654,7 +798,7 @@ describe("hosted-webmail session loss and UI drift", () => {
       assert.equal(results[0]!.status, "failed");
       assert.match(
         results[0]!.reason!,
-        /yahoo\/qa1: the inbox did not load: .*the session was not judged/,
+        /yahoo\/qa1: the inbox did not load \(the browser's error page on 127\.0\.0\.1:\d+\) \(the session was not judged/,
       );
       assert.doesNotMatch(results[0]!.reason!, /session lost/);
       assert.equal(
@@ -668,7 +812,7 @@ describe("hosted-webmail session loss and UI drift", () => {
   });
 
   it("a message that cannot be shown to be the delivered one is never captured or deleted", async () => {
-    const w = await world("identity");
+    const w = await world("identity", { only: ["gmail-workspace"] });
     try {
       const gm = w.webmails["gmail-workspace"];
       gm.openedSubject = "Another message";
@@ -683,7 +827,7 @@ describe("hosted-webmail session loss and UI drift", () => {
       assert.equal(results[0]!.png, undefined);
       assert.match(
         results[0]!.reason!,
-        /the opened message is not the delivered one \(its subject 'Another message' lacks the run token/,
+        /the opened message is not the delivered one \(no heading carries the run token \[es:t1:[0-9a-f]{8}\]; shown: 'Another message'\)/,
       );
       // Nothing deleted: the delivered message is still in the Inbox,
       // and the cleanup record says the removal failed.
@@ -702,7 +846,7 @@ describe("hosted-webmail session loss and UI drift", () => {
   });
 
   it("a removal that leaves the message in a folder is a failed cleanup, said on the log", async () => {
-    const w = await world("kept");
+    const w = await world("kept", { only: ["gmail-workspace"] });
     try {
       const gm = w.webmails["gmail-workspace"];
       gm.keepDestroyed = true;
@@ -735,7 +879,7 @@ describe("hosted-webmail session loss and UI drift", () => {
   });
 
   it("UI drift fails loudly naming the locator and takes the adapter down for the run", async () => {
-    const w = await world("drift");
+    const w = await world("drift", { only: ["yahoo"] });
     try {
       const y = w.webmails.yahoo;
       y.drift = true;
@@ -753,7 +897,7 @@ describe("hosted-webmail session loss and UI drift", () => {
         assert.equal(r.png, undefined);
         assert.match(
           r.reason!,
-          /UI drift: Yahoo Mail adapter locator 'opened\.body' \(\[data-test-id="message-view-body-content"\], unverified-live\) matched no visible element/,
+          /UI drift: Yahoo Mail adapter locator 'opened\.body' \(the story region\) found no showing node below the subject carrying the story's text/,
         );
       }
       // The second story was not delivered: the adapter was down.
@@ -767,7 +911,10 @@ describe("hosted-webmail session loss and UI drift", () => {
 
 describe("hosted-webmail leases and budgets", () => {
   it("two stories for Gmail with two accounts are captured at once on different accounts", async () => {
-    const w = await world("concurrent", { accounts: { "gmail-workspace": 2 } });
+    const w = await world("concurrent", {
+      accounts: { "gmail-workspace": 2 },
+      only: ["gmail-workspace"],
+    });
     try {
       w.webmails["gmail-workspace"].deliveryDelayMs = 800;
       const a = mime("con-a");
@@ -799,7 +946,10 @@ describe("hosted-webmail leases and budgets", () => {
   });
 
   it("leaves an account leased by a running process to it, and takes over a stale lease", async () => {
-    const w = await world("leases", { accounts: { "gmail-workspace": 2 } });
+    const w = await world("leases", {
+      accounts: { "gmail-workspace": 2 },
+      only: ["gmail-workspace"],
+    });
     const holder = spawn(
       process.execPath,
       ["-e", "setTimeout(() => {}, 60000)"],
@@ -854,7 +1004,10 @@ describe("hosted-webmail leases and budgets", () => {
   });
 
   it("drops an account at 90% of its daily budget, and fails a set with none left with budget", async () => {
-    const w = await world("budget", { accounts: { "gmail-workspace": 2 } });
+    const w = await world("budget", {
+      accounts: { "gmail-workspace": 2 },
+      only: ["gmail-workspace"],
+    });
     try {
       const day = utcDay(Date.now());
       writePrivate(join(w.profiles, "gmail-workspace", "qa1", "budget.json"), {
@@ -911,8 +1064,8 @@ describe("hosted-webmail leases and budgets", () => {
 });
 
 describe("hosted-webmail variants", () => {
-  it("Outlook.com: found in the Other tab; light is the background toggle on, dark the body recoloured", async () => {
-    const w = await world("outlook");
+  it("Outlook.com: a dark browser; found in the Other tab; light is the background toggle checked, dark the body darker", async () => {
+    const w = await world("outlook", { only: ["outlook-com"] });
     try {
       w.webmails["outlook-com"].filing = () => "other";
       const m = mime("outlook");
@@ -933,14 +1086,28 @@ describe("hosted-webmail variants", () => {
       assert.equal(prov(light).arrival.folder, "inbox");
       assert.equal(
         prov(light).scheme_applied.evidence,
-        "background toggle aria-pressed=true",
+        "background toggle checked=true",
       );
       assert.equal(
         prov(dark).scheme_applied.evidence,
-        "background toggle aria-pressed=false",
+        "background toggle checked=false",
       );
-      assert.equal(prov(light).scheme_applied.recoloured_elements, 0);
-      assert.ok(prov(dark).scheme_applied.recoloured_elements > 0);
+      assert.equal(prov(light).scheme_applied.browser, "dark");
+      assert.equal(prov(light).crop.locator, 'name="Message body"');
+      assert.equal(prov(light).width_check.measured, 800);
+      // The browser runs dark (the profile's colour mode, after the
+      // person's light sign-in on the same profile): every Outlook page
+      // saw it.
+      const probes = w.webmails["outlook-com"].probes;
+      assert.ok(probes.length > 0);
+      assert.ok(
+        probes.every((p) => p.dark),
+        JSON.stringify(probes),
+      );
+      assert.ok(
+        prov(dark).scheme_applied.luminance + 40 <
+          prov(light).scheme_applied.luminance,
+      );
       assert.ok(
         luminance(dark.png!) + 40 < luminance(light.png!),
         `dark ${luminance(dark.png!)} vs light ${luminance(light.png!)}`,
@@ -955,47 +1122,8 @@ describe("hosted-webmail variants", () => {
     }
   });
 
-  it("the mobile-web variant reopens the profile as a phone, on the same delivery", async () => {
-    const w = await world("mobile");
-    try {
-      const m = mime("mobile");
-      const results = await captureAll(
-        w.provider(),
-        w,
-        [req("s", m, "gmail-mobile-web", MOBILE), req("s", m, "gmail-web")],
-        [message("s", m)],
-      );
-      for (const r of results) assert.equal(r.status, "done", r.reason);
-      assert.equal(w.api.sent.length, 1);
-      const mob = results.find(
-        (r) => r.request.clientId === "gmail-mobile-web",
-      )!;
-      assert.equal(prov(mob).client.ui, "mobile");
-      assert.equal(prov(mob).client.device, "iphone");
-      assert.equal(prov(mob).width_check.requested, 375);
-      assert.ok(
-        w.webmails["gmail-workspace"].userAgents.some((u) => /iPhone/.test(u)),
-      );
-      // DPR 3: the PNG is three times the CSS box.
-      assert.ok(
-        Math.abs(readPng(mob.png!).width - prov(mob).crop.width * 3) <= 3,
-      );
-      // The desktop and mobile UIs keep a fingerprint each: neither
-      // capture reads the other's as a change.
-      const desk = results.find((r) => r.request.clientId === "gmail-web")!;
-      assert.notEqual(
-        prov(mob).ui_fingerprint.value,
-        prov(desk).ui_fingerprint.value,
-      );
-      assert.equal(prov(mob).ui_fingerprint.changed, false);
-      assert.equal(prov(desk).ui_fingerprint.changed, false);
-    } finally {
-      await w.stop();
-    }
-  });
-
   it("fidelity: the same MIME delivered twice matches, a MIME differing in one colour does not", async () => {
-    const w = await world("fidelity");
+    const w = await world("fidelity", { only: ["gmail-workspace"] });
     try {
       const a = mime("fid");
       const b = mime("fid", "#993366");
@@ -1022,6 +1150,8 @@ describe("hosted-webmail variants", () => {
       );
       for (const r of [...first, ...second, ...other])
         assert.equal(r.status, "done", r.reason);
+      // Gmail's browser runs light.
+      assert.ok(w.webmails["gmail-workspace"].probes.every((p) => !p.dark));
       const same = fidelityVerdict(first[0]!.png!, second[0]!.png!);
       assert.equal(same.match, true, same.reason);
       const diff = fidelityVerdict(first[0]!.png!, other[0]!.png!);
@@ -1040,7 +1170,7 @@ describe("hosted-webmail variants", () => {
   });
 
   it("a repeat run through the harness, once the UI fingerprint is known, is a cache hit and delivers nothing", async () => {
-    const w = await world("cache");
+    const w = await world("cache", { only: ["gmail-workspace"] });
     try {
       const m = mime("cache");
       const spec: MatrixSpec = {
@@ -1207,7 +1337,7 @@ describe("the backend-b command line", () => {
       /just email-shots receiptTypical --backends b --clients gmail-web --no-cache/,
     );
     assert.match(pending.stdout, /^PENDING: /m);
-    const w = await world("checklist");
+    const w = await world("checklist", { only: [] });
     try {
       const ready = run({
         ISONIM_EMAIL_CREDENTIALS_DIR: w.creds,

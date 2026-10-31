@@ -93,8 +93,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
-import { resolveDriver } from "./browser_emulation.ts";
 import {
   type GaSession,
   GuiAssert,
@@ -104,14 +102,12 @@ import {
 } from "./guiassert.ts";
 import { findExecutable } from "./requirements.ts";
 import {
-  checkSignedIn,
   scrubPasswordHashes,
   signinBrowserArgs,
   secretsAtRest,
   stopBrowser,
   waitSandboxed,
   webmailBrowser,
-  webmailLaunchOptions,
   writeWebmailProfilePrefs,
 } from "./webmail_profiles.ts";
 import {
@@ -173,7 +169,6 @@ describe("the automated sign-in in a real GuiAssert session", () => {
   const probes: { webdriver: string; page: string }[] = [];
   let bin: string;
   let ga: GuiAssert;
-  let pw: typeof import("playwright-core");
 
   before(async () => {
     server = createServer((req, res) => {
@@ -415,9 +410,6 @@ ${purpose("stats", "За създаване и споделяне на обоб�
       env: process.env,
       timeoutMs: 60_000,
     });
-    const driver = resolveDriver(process.env);
-    if ("reason" in driver) throw new Error(driver.reason);
-    pw = await import(pathToFileURL(join(driver.dir, "index.mjs")).href);
   });
   after(() => new Promise<void>((r) => server.close(() => r())));
 
@@ -611,27 +603,6 @@ ${purpose("stats", "За създаване и споделяне на обоб�
         typedBefore,
       );
       for (const p of probes) assert.equal(p.webdriver, "false", p.page);
-      // And under Playwright, with the same executable, as the captures
-      // open the profile.
-      const context = await pw.chromium.launchPersistentContext(a.profile, {
-        ...webmailLaunchOptions(process.env, false),
-        env: a.env,
-      });
-      try {
-        const r = await checkSignedIn(
-          context,
-          {
-            label: "stand-in Gmail",
-            inboxUrl: `http://127.0.0.1:${port}/mail/`,
-            mailHosts: [`127.0.0.1:${port}`],
-            marker: 'form[role="search"]',
-          },
-          30_000,
-        );
-        assert.deepEqual(r, { signedIn: true, host: `127.0.0.1:${port}` });
-      } finally {
-        await context.close();
-      }
     } finally {
       await ga.sessionStop(a.session.id);
     }

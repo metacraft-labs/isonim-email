@@ -5,9 +5,11 @@
 // binary once and reads the one JSON envelope it prints on stdout, and
 // the process's exit code is the envelope's `error.code`.
 //
-// Used by the webmail sign-in (email-webmail-signin.ts) to start a
-// private off-screen session, read the screen (OCR), find fields in the
-// accessibility tree, and send OS-level input (keys, clicks, the wheel).
+// Used by the webmail sign-in (email-webmail-signin.ts) and the
+// hosted-webmail captures (webmail_desktop.ts) to start a private
+// off-screen session, read the screen (OCR), read the accessibility tree
+// (find, tree), capture a region of the display, and send OS-level input
+// (keys, clicks, the wheel).
 // Secrets never travel on a command line or in the environment: a
 // `Secret` is only ever written to the child's standard input (`type
 // --stdin`, `--secret-stdin`), and a `Secret` prints as "[secret]"
@@ -123,6 +125,20 @@ export interface GaElement {
   value?: string | null;
   /** The Text interface's whole content (never a protected field's). */
   text?: string | null;
+}
+
+/** A node of `tree` (§7.5 `Node`): an element with its children read. */
+export interface GaNode extends GaElement {
+  description?: string | null;
+  actions?: string[];
+  childCount?: number;
+  children: GaNode[];
+}
+
+export interface GaTree {
+  root: GaNode;
+  nodeCount: number;
+  truncated: boolean;
 }
 
 export interface FindFilter {
@@ -295,13 +311,51 @@ export class GuiAssert {
     });
   }
 
-  /** OCR of the primary display, guarded against `secret` (exit 5 / `secret-visible`). */
-  async ocr(out: string, secret: Secret): Promise<GaOcr> {
+  /**
+   * OCR of the primary display, guarded against `secret` (exit 5 /
+   * `secret-visible`); unguarded when `secret` is null (a reader that
+   * never typed a secret: the captures).
+   */
+  async ocr(out: string, secret: Secret | null): Promise<GaOcr> {
+    if (secret === null)
+      return (await this.run("ocr", ["--display", "0", "--out", out])) as GaOcr;
     return (await this.run(
       "ocr",
       ["--display", "0", "--out", out, "--secret-stdin"],
       secret,
     )) as GaOcr;
+  }
+
+  /** OCR of a region of the display (desktop coordinates). */
+  async ocrRegion(out: string, r: Rect): Promise<GaOcr> {
+    return (await this.run("ocr", [
+      "--region",
+      r.map((v) => String(Math.round(v))).join(","),
+      "--out",
+      out,
+    ])) as GaOcr;
+  }
+
+  /** A screenshot of a region of the display (desktop coordinates). */
+  async screenshotRegion(out: string, r: Rect): Promise<GaImage> {
+    const d = (await this.run("screenshot", [
+      "--region",
+      r.map((v) => String(Math.round(v))).join(","),
+      "--no-cursor",
+      "--out",
+      out,
+    ])) as { image: GaImage };
+    return d.image;
+  }
+
+  /** The accessibility tree of the application `pid`. */
+  async tree(pid: number, maxNodes = 20_000): Promise<GaTree> {
+    return (await this.run("tree", [
+      "--pid",
+      String(pid),
+      "--max-nodes",
+      String(maxNodes),
+    ])) as GaTree;
   }
 
   /** A screenshot of the primary display kept only if `secret` is not legible in it. */

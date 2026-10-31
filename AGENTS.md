@@ -310,15 +310,23 @@ for Testing, started without automation inside a private GuiAssert
 session, with OS-level input, and checked by reading the mailbox off
 the screen; it stops at any challenge, makes one attempt per account and
 then waits out a 24 h cool-down; runbook: `docs/webmail-signin.md`); a
-capture itself never signs in, and opens the profile under Playwright
-with that same browser.
+capture itself never signs in, and drives that same browser the same
+way: started normally by the one launcher both share
+(`webmail_browser.ts`, which refuses any automation switch before it
+spawns), in a private GuiAssert session per account, navigating through
+the address bar, reading the page from the accessibility tree and OCR,
+and cropping a region of the display (`webmail_desktop.ts`,
+`a11y_tree.ts`). No Playwright, DevTools protocol or WebDriver ever
+touches a webmail profile.
 Each story is delivered for real: a Google Workspace sender sends it to
 a QA account through the Gmail API (`workspace_send.ts`), the adapter
 finds it in Inbox or Spam/Junk by its Message-ID or run token, captures
 its inbox-list row (`--clients gmail-list,yahoo-list,outlook-list`, only
-when named) and its body (`gmail-web`, `gmail-mobile-web`, `yahoo-web`,
-`outlook-web` and `outlook-mobile-web`, light, and dark on Outlook.com
-by its background toggle), then deletes it in the UI and from Trash.
+when named) and its body (`gmail-web`, `yahoo-web` and `outlook-web`,
+light, and dark on Outlook.com by its background toggle in a browser
+whose profile's colour mode is dark; there are no mobile-web clients, since a phone cannot be
+imitated without DevTools or a user-agent switch), then deletes it in
+the UI and from Trash.
 Backend `b` is opt-in: it runs only with `--backends b` or one of its
 `--clients`, because each capture sends real mail and spends the
 account's daily budget (`ISONIM_EMAIL_WEBMAIL_DAILY_BUDGET`, default

@@ -2,8 +2,10 @@
 
 The hosted-webmail captures (`just email-shots --backends b`) open each
 QA account's webmail in a persistent browser profile. This runbook says
-how those profiles get signed in, what each result means, and what a
-person does when a provider asks for more than a password.
+how those profiles get signed in, what each result means, what a
+person does when a provider asks for more than a password, and how the
+captures then run on a signed-in profile
+([Capturing on a signed-in profile](#capturing-on-a-signed-in-profile)).
 
 `just email-webmail-signin` signs a profile in by itself, with the
 account file's address and password:
@@ -116,9 +118,9 @@ account file's address and password:
   `Confirm`. A screen without such a control stops the attempt;
 - it closes the browser, starts it again on the inbox URL (still without
   automation, typing nothing) and reads the mailbox off the screen; on
-  success it writes `signin.json` in the profile. `--playwright-check`
-  also opens the profile under Playwright (see the open risk below), and
-  is off by default.
+  success it writes `signin.json` in the profile. Nothing opens a
+  webmail profile under Playwright, the DevTools protocol or WebDriver;
+  see [Capturing on a signed-in profile](#capturing-on-a-signed-in-profile).
 
 The password is read from the account file and handed only to GuiAssert
 over a pipe: never on a command line, in an environment variable, on the
@@ -419,23 +421,116 @@ Account` (and their `-journal` files). Deleting them removes saved
    in the profile, the recipe's included, and is removed at the end of
    every run.
 
-## Open risk: Playwright on a signed-in profile
+## Capturing on a signed-in profile
 
-The sign-in and its check never show the provider an automated browser.
-Two things still open a profile under Playwright, which starts the
-browser with `--enable-automation` and makes `navigator.webdriver` true,
-so the provider can tell that the session is being driven:
+`just email-shots --backends b` drives the same webmail browser on the
+same profiles the way the sign-in does, never under Playwright:
 
-- `--playwright-check`, which is why it is off by default;
-- the hosted-webmail captures themselves (`just email-shots --backends
-b`), which drive the webmail through Playwright on the same profile.
+- the browser is started by the launcher the sign-in uses
+  (`tools/capture/providers/webmail_browser.ts`): the profile's
+  preferences written and its password hashes removed first, the
+  sandbox on and checked, and no automation switch. The launcher
+  refuses a command line carrying one (`--remote-debugging-*`,
+  `--enable-automation`, `--headless`, `--test-type`, an extension,
+  `--user-agent`, …) before it starts anything, so the page always sees
+  `navigator.webdriver` false;
+- each account's browser runs in a private GuiAssert session of its
+  own, as wide as the adapter's window and 2400 px high; no display of
+  yours is needed;
+- it moves by typing URLs into the browser's address bar and clicking
+  at the centre of elements the accessibility tree names (a message's
+  row, its delete button, Outlook.com's background toggle); it reads the
+  mailbox off the screen (OCR) and the page from the accessibility tree;
+  it crops the message body as a region of the display. Nothing is
+  evaluated in a page and nothing in one is changed;
+- Outlook.com's browser is started dark, by the profile's colour mode
+  (Chrome's Settings, Appearance, Mode: Dark, written into the profile
+  before the start; no command-line switch), because its light and
+  dark captures are its background toggle in its dark theme; Gmail's
+  and Yahoo's, and every sign-in, run light (written the same way, so a
+  dark capture never leaves a profile dark);
+- a capture never reads an account's password and never types into a
+  sign-in page. A profile found signed out is marked `needs-login`: sign
+  it in again with this recipe (after the cool-down, if an attempt was
+  made in the last 24 h).
 
-A provider may answer that by ending the session or by challenging the
-next sign-in. A capture that finds the profile signed out marks the
-account `needs-login` and names the sign-in command; run it (after the
-cool-down, if an attempt was made in the last 24 h). If that happens
-often, record it with the provider and the date: it is the signal to
-move the captures off Playwright too.
+No browser on a webmail profile is ever started under Playwright, the
+DevTools protocol or WebDriver: the sign-in and the captures share one
+launcher, which refuses an automation switch before it starts anything.
+
+### Before the first capture
+
+1. Every step of `just email-webmail-checklist` up to the sign-in is
+   `ok` (credentials unlocked, the Workspace sender, the account signed
+   in), and a smoke send has reached the account.
+2. Check that the profile still reads as signed in, typing nothing:
+   `just email-webmail-signin <set> <account> --check-only`.
+3. No other run holds the account: a sign-in, another capture, or a
+   check takes the account's lease (`lease.json` in its profile
+   directory) and a capture waits for it up to 10 minutes.
+
+### The first capture, per webmail
+
+Run one story, one client at a time, watched, with no cache:
+
+```sh
+ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-web --viewports desktop --no-cache
+ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients outlook-web --viewports desktop --schemes light,dark --no-cache
+ISONIM_EMAIL_WEBMAIL_VNC=1 just email-shots receiptTypical --backends b --clients gmail-list,outlook-list --viewports desktop --no-cache
+```
+
+and Yahoo's (`yahoo-web`, `yahoo-list`) once its profile is signed in.
+With `ISONIM_EMAIL_WEBMAIL_VNC=1` every capture session serves an
+owner-only VNC socket and the run prints where, as the sign-in's
+`--vnc` does: forward it with `ssh -L 5901:<socket> you@capture-host`
+and point a viewer at `localhost:5901`. Watch only: the run needs no
+input, and a click of yours changes what it reads.
+
+Each capture sends one real message to the account and counts it
+against the account's daily budget; the run deletes it afterwards
+(from Trash too) and records that in `<run>/hosted-webmail-cleanup.jsonl`.
+
+### Reading a capture's provenance
+
+Every PNG has a JSON file beside it. For a first capture, check:
+
+- `crop.locator`: `story region` (Gmail, Yahoo: the message column
+  between the webmail's elements above and below the story's own text)
+  or the body's own name (Outlook.com, `name="Message body"`);
+  `crop.foreign_inside` should be 0 (text inside the crop that is not
+  the story's: a banner the webmail put in the body);
+- `width_check`: the body's measured width against the requested 800.
+  A delta other than 0 means the adapter's `windowAllowance` in
+  `webmail_adapters.ts` needs calibrating;
+- `settle.settled`: false means the body's pixels never held still
+  within the bound (an animation, or images still loading);
+- `scheme_applied` (Outlook.com): the toggle's state and the crop's mean
+  luminance, light against dark;
+- `tree`: how many accessibility nodes the page had and how long one
+  read took; `timing_ms`: each step;
+- `client.locators`: `unverified-live` until the adapter's locators are
+  confirmed against the live webmail.
+
+### When a capture fails
+
+- `session lost: …`: the profile is signed out; run the sign-in it
+  names.
+- `UI drift: <webmail> adapter locator '<name>' (…)`: the webmail no
+  longer shows what the adapter's locator names; the adapter is down for
+  the rest of the run. Look at the page over VNC (or at a new run with
+  `ISONIM_EMAIL_WEBMAIL_VNC=1`), then fix the locator in
+  `tools/capture/providers/webmail_adapters.ts`.
+- `the message body is … px tall …, past the window's visible part`:
+  bodies taller than the window are not captured yet (never cut).
+- `delivery failure: … was not found …`: the message did not show in
+  Inbox or Spam/Junk within 60 s; it may still arrive. Its cleanup
+  record is `not-found`.
+- `cleanup FAILED for <Message-ID>`: the message may still be in the
+  mailbox. Sign nothing in: open the account's profile only through the
+  recipes (a check with `--check-only`, or a sign-in with `--manual` over
+  VNC to delete it by hand), never by starting a browser on it yourself.
+- `the capture browser cannot run: …`: no GuiAssert session or no
+  sandbox, as for the sign-in (Prerequisites).
 
 ## Re-sealing a QA password
 

@@ -1,60 +1,81 @@
 // tools/capture/providers/hosted_webmail.ts — the hosted-webmail
 // capture provider (backend b): the real Gmail, Yahoo Mail and
 // Outlook.com, in profiles the sign-in recipe signed in, captured after
-// real delivery.
+// real delivery, in the webmail browser driven the way a person drives
+// it (webmail_desktop.ts): started normally by the sign-in's launcher
+// (no Playwright, no DevTools, no automation switch: the launcher
+// refuses one), in a private GuiAssert session, the page read from its
+// accessibility tree and OCR, input through OS-level clicks and the
+// address bar, pixels from a region of the display.
 //
 // A capture, per story and QA account (the procedure is one
 // implementation over the adapters' data, webmail_adapters.ts):
 //  1. lease the account (webmail_accounts.ts: a lock file per account;
 //     any free, signed-in account of the set under its daily budget),
-//     check its session (the inbox loads on the mail host with the
-//     mailbox marker) and count the delivery against its budget;
+//     start its browser on the inbox URL and check its session (the
+//     mailbox read off the screen, the address bar on a mail host), and
+//     count the delivery against its budget;
 //  2. deliver the story by Workspace send (workspace_send.ts): the
 //     Workspace sender sends the copy, with a fresh Message-ID and the
 //     run token in the subject, to the account through the Gmail API;
 //  3. find it in the webmail: Inbox, then Spam/Junk, polled up to a
 //     bounded wait, recording where it arrived; not found in time is a
 //     delivery failure, never a capture of nothing;
-//  4. for an inbox-list client, screenshot its row before it is opened;
-//     open it and check that the opened subject carries the run token;
-//  5. per requested variant: size the window so the body gets the
-//     requested width, set the scheme (Outlook.com: its background
-//     toggle), wait for the body, fonts, images and a stable box, lift
-//     the body's scroll containers, and screenshot the body, masking
-//     the chrome inside it; each result is yielded as it lands;
+//  4. for an inbox-list client, capture its row before it is opened;
+//     open it and check that a heading carries the run token;
+//  5. per requested variant: set the scheme (Outlook.com: its background
+//     toggle, in a browser started dark), locate the body (its own name,
+//     or the story region), wait until its pixels and bounds hold still,
+//     and capture its region, masking the chrome inside it; each result
+//     is yielded as it lands;
 //  6. delete the message in the UI, then from Trash/Deleted Items, look
 //     again in every folder, and record the outcome in
 //     <run>/hosted-webmail-cleanup.jsonl; release the lease.
 //
 // Never a sign-in: a page that leaves the mail hosts is a lost session.
-// The account is marked needs-login (out of selection until a person's
-// sign-in passes), its requests fail with "session lost:" naming the
-// sign-in recipe, and the same line goes to stderr at once. A locator
-// that matches nothing or more than one element while the page is on
-// the mail host is UI drift: the capture fails naming the locator, and
-// the adapter is down for the rest of the run, so no crop is ever made
-// from a UI the adapter does not recognise.
+// The account is marked needs-login (out of selection until a sign-in
+// passes), its requests fail with "session lost:" naming the sign-in
+// recipe, and the same line goes to stderr at once. A locator that
+// matches nothing or more than one element while the page is on the
+// mail host is UI drift: the capture fails naming the locator, and the
+// adapter is down for the rest of the run, so no crop is ever made from
+// a UI the adapter does not recognise.
 //
 // Credentials only from the credentials directory: the Workspace
 // sender's file and the QA account files (credentials.ts). No secret is
 // printed, written or carried in a result: the provenance names the
-// account by its file's name, never by its address.
+// account by its file's name, never by its address. A capture never
+// reads an account's password.
 //
 // The provider is opt-in: it joins a run only when named (--backends b,
 // or one of its --clients), since every capture sends real mail and
 // spends an account's budget.
 
-import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import type { BrowserContext, Locator, Page } from "playwright-core";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  clickTarget,
+  closest,
+  type Flat,
+  findShowing,
+  insideRect,
+  isWithin,
+  locateStoryRegion,
+  locationHost,
+  matches,
+  meanLuminance,
+  paintMasks,
+  sameRect,
+  storyTexts,
+  structureFingerprint,
+} from "./a11y_tree.ts";
 import { TIER2_MAX_DIFF_RATIO } from "../email-capture-ci.ts";
 import { diffPng } from "../perceptual.ts";
-import { resolveDriver } from "./browser_emulation.ts";
 import { credentialRequirement, WORKSPACE_SENDER_SET } from "./credentials.ts";
+import { GuiAssert, type Rect } from "./guiassert.ts";
 import { loadHostedAccount } from "./hosted_delivery.ts";
-import type { HostEnv } from "./requirements.ts";
+import { findExecutable, type HostEnv } from "./requirements.ts";
 import type {
   CaptureProvider,
   CaptureRequest,
@@ -85,19 +106,27 @@ import {
 import {
   type AdapterClient,
   type AdapterUi,
+  CAPTURE_WINDOW_HEIGHT,
+  describeLocator,
+  DESKTOP_VIEWPORT,
   type FolderName,
   folderUrl,
-  IPHONE_USER_AGENT,
   WEBMAIL_ADAPTERS,
+  WEBMAIL_CHROME,
   type WebmailAdapter,
   type WebmailLocator,
-  WINDOW_HEIGHT,
 } from "./webmail_adapters.ts";
 import {
-  checkSignedIn,
-  webmailBrowser,
-  webmailLaunchOptions,
-} from "./webmail_profiles.ts";
+  DesktopUnavailable,
+  type Snapshot,
+  WebmailDesktop,
+} from "./webmail_desktop.ts";
+import { profilesRoot, webmailBrowser } from "./webmail_profiles.ts";
+import {
+  classifyScreen,
+  normalize,
+  PROVIDER_SIGNIN,
+} from "./webmail_signin_steps.ts";
 import {
   deliverWorkspace,
   loadWorkspaceSender,
@@ -109,16 +138,36 @@ import {
 export const HOSTED_WEBMAIL_ID = "hosted-webmail";
 // Bump whenever output can change for reasons no other key field
 // captures (the UI fingerprint and the browser are in client_build).
-export const HOSTED_WEBMAIL_VERSION = "1";
+// 2: the captures moved from Playwright to the webmail browser driven
+// through GuiAssert (a region of the display, the visual settle).
+export const HOSTED_WEBMAIL_VERSION = "2";
 // Bump by hand when crop, mask or wait logic changes.
-export const HOSTED_WEBMAIL_ADAPTER_VERSION = 1;
+export const HOSTED_WEBMAIL_ADAPTER_VERSION = 2;
 
-export const HEADLESS_ENV = "ISONIM_EMAIL_WEBMAIL_HEADLESS";
+// An operator's choice: every capture session serves an owner-only VNC
+// socket, named on the log, so a capture can be watched (never driven:
+// the provider types nothing a person would need to).
+export const VNC_ENV = "ISONIM_EMAIL_WEBMAIL_VNC";
 
 // What a person does to make backend b available: the one recipe that
 // lists the steps, in order, and checks each.
 export const REMEDY =
   "`just email-webmail-checklist` lists the steps a person runs, in order (unlock the credentials, the Workspace sender, a sign-in per set, a smoke send) and checks each";
+
+/**
+ * Phrases of the browser's own error page (normalized as the sign-in's
+ * OCR text is): the inbox did not load at all, which says nothing about
+ * the session.
+ */
+export const BROWSER_ERROR_PHRASES = [
+  "this site cant be reached",
+  "this page isnt working",
+  "no internet",
+  "err connection",
+  "err name not resolved",
+  "err internet disconnected",
+  "err timed out",
+];
 
 export interface HostedWebmailTimings {
   // How long a delivered message may take to show up.
@@ -134,10 +183,11 @@ export interface HostedWebmailTimings {
   leasePollMs: number;
   // The signed-in check at lease time.
   signinCheckMs: number;
-  // Waiting for the body's images (they may point at a host the
-  // webmail's proxy cannot reach: never a failure).
+  // How long a page off the mail hosts must stay to be a lost session.
+  offHostMs: number;
+  // The visual settle's bound (fonts and images: never a failure).
   imageTimeoutMs: number;
-  // Layout stability: two equal boxes this far apart.
+  // The visual settle: two equal frames this far apart.
   stableMs: number;
   // Finding the deleted message in Trash.
   cleanupFindMs: number;
@@ -150,7 +200,8 @@ export const DEFAULT_TIMINGS: HostedWebmailTimings = {
   stepTimeoutMs: 20_000,
   leaseWaitMs: 600_000,
   leasePollMs: 1_000,
-  signinCheckMs: 30_000,
+  signinCheckMs: 45_000,
+  offHostMs: 3_000,
   imageTimeoutMs: 5_000,
   stableMs: 300,
   cleanupFindMs: 15_000,
@@ -160,16 +211,16 @@ export interface HostedWebmailOptions {
   env?: Record<string, string | undefined>;
   // Test seams (hosted_webmail.test.ts): the adapters (rebased onto a
   // stand-in webmail), the Gmail API endpoints and their trust roots,
-  // shorter waits, headless, the clock, where notices go.
+  // shorter waits, the window's height, the clock, where notices go,
+  // and what sees each capture browser once it runs.
   adapters?: WebmailAdapter[];
   workspace?: WorkspaceOptions;
   timings?: Partial<HostedWebmailTimings>;
-  headless?: boolean;
+  windowHeight?: number;
   now?: () => number;
   log?: (line: string) => void;
+  onDesktop?: (d: WebmailDesktop, account: PoolAccount) => void;
 }
-
-type Playwright = typeof import("playwright-core");
 
 // ---------------------------------------------------------------------------
 // Failures
@@ -184,8 +235,7 @@ class SessionLostError extends Error {}
 
 class DeliveryTimeout extends Error {}
 
-// An error as one line: Playwright's carry a call log (with terminal
-// colours) after the first line.
+// An error as one line.
 function oneLine(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
   return (text.split("\n")[0] ?? "").replace(/\u001b\[[0-9;]*m/g, "").trim();
@@ -233,72 +283,6 @@ export function fidelityVerdict(
 }
 
 // ---------------------------------------------------------------------------
-// In-page helpers (the type-check has no DOM library)
-// ---------------------------------------------------------------------------
-
-interface El {
-  tagName: string;
-  getAttribute(n: string): string | null;
-  classList: Iterable<string>;
-  children: ArrayLike<El>;
-  querySelectorAll(s: string): ArrayLike<El>;
-}
-
-interface BodyEl {
-  querySelectorAll(
-    s: string,
-  ): ArrayLike<{ complete: boolean; loading: string }>;
-}
-
-interface RelaxEl {
-  parentElement: RelaxEl | null;
-  getAttribute(n: string): string | null;
-  setAttribute(n: string, v: string): void;
-  removeAttribute(n: string): void;
-  style: { setProperty(n: string, v: string, priority: string): void };
-}
-
-interface RelaxGlobal {
-  getComputedStyle(e: RelaxEl): {
-    overflowX: string;
-    overflowY: string;
-    maxHeight: string;
-  };
-  __isonimRelaxed?: { el: RelaxEl; style: string | null }[];
-}
-
-// Lifts every ancestor of the body that clips it (a scroll or hidden
-// overflow, a max-height), remembering each one's style attribute so
-// that restoreScroll puts it back. Runs in the page.
-function relaxScroll(el: RelaxEl): number {
-  const g = globalThis as unknown as RelaxGlobal;
-  const changed: { el: RelaxEl; style: string | null }[] = [];
-  for (let a = el.parentElement; a !== null; a = a.parentElement) {
-    const s = g.getComputedStyle(a);
-    if (
-      /(auto|scroll|hidden)/.test(s.overflowY + s.overflowX) ||
-      s.maxHeight !== "none"
-    ) {
-      changed.push({ el: a, style: a.getAttribute("style") });
-      a.style.setProperty("max-height", "none", "important");
-      a.style.setProperty("overflow", "visible", "important");
-      a.style.setProperty("height", "auto", "important");
-    }
-  }
-  g.__isonimRelaxed = changed;
-  return changed.length;
-}
-
-function restoreScroll(): void {
-  const g = globalThis as unknown as RelaxGlobal;
-  for (const { el, style } of g.__isonimRelaxed ?? []) {
-    if (style === null) el.removeAttribute("style");
-    else el.setAttribute("style", style);
-  }
-  g.__isonimRelaxed = [];
-}
-
-// ---------------------------------------------------------------------------
 // The provider
 // ---------------------------------------------------------------------------
 
@@ -317,14 +301,13 @@ interface StoryJob {
 
 interface Worker {
   account: PoolAccount;
-  context: BrowserContext | null;
-  page: Page | null;
-  mode: "desktop" | "mobile" | null;
-  dpr: number;
+  desk: WebmailDesktop | null;
   sessionChecked: boolean;
 }
 
 type Emit = (r: CaptureResult) => void;
+
+const DOCUMENT = { nativeRole: "document web" };
 
 export class HostedWebmailProvider implements CaptureProvider {
   readonly id = HOSTED_WEBMAIL_ID;
@@ -339,14 +322,18 @@ export class HostedWebmailProvider implements CaptureProvider {
   private readonly adapters: WebmailAdapter[];
   private readonly workspace: WorkspaceOptions;
   private readonly t: HostedWebmailTimings;
-  private readonly headlessOpt: boolean | undefined;
+  private readonly windowHeight: number;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
-  private pw: Playwright | null = null;
+  private readonly onDesktop:
+    | ((d: WebmailDesktop, account: PoolAccount) => void)
+    | undefined;
+  private ga: GuiAssert | null = null;
   private sender: WorkspaceSender | null = null;
   private run = "";
   private runDir = "";
   private cold = false;
+  private desks = 0;
   // Adapters found drifted in this run, with the diagnostic.
   private readonly down = new Map<string, string>();
   private readonly workers: Worker[] = [];
@@ -358,13 +345,10 @@ export class HostedWebmailProvider implements CaptureProvider {
     this.adapters = opts.adapters ?? WEBMAIL_ADAPTERS;
     this.workspace = opts.workspace ?? {};
     this.t = { ...DEFAULT_TIMINGS, ...opts.timings };
-    this.headlessOpt = opts.headless;
+    this.windowHeight = opts.windowHeight ?? CAPTURE_WINDOW_HEIGHT;
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? ((l) => process.stderr.write(`${l}\n`));
-  }
-
-  private headless(): boolean {
-    return this.headlessOpt ?? this.env[HEADLESS_ENV] === "1";
+    this.onDesktop = opts.onDesktop;
   }
 
   private adapter(clientId: string): {
@@ -394,11 +378,10 @@ export class HostedWebmailProvider implements CaptureProvider {
     );
   }
 
-  // The last UI fingerprint seen for the adapter's UI (desktop or
-  // mobile; a list row is on the desktop UI) and the browser build: both
-  // decide the pixels. A capture that sees another fingerprint records
-  // it and updates it, so the next run's key differs.
-  private build(adapter: WebmailAdapter, ui: "desktop" | "mobile"): string {
+  // The last UI fingerprint seen for the adapter's UI and the browser
+  // build: both decide the pixels. A capture that sees another
+  // fingerprint records it and updates it, so the next run's key differs.
+  private build(adapter: WebmailAdapter, ui: "desktop"): string {
     const browser = webmailBrowser(this.env);
     // "Google Chrome 147.0.7727.137" -> "google-chrome-147.0.7727.137"
     const name =
@@ -417,13 +400,13 @@ export class HostedWebmailProvider implements CaptureProvider {
     return [
       {
         kind: "host-os",
-        os: ["linux", "darwin"],
-        why: "the pinned Playwright Chromium runs on Linux and macOS",
+        os: ["linux"],
+        why: "the webmail browser runs in a private GuiAssert session on an Xvfb display (linux-xvfb)",
       },
       {
-        kind: "env-dir",
-        variable: "PLAYWRIGHT_BROWSERS_PATH",
-        why: "the dev shell's Playwright driver, which opens the webmail profiles in the webmail browser they were signed in with (run under `nix develop`)",
+        kind: "binary",
+        name: "guiassert",
+        why: "GuiAssert drives the webmail browser: its session, accessibility tree, OCR, screenshots and OS-level input (run under `nix develop`)",
       },
       { ...sender, why: `${sender.why}; ${REMEDY}` },
     ];
@@ -454,15 +437,14 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   async health(): Promise<ProviderHealth> {
-    if (
-      !this.headless() &&
-      !this.env.DISPLAY &&
-      !this.env.WAYLAND_DISPLAY &&
-      process.platform === "linux"
-    )
+    const browser = webmailBrowser(this.env);
+    if ("reason" in browser)
+      return { state: "unavailable", reason: browser.reason };
+    if (findExecutable("guiassert", this.host) === null)
       return {
         state: "unavailable",
-        reason: `the webmails are captured in headed Chromium (the configuration least likely to trip bot heuristics), which needs a display: neither DISPLAY nor WAYLAND_DISPLAY is set (${HEADLESS_ENV}=1 runs headless instead)`,
+        reason:
+          "no guiassert on PATH: the webmails are captured in the webmail browser driven through GuiAssert (run inside `nix develop`, which provides it)",
       };
     try {
       loadWorkspaceSender(this.host);
@@ -495,12 +477,20 @@ export class HostedWebmailProvider implements CaptureProvider {
     this.runDir = ctx.runDir;
     this.cold = ctx.cold;
     this.sender = loadWorkspaceSender(this.host);
-    if (this.pw === null) {
-      const driver = resolveDriver(this.env);
-      if ("reason" in driver) throw new Error(driver.reason);
-      this.pw = (await import(
-        pathToFileURL(join(driver.dir, "index.mjs")).href
-      )) as Playwright;
+    if (this.ga === null) {
+      const bin = findExecutable("guiassert", this.host);
+      if (bin === null)
+        throw new Error("no guiassert on PATH (run inside `nix develop`)");
+      // The sign-in's state directory: sessions of both are recorded
+      // in one place, under the profiles' root.
+      const stateDir = join(profilesRoot(this.host), ".guiassert-state");
+      mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      this.ga = new GuiAssert({
+        bin,
+        stateDir,
+        env: this.env,
+        timeoutMs: 60_000,
+      });
     }
   }
 
@@ -596,14 +586,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     const stopped: string[] = [];
     const queue = [...jobs];
     const runWorker = async (account: PoolAccount): Promise<void> => {
-      const w: Worker = {
-        account,
-        context: null,
-        page: null,
-        mode: null,
-        dpr: 1,
-        sessionChecked: false,
-      };
+      const w: Worker = { account, desk: null, sessionChecked: false };
       this.workers.push(w);
       try {
         while (queue.length > 0) {
@@ -619,7 +602,7 @@ export class HostedWebmailProvider implements CaptureProvider {
           }
         }
       } finally {
-        await this.closeContext(w);
+        await this.closeDesktop(w);
       }
     };
     await Promise.all(
@@ -658,17 +641,20 @@ export class HostedWebmailProvider implements CaptureProvider {
         return r.ready ? "budget" : r.why;
       }
       if (!w.sessionChecked) {
-        const page = await this.openContext(w, adapter, "desktop", 1);
-        const s = await checkSignedIn(
-          page.context(),
-          adapter.signin,
-          this.t.signinCheckMs,
-        );
+        let desk: WebmailDesktop;
+        try {
+          desk = await this.openDesktop(w, adapter);
+        } catch (err) {
+          if (err instanceof DesktopUnavailable)
+            return `${a.set}/${a.name}: the capture browser cannot run: ${err.message}`;
+          throw err;
+        }
+        const s = await this.checkSession(desk, adapter);
         if (!s.signedIn) {
           // An inbox that did not load at all (no network, the webmail
           // down) says nothing about the session: the account is not
           // marked, and the worker stops for this run.
-          if (s.host === "")
+          if (!s.judged)
             return `${a.set}/${a.name}: ${s.reason} (the session was not judged; the account stays in selection)`;
           this.sessionLost(a, s.reason);
           return this.lostReason(a, s.reason);
@@ -681,7 +667,10 @@ export class HostedWebmailProvider implements CaptureProvider {
         leaseMs,
         tookOver: lease.tookOver,
       });
-      if (this.cold) await this.closeContext(w);
+      if (this.cold) {
+        await this.closeDesktop(w);
+        w.sessionChecked = false;
+      }
       return null;
     } catch (err) {
       if (err instanceof SessionLostError) return err.message;
@@ -698,7 +687,7 @@ export class HostedWebmailProvider implements CaptureProvider {
       const lease = tryLease(a.profile, this.run);
       if (lease !== null) return lease;
       if (Date.now() >= deadline) return null;
-      await new Promise((r) => setTimeout(r, this.t.leasePollMs));
+      await sleep(this.t.leasePollMs);
     }
   }
 
@@ -711,119 +700,130 @@ export class HostedWebmailProvider implements CaptureProvider {
     this.log(`email-shots: hosted-webmail: ${this.lostReason(a, reason)}`);
   }
 
-  private async openContext(
+  // The worker's browser, started (with its session) on first use.
+  private async openDesktop(
     w: Worker,
     adapter: WebmailAdapter,
-    mode: "desktop" | "mobile",
-    dpr: number,
-  ): Promise<Page> {
-    if (
-      w.context !== null &&
-      w.page !== null &&
-      w.mode === mode &&
-      w.dpr === dpr
-    )
-      return w.page;
-    await this.closeContext(w);
-    const ui = mode === "mobile" ? adapter.mobile : adapter.desktop;
-    if (ui === null) throw new StepError(`${adapter.label} has no ${mode} UI`);
-    const base = webmailLaunchOptions(this.env, this.headless());
-    const mobile = mode === "mobile";
-    const context = await this.pw!.chromium.launchPersistentContext(
-      w.account.profile.userDataDir,
-      {
-        ...base,
-        viewport: {
-          width: 800 + ui.windowAllowance,
-          height: WINDOW_HEIGHT[mobile ? "mobile" : "desktop"],
-        },
-        deviceScaleFactor: dpr,
-        ...(mobile
-          ? { isMobile: true, hasTouch: true, userAgent: IPHONE_USER_AGENT }
-          : {}),
-        locale: "en-US",
-        timezoneId: "UTC",
-      },
-    );
-    // Every action fails at the step timeout, not Playwright's 30 s.
-    context.setDefaultTimeout(this.t.stepTimeoutMs);
-    w.context = context;
-    w.page = context.pages()[0] ?? (await context.newPage());
-    w.mode = mode;
-    w.dpr = dpr;
-    return w.page;
+  ): Promise<WebmailDesktop> {
+    if (w.desk !== null) return w.desk;
+    const browser = webmailBrowser(this.env);
+    if ("reason" in browser) throw new DesktopUnavailable(browser.reason);
+    const desk = await WebmailDesktop.open({
+      ga: this.ga!,
+      chrome: browser,
+      userDataDir: w.account.profile.userDataDir,
+      env: this.env,
+      width: DESKTOP_VIEWPORT.width + adapter.desktop.windowAllowance,
+      height: this.windowHeight,
+      scheme: adapter.desktop.browserScheme,
+      startUrl: adapter.signin.inboxUrl,
+      name: `capture-${adapter.set}-${w.account.name}-${process.pid}-${++this.desks}`,
+      vnc: this.env[VNC_ENV] === "1",
+    });
+    w.desk = desk;
+    if (desk.session.vncSocket !== null)
+      this.log(
+        `email-shots: hosted-webmail: ${adapter.set}/${w.account.name}: watch over VNC: the session is served on ${desk.session.vncSocket} (only this user can connect; from another machine: ssh -L 5901:${desk.session.vncSocket} <user>@<host>, then a VNC viewer on localhost:5901)`,
+      );
+    this.onDesktop?.(desk, w.account);
+    return desk;
   }
 
-  private async closeContext(w: Worker): Promise<void> {
-    const c = w.context;
-    w.context = null;
-    w.page = null;
-    w.mode = null;
-    if (c !== null) await c.close().catch(() => {});
+  private async closeDesktop(w: Worker): Promise<void> {
+    const d = w.desk;
+    w.desk = null;
+    if (d !== null) await d.close().catch(() => undefined);
+  }
+
+  // The session check: the browser was started on the inbox URL; the
+  // mailbox must show (OCR, the sign-in's mailbox phrases) while the
+  // address bar is on a mail host. Off the mail hosts for offHostMs is
+  // signed out; the browser's own error page is a load failure, which
+  // judges nothing. Types, clicks and presses nothing.
+  private async checkSession(
+    desk: WebmailDesktop,
+    adapter: WebmailAdapter,
+  ): Promise<
+    { signedIn: true } | { signedIn: false; judged: boolean; reason: string }
+  > {
+    const provider = PROVIDER_SIGNIN[adapter.set];
+    const deadline = Date.now() + this.t.signinCheckMs;
+    let offSince: number | null = null;
+    let host: string | null = null;
+    for (;;) {
+      const snap = await desk.snapshot();
+      host = snap.location === null ? null : locationHost(snap.location);
+      const onMail = host !== null && adapter.signin.mailHosts.includes(host);
+      const text = await desk.ocrText();
+      const norm = normalize(text);
+      if (BROWSER_ERROR_PHRASES.some((p) => norm.includes(` ${p} `)))
+        return {
+          signedIn: false,
+          judged: false,
+          reason: `the inbox did not load (the browser's error page on ${host ?? "an unknown address"})`,
+        };
+      if (
+        onMail &&
+        provider !== undefined &&
+        classifyScreen(provider, text, undefined).kind === "done"
+      )
+        return { signedIn: true };
+      const now = Date.now();
+      if (host !== null && !onMail) {
+        offSince ??= now;
+        if (now - offSince >= this.t.offHostMs)
+          return {
+            signedIn: false,
+            judged: true,
+            reason: `the inbox was redirected to ${host}, not ${adapter.signin.mailHosts.join(" or ")}: the profile is not signed in`,
+          };
+      } else offSince = null;
+      if (now >= deadline)
+        return onMail
+          ? {
+              signedIn: false,
+              judged: true,
+              reason: `the inbox loaded on ${host} but the mailbox did not show within ${Math.round(this.t.signinCheckMs / 1000)} s`,
+            }
+          : {
+              signedIn: false,
+              judged: false,
+              reason: `the inbox did not load within ${Math.round(this.t.signinCheckMs / 1000)} s (the address bar: ${host ?? "unread"})`,
+            };
+      await sleep(500);
+    }
   }
 
   // The page must be on one of the mail hosts; otherwise the session
   // is gone (a sign-in page, a consent wall).
   private assertOnMailHost(
     adapter: WebmailAdapter,
-    page: Page,
+    snap: Snapshot,
     a: PoolAccount,
   ): void {
-    let host = "";
-    try {
-      host = new URL(page.url()).host;
-    } catch {
-      // about:blank and the like: not a mail host
-    }
-    if (!adapter.signin.mailHosts.includes(host)) {
-      const reason = `the page went to ${host === "" ? page.url() : host}, not ${adapter.signin.mailHosts.join(" or ")}`;
+    if (snap.location === null)
+      throw new StepError(
+        `${adapter.label}: the browser's address bar could not be read from its accessibility tree`,
+      );
+    const host = locationHost(snap.location);
+    if (host === null || !adapter.signin.mailHosts.includes(host)) {
+      const reason = `the page went to ${host ?? snap.location}, not ${adapter.signin.mailHosts.join(" or ")}`;
       this.sessionLost(a, reason);
       throw new SessionLostError(this.lostReason(a, reason));
     }
   }
 
-  // Waits for `loc` and requires exactly one visible match. A miss on a
-  // mail host is UI drift; off the mail hosts it is a lost session.
-  private async exactlyOne(
-    scope: Page | Locator,
-    page: Page,
-    adapter: WebmailAdapter,
-    a: PoolAccount,
-    name: string,
-    loc: WebmailLocator,
-    state: "visible" | "attached" = "visible",
-  ): Promise<Locator> {
-    const css = state === "visible" ? `${loc.css} >> visible=true` : loc.css;
-    const l = scope.locator(css);
-    try {
-      await l.first().waitFor({ state, timeout: this.t.stepTimeoutMs });
-    } catch {
-      this.assertOnMailHost(adapter, page, a);
-      throw this.drift(
-        adapter,
-        name,
-        loc,
-        `matched no ${state} element within ${this.t.stepTimeoutMs / 1000} s`,
-      );
-    }
-    const n = await l.count();
-    if (n !== 1)
-      throw this.drift(
-        adapter,
-        name,
-        loc,
-        `matched ${n} elements, expected exactly one`,
-      );
-    return l;
-  }
-
   private drift(
     adapter: WebmailAdapter,
     name: string,
-    loc: WebmailLocator,
+    loc: WebmailLocator | null,
     what: string,
   ): DriftError {
-    const msg = `UI drift: ${adapter.label} adapter locator '${name}' (${loc.css}, ${loc.status}) ${what}; the adapter is down for the rest of this run (fix the locator in webmail_adapters.ts)`;
+    const how =
+      loc === null
+        ? "the story region"
+        : `${describeLocator(loc)}, ${loc.status}`;
+    const msg = `UI drift: ${adapter.label} adapter locator '${name}' (${how}) ${what}; the adapter is down for the rest of this run (fix the locator in webmail_adapters.ts)`;
     if (!this.down.has(adapter.id)) {
       this.down.set(adapter.id, msg);
       this.log(`email-shots: hosted-webmail: ${msg}`);
@@ -831,49 +831,88 @@ export class HostedWebmailProvider implements CaptureProvider {
     return new DriftError(msg);
   }
 
+  // Waits for `loc` and requires exactly one showing match. A miss on a
+  // mail host is UI drift; off the mail hosts it is a lost session.
+  private async exactlyOne(
+    desk: WebmailDesktop,
+    adapter: WebmailAdapter,
+    a: PoolAccount,
+    name: string,
+    loc: WebmailLocator,
+  ): Promise<{ snap: Snapshot; node: Flat }> {
+    const r = await desk.waitFor(
+      (s) => findShowing(s.flat, loc).length > 0,
+      this.t.stepTimeoutMs,
+    );
+    if (!r.ok) {
+      this.assertOnMailHost(adapter, r.snap, a);
+      throw this.drift(
+        adapter,
+        name,
+        loc,
+        `matched no showing element within ${this.t.stepTimeoutMs / 1000} s`,
+      );
+    }
+    const found = findShowing(r.snap.flat, loc);
+    if (found.length !== 1)
+      throw this.drift(
+        adapter,
+        name,
+        loc,
+        `matched ${found.length} elements, expected exactly one`,
+      );
+    return { snap: r.snap, node: found[0]! };
+  }
+
   // The rows of the current list that carry the token.
-  private async tokenRows(
-    page: Page,
-    ui: AdapterUi,
-    token: string,
-  ): Promise<Locator> {
-    const rows = page
-      .locator(`${ui.row.css} >> visible=true`)
-      .filter({ hasText: token });
-    await rows
-      .first()
-      .waitFor({ state: "visible", timeout: this.t.listSettleMs })
-      .catch(() => {});
-    return rows;
+  private tokenRows(snap: Snapshot, ui: AdapterUi, token: string): Flat[] {
+    return findShowing(snap.flat, ui.row).filter((f) =>
+      (f.node.name ?? "").includes(token),
+    );
+  }
+
+  // The headings (the opened subject) that carry the token.
+  private tokenHeadings(snap: Snapshot, ui: AdapterUi, token: string): Flat[] {
+    return findShowing(snap.flat, ui.opened.subject).filter((f) =>
+      (f.node.name ?? "").includes(token),
+    );
   }
 
   // Looks for the message in `folders`, once each (and their tabs).
   private async lookIn(
     adapter: WebmailAdapter,
-    ui: AdapterUi,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
     d: { messageId: string; subjectToken: string },
     folders: FolderName[],
-  ): Promise<{ folder: FolderName; rows: Locator; count: number } | null> {
+  ): Promise<{ folder: FolderName; rows: Flat[] } | null> {
+    const ui = adapter.desktop;
+    const has = (s: Snapshot): boolean =>
+      this.tokenRows(s, ui, d.subjectToken).length > 0;
     for (const name of folders) {
       const f = ui.folders[name];
-      await page.goto(
-        folderUrl(f, { messageId: d.messageId, token: d.subjectToken }),
-        {
-          timeout: this.t.stepTimeoutMs,
-        },
-      );
-      this.assertOnMailHost(adapter, page, a);
-      for (const tab of [null, ...f.tabs]) {
-        if (tab !== null) {
-          const t = page.locator(`${tab.css} >> visible=true`);
-          if ((await t.count()) !== 1) continue;
-          await t.click();
-        }
-        const rows = await this.tokenRows(page, ui, d.subjectToken);
-        const count = await rows.count();
-        if (count > 0) return { folder: name, rows, count };
+      const url = folderUrl(f, {
+        messageId: d.messageId,
+        token: d.subjectToken,
+      });
+      const r = await desk.navigate(url, has, this.t.listSettleMs);
+      this.assertOnMailHost(adapter, r.snap, a);
+      if (r.ok)
+        return {
+          folder: name,
+          rows: this.tokenRows(r.snap, ui, d.subjectToken),
+        };
+      for (const tab of f.tabs) {
+        const t = findShowing(r.snap.flat, tab);
+        if (t.length !== 1) continue;
+        await desk.click(t[0]!.node.bounds!);
+        const r2 = await desk.waitFor(has, this.t.listSettleMs);
+        this.assertOnMailHost(adapter, r2.snap, a);
+        if (r2.ok)
+          return {
+            folder: name,
+            rows: this.tokenRows(r2.snap, ui, d.subjectToken),
+          };
       }
     }
     return null;
@@ -881,44 +920,38 @@ export class HostedWebmailProvider implements CaptureProvider {
 
   private async findArrival(
     adapter: WebmailAdapter,
-    ui: AdapterUi,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
     d: WorkspaceDelivery,
-  ): Promise<{ folder: FolderName; row: Locator; ms: number; polls: number }> {
+  ): Promise<{ folder: FolderName; row: Flat; ms: number; polls: number }> {
+    const ui = adapter.desktop;
     const t0 = Date.now();
     const deadline = t0 + this.t.arrivalTimeoutMs;
     let polls = 0;
     for (;;) {
       polls++;
-      const found = await this.lookIn(adapter, ui, page, a, d, [
-        "inbox",
-        "spam",
-      ]);
+      const found = await this.lookIn(adapter, desk, a, d, ["inbox", "spam"]);
       if (found !== null) {
-        if (found.count !== 1)
+        if (found.rows.length !== 1)
           throw new StepError(
-            `${adapter.label}: ${found.count} messages in ${ui.folders[found.folder].label} carry the run token ${d.subjectToken}, expected one`,
+            `${adapter.label}: ${found.rows.length} messages in ${ui.folders[found.folder].label} carry the run token ${d.subjectToken}, expected one`,
           );
         return {
           folder: found.folder,
-          row: found.rows.first(),
+          row: found.rows[0]!,
           ms: Date.now() - t0,
           polls,
         };
       }
       if (Date.now() >= deadline) {
-        // An Inbox list in which the row locator matches nothing at all
-        // may be a UI the adapter no longer recognises.
-        const any = await page
-          .locator(`${ui.row.css} >> visible=true`)
-          .count()
-          .catch(() => 0);
+        // A list in which the row locator matches nothing at all may be
+        // a UI the adapter no longer recognises.
+        const any = findShowing((await desk.snapshot()).flat, ui.row).length;
         throw new DeliveryTimeout(
-          `delivery failure: ${d.messageId} (sent through the Gmail API as ${d.api.id}) was not found in ${adapter.label}'s ${ui.folders.inbox.label} or ${ui.folders.spam.label} within ${Math.round(this.t.arrivalTimeoutMs / 1000)} s (${polls} looks)${any === 0 ? `; the row locator (${ui.row.css}, ${ui.row.status}) matched no row at all in the last list looked at: if that folder is not empty, the adapter no longer matches the UI` : ""}`,
+          `delivery failure: ${d.messageId} (sent through the Gmail API as ${d.api.id}) was not found in ${adapter.label}'s ${ui.folders.inbox.label} or ${ui.folders.spam.label} within ${Math.round(this.t.arrivalTimeoutMs / 1000)} s (${polls} looks)${any === 0 ? `; the row locator (${describeLocator(ui.row)}, ${ui.row.status}) matched no row at all in the last list looked at: if that folder is not empty, the adapter no longer matches the UI` : ""}`,
         );
       }
-      await new Promise((r) => setTimeout(r, this.t.pollMs));
+      await sleep(this.t.pollMs);
     }
   }
 
@@ -933,6 +966,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     lease: { leaseMs: number; tookOver: { pid: number; run: string } | null },
   ): Promise<void> {
     const a = w.account;
+    const ui = adapter.desktop;
     const message = messages.get(job.mimeSha256);
     const answered = new Set<CaptureRequest>();
     const emitted = emit;
@@ -953,12 +987,11 @@ export class HostedWebmailProvider implements CaptureProvider {
       return;
     }
     // List rows first (before the message is opened and marked read),
-    // then the desktop bodies, then the mobile ones.
-    const order = (r: CaptureRequest): number => {
-      const c = this.adapter(r.clientId)!.client;
-      return c.kind === "list" ? 0 : c.ui === "desktop" ? 1 : 2;
-    };
+    // then the bodies.
+    const order = (r: CaptureRequest): number =>
+      this.adapter(r.clientId)!.client.kind === "list" ? 0 : 1;
     const requests = [...job.requests].sort((x, y) => order(x) - order(y));
+    const texts = storyTexts(message.html);
 
     const shared: Record<string, unknown> = {
       lease: {
@@ -967,6 +1000,10 @@ export class HostedWebmailProvider implements CaptureProvider {
           lease.tookOver === null
             ? null
             : { pid: lease.tookOver.pid, run: lease.tookOver.run },
+      },
+      browser: {
+        driver: "guiassert",
+        automation: "none",
       },
     };
     const timing: Record<string, number> = { lease: lease.leaseMs };
@@ -1007,18 +1044,11 @@ export class HostedWebmailProvider implements CaptureProvider {
       };
 
     let handle: Handle | null = null;
-    let page: Page | null = null;
+    let desk: WebmailDesktop | null = null;
     try {
-      const first = this.adapter(requests[0]!.clientId)!.client;
-      page = await this.openContext(
-        w,
-        adapter,
-        first.ui,
-        requests[0]!.viewport.dpr,
-      );
-      const ui0 = first.ui === "mobile" ? adapter.mobile! : adapter.desktop;
+      desk = await this.openDesktop(w, adapter);
       const tArr = performance.now();
-      const found = await this.findArrival(adapter, ui0, page, a, delivery);
+      const found = await this.findArrival(adapter, desk, a, delivery);
       timing.arrival = performance.now() - tArr;
       handle = {
         delivery,
@@ -1028,16 +1058,15 @@ export class HostedWebmailProvider implements CaptureProvider {
       };
       shared.arrival = {
         folder: found.folder,
-        folder_label: ui0.folders[found.folder].label,
+        folder_label: ui.folders[found.folder].label,
         latency_ms: found.ms,
         polls: found.polls,
       };
-      let row: Locator | null = found.row;
-      let opened: { ui: AdapterUi; mode: string } | null = null;
+      let row: Flat | null = found.row;
+      let opened = false;
 
       for (const req of requests) {
         const { client } = this.adapter(req.clientId)!;
-        const ui = client.ui === "mobile" ? adapter.mobile! : adapter.desktop;
         const t0 = performance.now();
         const prov: Record<string, unknown> = {
           ...shared,
@@ -1055,35 +1084,16 @@ export class HostedWebmailProvider implements CaptureProvider {
         try {
           if (this.down.has(adapter.id))
             throw new DriftError(this.down.get(adapter.id)!);
-          // A move between desktop and mobile reopens the profile, and
-          // the message is looked up again where it arrived.
-          if (w.mode !== client.ui || w.dpr !== req.viewport.dpr) {
-            page = await this.openContext(
-              w,
-              adapter,
-              client.ui,
-              req.viewport.dpr,
+          if (req.viewport.width !== DESKTOP_VIEWPORT.width)
+            throw new StepError(
+              `${adapter.label}: the window is sized for a ${DESKTOP_VIEWPORT.width} px body when the browser starts; ${req.viewport.width} px is not captured`,
             );
-            const again = await this.lookIn(adapter, ui, page, a, delivery, [
-              handle.folder,
-            ]);
-            if (again === null || again.count !== 1)
-              throw new StepError(
-                `${adapter.label} (${client.ui}): the delivered message is not in ${ui.folders[handle.folder].label} any more`,
-              );
-            row = again.rows.first();
-            opened = null;
-          }
-          await page.setViewportSize({
-            width: req.viewport.width + ui.windowAllowance,
-            height: WINDOW_HEIGHT[client.ui],
-          });
           if (client.kind === "list") {
             if (row === null)
               throw new StepError(
                 `${adapter.label}: the list row is captured before the message is opened, and it already was`,
               );
-            const r = await this.captureRow(adapter, ui, page, a, row);
+            const r = await this.captureRow(adapter, desk, a, row);
             rtiming.capture = performance.now() - t0;
             rtiming.total =
               performance.now() -
@@ -1098,20 +1108,21 @@ export class HostedWebmailProvider implements CaptureProvider {
             });
             continue;
           }
-          if (opened === null) {
+          if (!opened) {
             const tOpen = performance.now();
-            await this.open(adapter, ui, page, a, row!, delivery.subjectToken);
+            await this.open(adapter, desk, a, row!, delivery.subjectToken);
             rtiming.open = performance.now() - tOpen;
-            opened = { ui, mode: client.ui };
+            opened = true;
             row = null;
           }
           const shot = await this.captureBody(
             adapter,
-            ui,
-            page,
+            desk,
             a,
             req,
             client,
+            texts,
+            delivery.subjectToken,
             rtiming,
           );
           Object.assign(prov, shot.provenance);
@@ -1141,14 +1152,18 @@ export class HostedWebmailProvider implements CaptureProvider {
     } catch (err) {
       if (handle === null) {
         // Nothing was captured: every request fails with the reason.
-        failAll(oneLine(err), shared);
+        const reason =
+          err instanceof DesktopUnavailable
+            ? `the capture browser cannot run: ${err.message}`
+            : oneLine(err);
+        failAll(reason, shared);
         this.cleanupRecord({
           account: a.name,
           set: a.set,
           message_id: delivery.messageId,
           folder: null,
           state: err instanceof DeliveryTimeout ? "not-found" : "failed",
-          reason: oneLine(err),
+          reason,
         });
         if (err instanceof SessionLostError) throw err;
         return;
@@ -1159,209 +1174,266 @@ export class HostedWebmailProvider implements CaptureProvider {
         throw err;
       }
     }
-    if (page !== null && handle !== null)
-      await this.remove(adapter, w, page, a, handle);
+    if (desk !== null && handle !== null)
+      await this.remove(adapter, desk, a, handle);
   }
 
   private async captureRow(
     adapter: WebmailAdapter,
-    ui: AdapterUi,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
-    row: Locator,
+    row: Flat,
   ): Promise<{ png: Uint8Array; texts: Record<string, string> }> {
-    await row.scrollIntoViewIfNeeded();
-    const texts: Record<string, string> = {};
-    for (const [name, loc] of Object.entries(ui.rowParts)) {
-      const part = row.locator(loc.css).first();
-      if ((await row.locator(loc.css).count()) === 0)
-        throw this.drift(
-          adapter,
-          `row.${name}`,
-          loc,
-          "matched nothing inside the message's row",
-        );
-      texts[name] = ((await part.textContent()) ?? "").trim();
-    }
-    this.assertOnMailHost(adapter, page, a);
-    const png = await row.screenshot({ animations: "disabled", caret: "hide" });
-    return { png, texts };
+    const snap = await desk.snapshot();
+    this.assertOnMailHost(adapter, snap, a);
+    const name = row.node.name ?? "";
+    // The row read again: it must still be shown where it was.
+    const again = findShowing(snap.flat, adapter.desktop.row).find(
+      (f) => (f.node.name ?? "") === name,
+    );
+    if (again === undefined)
+      throw new StepError(
+        `${adapter.label}: the message's row is no longer shown in the list`,
+      );
+    const b = again.node.bounds!;
+    const png = await desk.capture(b);
+    const ocr = (await desk.ocrRegion(b)).replace(/\s+/g, " ").trim();
+    return { png, texts: { name, ocr } };
   }
 
+  // Opens the row's message: a heading must then carry the token. With
+  // `needBody` its body must be found too (the removal checks only who
+  // the message is: its body need not be recognised to delete it).
   private async open(
     adapter: WebmailAdapter,
-    ui: AdapterUi,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
-    row: Locator,
+    row: Flat,
     token: string,
-    // The removal checks only who the message is: its body need not be
-    // recognised to delete it.
     needBody = true,
   ): Promise<void> {
-    await row.click();
-    if (needBody)
-      await this.exactlyOne(
-        page,
-        page,
-        adapter,
-        a,
-        "opened.body",
-        ui.opened.body,
-      );
-    const subject = await this.exactlyOne(
-      page,
-      page,
-      adapter,
-      a,
-      "opened.subject",
-      ui.opened.subject,
+    const ui = adapter.desktop;
+    await desk.click(
+      clickTarget(row.node as typeof row.node & { bounds: Rect }, token),
     );
-    const shown = ((await subject.textContent()) ?? "").trim();
-    if (!shown.includes(token))
-      throw new StepError(
-        `${adapter.label}: the opened message is not the delivered one (its subject '${shown}' lacks the run token ${token})`,
+    const r = await desk.waitFor(
+      (s) =>
+        this.tokenHeadings(s, ui, token).length > 0 ||
+        (findShowing(s.flat, ui.opened.subject).length > 0 &&
+          findShowing(s.flat, ui.row).every(
+            (f) => !(f.node.name ?? "").includes(token),
+          )),
+      this.t.stepTimeoutMs,
+    );
+    const carrying = this.tokenHeadings(r.snap, ui, token);
+    if (carrying.length === 1) return;
+    this.assertOnMailHost(adapter, r.snap, a);
+    if (carrying.length > 1)
+      throw this.drift(
+        adapter,
+        "opened.subject",
+        ui.opened.subject,
+        `matched ${carrying.length} headings carrying the run token, expected exactly one`,
       );
+    const shown = findShowing(r.snap.flat, ui.opened.subject);
+    if (!r.ok || shown.length === 0)
+      throw this.drift(
+        adapter,
+        "opened.subject",
+        ui.opened.subject,
+        `matched no showing element carrying the run token within ${this.t.stepTimeoutMs / 1000} s`,
+      );
+    throw new StepError(
+      `${adapter.label}: the opened message is not the delivered one (no heading carries the run token ${token}; shown: ${shown.map((f) => `'${f.node.name ?? ""}'`).join(", ")})`,
+    );
   }
 
-  // Whether the message open on the page is the delivered one.
-  private async openedCarries(
-    page: Page,
-    ui: AdapterUi,
+  // The opened message's body: the node its own locator names, or the
+  // story region (a11y_tree.ts `locateStoryRegion`).
+  private locateBody(
+    adapter: WebmailAdapter,
+    snap: Snapshot,
+    texts: string[],
     token: string,
-  ): Promise<boolean> {
-    const subject = page.locator(`${ui.opened.subject.css} >> visible=true`);
-    if ((await subject.count()) !== 1) return false;
-    return ((await subject.textContent()) ?? "").includes(token);
+  ): {
+    rect: Rect;
+    node: Flat | null;
+    subject: Flat;
+    how: Record<string, unknown>;
+  } {
+    const ui = adapter.desktop;
+    const headings = this.tokenHeadings(snap, ui, token);
+    if (headings.length !== 1)
+      throw new StepError(
+        `${adapter.label}: the opened message's subject is not shown any more (${headings.length} headings carry the run token)`,
+      );
+    const subject = headings[0]!;
+    if (ui.opened.body !== null) {
+      const found = findShowing(snap.flat, ui.opened.body);
+      if (found.length !== 1)
+        throw this.drift(
+          adapter,
+          "opened.body",
+          ui.opened.body,
+          found.length === 0
+            ? "matched no showing element"
+            : `matched ${found.length} elements, expected exactly one`,
+        );
+      return {
+        rect: found[0]!.node.bounds!,
+        node: found[0]!,
+        subject,
+        how: { locator: describeLocator(ui.opened.body) },
+      };
+    }
+    const scope = closest(subject, DOCUMENT) ?? snap.flat[0]!;
+    const region = locateStoryRegion(snap.flat, texts, {
+      scope,
+      chrome: WEBMAIL_CHROME,
+      subject,
+    });
+    if (region === null)
+      throw this.drift(
+        adapter,
+        "opened.body",
+        null,
+        "found no showing node below the subject carrying the story's text",
+      );
+    return {
+      rect: region.rect,
+      node: null,
+      subject,
+      how: {
+        locator: "story region",
+        carriers: region.carriers,
+        foreign_inside: region.foreignInside,
+        bounded: { top: region.top, bottom: region.bottom },
+      },
+    };
   }
 
   private async captureBody(
     adapter: WebmailAdapter,
-    ui: AdapterUi,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
     req: CaptureRequest,
     client: AdapterClient,
+    texts: string[],
+    token: string,
     timing: Record<string, number>,
   ): Promise<{ png: Uint8Array; provenance: Record<string, unknown> }> {
+    const ui = adapter.desktop;
     const provenance: Record<string, unknown> = {};
-    // The scheme: the app follows the browser's colour scheme; a
-    // webmail with a body toggle (Outlook.com) runs its dark theme for
-    // both states and the toggle decides the body.
+    let snap = await desk.snapshot();
+    this.assertOnMailHost(adapter, snap, a);
+    let at = this.locateBody(adapter, snap, texts, token);
+
+    // The scheme: the browser's, fixed when it started; a webmail with a
+    // body toggle (Outlook.com) runs its dark theme for both states and
+    // the toggle decides the body.
     const toggle = ui.darkToggle;
-    await page.emulateMedia({
-      colorScheme: toggle !== null || req.scheme === "dark" ? "dark" : "light",
-    });
-    const body = await this.exactlyOne(
-      page,
-      page,
-      adapter,
-      a,
-      "opened.body",
-      ui.opened.body,
-    );
-    if (ui.opened.bodyReady !== null)
-      await this.exactlyOne(
-        body,
-        page,
-        adapter,
-        a,
-        "opened.bodyReady",
-        ui.opened.bodyReady,
-        "attached",
-      );
     if (toggle !== null && client.schemes.includes("dark")) {
-      const button = await this.exactlyOne(
-        page,
-        page,
-        adapter,
-        a,
-        "darkToggle",
-        toggle,
-      );
       const wantLight = req.scheme !== "dark";
-      const pressed = async (): Promise<boolean> =>
-        (await button.getAttribute("aria-pressed")) === "true";
-      if ((await pressed()) !== wantLight) await button.click();
-      if ((await pressed()) !== wantLight)
-        throw new StepError(
-          `${adapter.label}: the background toggle did not switch the body to ${wantLight ? "light" : "dark"}`,
+      const isChecked = (s: Snapshot): boolean | null => {
+        const t = findShowing(s.flat, toggle);
+        return t.length === 1 ? t[0]!.node.states.includes("checked") : null;
+      };
+      const t = await this.exactlyOne(desk, adapter, a, "darkToggle", toggle);
+      const before = meanLuminance(await desk.capture(at.rect));
+      if (t.node.node.states.includes("checked") !== wantLight) {
+        await desk.click(t.node.node.bounds!);
+        const r = await desk.waitFor(
+          (s) => isChecked(s) === wantLight,
+          this.t.stepTimeoutMs,
         );
+        if (!r.ok)
+          throw new StepError(
+            `${adapter.label}: the background toggle did not switch the body to ${wantLight ? "light" : "dark"}`,
+          );
+        snap = r.snap;
+        at = this.locateBody(adapter, snap, texts, token);
+      }
       provenance.scheme_applied = {
         scheme: req.scheme,
-        evidence: `background toggle aria-pressed=${wantLight}`,
-        recoloured_elements: await body
-          .locator("[data-ogsc], [data-ogsb]")
-          .count(),
+        browser: ui.browserScheme,
+        evidence: `background toggle checked=${wantLight}`,
+        luminance_before: Math.round(before),
       };
     } else
       provenance.scheme_applied = {
         scheme: req.scheme,
+        browser: ui.browserScheme,
         evidence: "the webmail does not recolour the body",
       };
 
-    // Settle: fonts, the body's images (bounded, never a failure: with
-    // no public asset base they cannot load), a stable box.
+    // The visual settle: the body's region captured until two frames
+    // stableMs apart are identical and its bounds did not move (fonts
+    // and images loading change both), bounded; never a failure.
     const tSettle = performance.now();
-    await page.evaluate("document.fonts.ready.then(() => true)");
-    const tImg = Date.now();
-    let imagesComplete = false;
+    const bound = Date.now() + this.t.imageTimeoutMs;
+    let png: Uint8Array | null = null;
+    let rect: Rect = at.rect;
+    let settled = false;
+    let frames = 0;
     for (;;) {
-      imagesComplete = (await body.evaluate((el: BodyEl) =>
-        Array.from(el.querySelectorAll("img")).every((i) => i.complete),
-      )) as boolean;
-      if (imagesComplete || Date.now() - tImg >= this.t.imageTimeoutMs) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    let box = await body.boundingBox();
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, this.t.stableMs));
-      const next = await body.boundingBox();
+      const next = await desk.capture(rect);
+      frames++;
       if (
-        box !== null &&
-        next !== null &&
-        next.width === box.width &&
-        next.height === box.height &&
-        next.x === box.x &&
-        next.y === box.y
-      )
-        break;
-      box = next;
-    }
-    timing.settle = performance.now() - tSettle;
-    provenance.images_complete = imagesComplete;
-
-    // UI fingerprint of the reading pane, the body left out.
-    const root = await this.exactlyOne(
-      page,
-      page,
-      adapter,
-      a,
-      "fingerprintRoot",
-      ui.fingerprintRoot,
-      "attached",
-    );
-    const structure = (await root.evaluate((el: El, skip: string) => {
-      const skipped = new Set(Array.from(el.querySelectorAll(skip)));
-      const out: string[] = [];
-      const walk = (e: El, depth: number): void => {
-        if (skipped.has(e)) {
-          out.push(`${depth}:BODY`);
-          return;
+        png !== null &&
+        Buffer.compare(Buffer.from(png), Buffer.from(next)) === 0
+      ) {
+        snap = await desk.snapshot();
+        at = this.locateBody(adapter, snap, texts, token);
+        if (sameRect(at.rect, rect)) {
+          settled = true;
+          png = next;
+          break;
         }
-        const classes = Array.from(e.classList).sort().join(".");
-        out.push(
-          `${depth}:${e.tagName.toLowerCase()}[${e.getAttribute("role") ?? ""}].${classes}`,
-        );
-        for (const c of Array.from(e.children)) walk(c, depth + 1);
-      };
-      walk(el, 0);
-      return out.join("\n");
-    }, ui.opened.body.css)) as string;
-    const fp = createHash("sha256")
-      .update(structure)
-      .digest("hex")
-      .slice(0, 12);
+        rect = at.rect;
+        png = null;
+        continue;
+      }
+      png = next;
+      if (Date.now() >= bound) break;
+      await sleep(this.t.stableMs);
+      snap = await desk.snapshot();
+      at = this.locateBody(adapter, snap, texts, token);
+      if (!sameRect(at.rect, rect)) {
+        rect = at.rect;
+        png = null;
+      }
+    }
+    if (png === null) png = await desk.capture(rect);
+    timing.settle = performance.now() - tSettle;
+    provenance.settle = { settled, frames };
+    this.assertOnMailHost(adapter, snap, a);
+
+    // A body taller than the window's visible part is not captured
+    // rather than cut (scroll-and-stitch is later).
+    const doc = closest(at.subject, DOCUMENT);
+    const visibleBottom = Math.min(
+      this.windowHeight,
+      doc?.node.bounds === null || doc === null
+        ? this.windowHeight
+        : doc.node.bounds[1] + doc.node.bounds[3],
+    );
+    if (rect[1] + rect[3] > visibleBottom || rect[1] < 0)
+      throw new StepError(
+        `${adapter.label}: the message body is ${rect[3]} px tall and reaches y=${rect[1] + rect[3]}, past the window's visible part (y=${visibleBottom}); it is not captured rather than cut (bodies taller than the window are not supported yet)`,
+      );
+
+    // UI fingerprint of the page the message is on, the body and the
+    // list's rows left out.
+    const root = doc ?? snap.flat[0]!;
+    const body = at.node;
+    const fp = structureFingerprint(
+      snap.flat,
+      root,
+      (f) =>
+        (body !== null && isWithin(f, body)) ||
+        insideRect(f.node.bounds, rect) ||
+        matches(f.node, ui.row),
+    );
     const previous = readFingerprint(this.host, adapter.set, client.ui);
     if (previous !== fp)
       writeFingerprint(this.host, adapter.set, client.ui, fp);
@@ -1369,151 +1441,107 @@ export class HostedWebmailProvider implements CaptureProvider {
       value: fp,
       previous,
       changed: previous !== null && previous !== fp,
+      basis:
+        "accessibility roles of the page, the body and the list's rows left out",
     };
 
-    // The crop: lift the body's clipping ancestors, grow the window to
-    // hold it, screenshot it with the chrome inside it masked.
+    // Masks: the chrome inside the body's box, painted over the crop.
     const tCap = performance.now();
-    await body.scrollIntoViewIfNeeded();
-    const relaxed = (await body.evaluate(relaxScroll)) as number;
-    try {
-      box = await body.boundingBox();
-      if (box === null)
-        throw new StepError(`${adapter.label}: the message body has no box`);
-      const height = WINDOW_HEIGHT[client.ui];
-      const need = Math.ceil(box.y + box.height + 16);
-      const windowWidth = req.viewport.width + ui.windowAllowance;
-      if (need > height) {
-        await page.setViewportSize({ width: windowWidth, height: need });
-        box = (await body.boundingBox()) ?? box;
-      }
-      const masks = ui.opened.masks.map((m) => body.locator(m.css));
-      const png = await body.screenshot({
-        animations: "disabled",
-        caret: "hide",
-        mask: masks,
-      });
-      timing.capture = performance.now() - tCap;
-      provenance.crop = {
-        selector: ui.opened.body.css,
-        x: box.x,
-        y: box.y,
-        width: box.width,
-        height: box.height,
-        window: { width: windowWidth, height: Math.max(height, need) },
-        relaxed_ancestors: relaxed,
-        masks: ui.opened.masks.map((m) => m.css),
-      };
-      // [calibrate] the body is meant to get the requested width.
-      provenance.width_check = {
-        requested: req.viewport.width,
-        measured: Math.round(box.width),
-        delta: Math.round(box.width) - req.viewport.width,
-      };
-      return { png, provenance };
-    } finally {
-      await page.evaluate(restoreScroll).catch(() => {});
-    }
+    const masks = ui.opened.masks.flatMap((m) =>
+      findShowing(snap.flat, m, at.node)
+        .filter((f) => at.node !== null || insideRect(f.node.bounds, rect))
+        .map((f) => f.node.bounds!),
+    );
+    png = paintMasks(png, [rect[0], rect[1]], masks);
+    timing.capture = performance.now() - tCap;
+    const windowWidth = DESKTOP_VIEWPORT.width + ui.windowAllowance;
+    provenance.crop = {
+      ...at.how,
+      x: rect[0],
+      y: rect[1],
+      width: rect[2],
+      height: rect[3],
+      window: { width: windowWidth, height: this.windowHeight },
+      masks: ui.opened.masks.map((m) => describeLocator(m)),
+      masked: masks.length,
+    };
+    provenance.tree = {
+      nodes: snap.nodes,
+      read_ms: Math.round(snap.ms),
+      truncated: snap.truncated,
+    };
+    if (toggle !== null && client.schemes.includes("dark"))
+      (provenance.scheme_applied as Record<string, unknown>).luminance =
+        Math.round(meanLuminance(png));
+    // [calibrate] the body is meant to get the requested width.
+    provenance.width_check = {
+      requested: req.viewport.width,
+      measured: rect[2],
+      delta: rect[2] - req.viewport.width,
+    };
+    return { png, provenance };
   }
 
-  // Deletes the message in the UI (then from Trash), looks for it
+  // Deletes the message in the UI (then from Trash; or for good at once
+  // in a folder of `remove.permanentIn`, Gmail's Spam), looks for it
   // again everywhere, and records the outcome.
   private async remove(
     adapter: WebmailAdapter,
-    w: Worker,
-    page: Page,
+    desk: WebmailDesktop,
     a: PoolAccount,
     handle: Handle,
   ): Promise<void> {
     const d = handle.delivery;
-    const ui = w.mode === "mobile" ? adapter.mobile! : adapter.desktop;
+    const ui = adapter.desktop;
     const record = {
       account: a.name,
       set: a.set,
       message_id: d.messageId,
       folder: handle.folder,
     };
+    const permanent = ui.remove.permanentIn.includes(handle.folder);
+    const delLoc = permanent ? ui.remove.deleteForever : ui.remove.del;
     try {
-      // Delete only the delivered message: the open one when its subject
+      // Delete only the delivered message: the open one when a heading
       // carries the run token, otherwise its row is found where it
       // arrived and opened with the identity check (a message that
       // cannot be shown to be the delivered one is never deleted).
-      let del = page.locator(`${ui.remove.del.css} >> visible=true`);
+      const snap = await desk.snapshot();
+      let del = findShowing(snap.flat, delLoc);
       if (
-        (await del.count()) !== 1 ||
-        !(await this.openedCarries(page, ui, d.subjectToken))
+        del.length !== 1 ||
+        this.tokenHeadings(snap, ui, d.subjectToken).length !== 1
       ) {
-        const where = await this.lookIn(adapter, ui, page, a, d, [
-          handle.folder,
-        ]);
+        const where = await this.lookIn(adapter, desk, a, d, [handle.folder]);
         if (where === null)
           throw new StepError(
             `the message is no longer in ${ui.folders[handle.folder].label}`,
           );
         await this.open(
           adapter,
-          ui,
-          page,
+          desk,
           a,
-          where.rows.first(),
+          where.rows[0]!,
           d.subjectToken,
           false,
         );
-        del = await this.exactlyOne(
-          page,
-          page,
-          adapter,
-          a,
-          "remove.delete",
-          ui.remove.del,
-        );
+        del = [
+          (
+            await this.exactlyOne(
+              desk,
+              adapter,
+              a,
+              permanent ? "remove.deleteForever" : "remove.delete",
+              delLoc,
+            )
+          ).node,
+        ];
       }
-      await del.click();
-      await this.closed(page, ui, "the delete");
-      // From Trash / Deleted Items, for good.
-      const deadline = Date.now() + this.t.cleanupFindMs;
-      let inTrash: { rows: Locator; count: number } | null = null;
-      while (inTrash === null && Date.now() < deadline) {
-        inTrash = await this.lookIn(adapter, ui, page, a, d, ["trash"]);
-        if (inTrash === null)
-          await new Promise((r) => setTimeout(r, this.t.pollMs));
-      }
-      if (inTrash === null)
-        throw new StepError(
-          `the deleted message did not show up in ${ui.folders.trash.label} within ${Math.round(this.t.cleanupFindMs / 1000)} s`,
-        );
-      await this.open(
-        adapter,
-        ui,
-        page,
-        a,
-        inTrash.rows.first(),
-        d.subjectToken,
-        false,
-      );
-      const forever = await this.exactlyOne(
-        page,
-        page,
-        adapter,
-        a,
-        "remove.deleteForever",
-        ui.remove.deleteForever,
-      );
-      await forever.click();
-      if (ui.remove.confirm !== null)
-        await (
-          await this.exactlyOne(
-            page,
-            page,
-            adapter,
-            a,
-            "remove.confirm",
-            ui.remove.confirm,
-          )
-        ).click();
-      await this.closed(page, ui, "the permanent delete");
+      await desk.click(del[0]!.node.bounds!);
+      if (permanent) await this.finishPermanent(desk, adapter, a, d);
+      else await this.deleteFromTrash(desk, adapter, a, d);
       // Gone from every folder?
-      const left = await this.lookIn(adapter, ui, page, a, d, [
+      const left = await this.lookIn(adapter, desk, a, d, [
         "inbox",
         "spam",
         "trash",
@@ -1522,7 +1550,12 @@ export class HostedWebmailProvider implements CaptureProvider {
         throw new StepError(
           `still in ${ui.folders[left.folder].label} after the delete`,
         );
-      this.cleanupRecord({ ...record, state: "removed", reason: null });
+      this.cleanupRecord({
+        ...record,
+        state: "removed",
+        via: permanent ? "delete-forever" : "trash",
+        reason: null,
+      });
     } catch (err) {
       const reason = oneLine(err);
       this.cleanupRecord({ ...record, state: "failed", reason });
@@ -1533,19 +1566,77 @@ export class HostedWebmailProvider implements CaptureProvider {
     }
   }
 
-  // A delete has taken effect once the opened message is gone from the
-  // page (the webmail went back to a list).
-  private async closed(page: Page, ui: AdapterUi, what: string): Promise<void> {
-    try {
-      await page
-        .locator(ui.opened.body.css)
-        .first()
-        .waitFor({ state: "hidden", timeout: this.t.stepTimeoutMs });
-    } catch {
+  // After a click on the delete in the opened message: the message is
+  // found in Trash / Deleted Items and deleted from there for good.
+  private async deleteFromTrash(
+    desk: WebmailDesktop,
+    adapter: WebmailAdapter,
+    a: PoolAccount,
+    d: WorkspaceDelivery,
+  ): Promise<void> {
+    const ui = adapter.desktop;
+    await this.closed(desk, ui, d.subjectToken, "the delete");
+    // From Trash / Deleted Items, for good.
+    const deadline = Date.now() + this.t.cleanupFindMs;
+    let inTrash: { rows: Flat[] } | null = null;
+    while (inTrash === null && Date.now() < deadline) {
+      inTrash = await this.lookIn(adapter, desk, a, d, ["trash"]);
+      if (inTrash === null) await sleep(this.t.pollMs);
+    }
+    if (inTrash === null)
+      throw new StepError(
+        `the deleted message did not show up in ${ui.folders.trash.label} within ${Math.round(this.t.cleanupFindMs / 1000)} s`,
+      );
+    await this.open(adapter, desk, a, inTrash.rows[0]!, d.subjectToken, false);
+    const forever = await this.exactlyOne(
+      desk,
+      adapter,
+      a,
+      "remove.deleteForever",
+      ui.remove.deleteForever,
+    );
+    await desk.click(forever.node.node.bounds!);
+    await this.finishPermanent(desk, adapter, a, d);
+  }
+
+  // After a click on the permanent delete: its confirmation, if the
+  // webmail asks one, then the message closed.
+  private async finishPermanent(
+    desk: WebmailDesktop,
+    adapter: WebmailAdapter,
+    a: PoolAccount,
+    d: WorkspaceDelivery,
+  ): Promise<void> {
+    const ui = adapter.desktop;
+    if (ui.remove.confirm !== null) {
+      const ok = await this.exactlyOne(
+        desk,
+        adapter,
+        a,
+        "remove.confirm",
+        ui.remove.confirm,
+      );
+      await desk.click(ok.node.node.bounds!);
+    }
+    await this.closed(desk, ui, d.subjectToken, "the permanent delete");
+  }
+
+  // A delete has taken effect once no heading carries the run token any
+  // more (the webmail went back to a list).
+  private async closed(
+    desk: WebmailDesktop,
+    ui: AdapterUi,
+    token: string,
+    what: string,
+  ): Promise<void> {
+    const r = await desk.waitFor(
+      (s) => this.tokenHeadings(s, ui, token).length === 0,
+      this.t.stepTimeoutMs,
+    );
+    if (!r.ok)
       throw new StepError(
         `${what} did not close the message within ${this.t.stepTimeoutMs / 1000} s`,
       );
-    }
   }
 
   private cleanupRecord(r: Record<string, unknown>): void {
@@ -1557,7 +1648,7 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   async dispose(): Promise<void> {
-    for (const w of this.workers.splice(0)) await this.closeContext(w);
+    for (const w of this.workers.splice(0)) await this.closeDesktop(w);
     for (const l of this.leases) releaseLease(l);
     this.leases.clear();
   }

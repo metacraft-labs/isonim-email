@@ -6,8 +6,9 @@
 //   $ISONIM_EMAIL_WEBMAIL_PROFILES_DIR/<set>/<account>/
 // (default ${XDG_STATE_HOME:-$HOME/.local/state}/isonim-email/webmail-profiles),
 // every level 0700: `chromium/` is the Chromium user data directory the
-// capture provider opens with launchPersistentContext, and
-// `signin.json` the non-secret record of the last verified sign-in.
+// sign-in and the capture provider start the webmail browser on
+// (webmail_browser.ts), and `signin.json` the non-secret record of the
+// last verified sign-in.
 // Both the sign-in recipe (email-webmail-signin.ts) and the provider
 // resolve the paths here, so they cannot disagree.
 //
@@ -18,19 +19,17 @@
 // or nixpkgs' Chromium where Google Chrome is not packaged), a regular
 // release build and not Playwright's Chrome for Testing, which shows an
 // "only for automated testing" bar and which the providers' sign-in
-// pages may treat as automated. The sign-in starts it without
-// automation (Google refuses to sign in an automation-controlled
-// browser), with Playwright's cookie-store switches, so the profile it
-// leaves reads as signed in when Playwright opens it afterwards (a
-// profile whose cookies were sealed with the desktop keyring would read
-// as signed out). Playwright opens the profile with `executablePath`
-// set to the same executable (headed or headless), so the profile is
-// never opened by a build other than the one that wrote it.
+// pages may treat as automated. The sign-in and the captures start it
+// the same way, through one launcher (webmail_browser.ts), never under
+// Playwright, the DevTools protocol or WebDriver (Google refuses to sign
+// in an automation-controlled browser), always with the same
+// cookie-store switches (`COOKIE_STORE_SWITCHES`): a profile's cookies
+// are sealed with the store that wrote them, so a browser started with
+// another (the desktop keyring) would read the profile as signed out.
 //
-// Both browsers load the real web, so both keep Chromium's sandbox on:
-// the sign-in browser is started without `--no-sandbox`, and Playwright
-// (which adds `--no-sandbox` unless told otherwise) with
-// `chromiumSandbox: true`. On Linux a store build sandboxes its
+// Every browser on a profile loads the real web, so each keeps
+// Chromium's sandbox on: it is started without `--no-sandbox` (unless
+// the operator overrides it for the sign-in). On Linux a store build sandboxes its
 // renderers with user and PID namespaces plus seccomp-bpf (its setuid
 // helper cannot be setuid in the Nix store), so it needs unprivileged
 // user namespaces; where those are refused, Chromium aborts with "No
@@ -53,14 +52,13 @@ import {
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { BrowserContext } from "playwright-core";
-import { launchOptions, type LaunchOptions } from "../launch.ts";
 import type { HostEnv } from "./requirements.ts";
 
 export const PROFILES_ENV = "ISONIM_EMAIL_WEBMAIL_PROFILES_DIR";
 
-// The switches Playwright passes Chromium for its cookie store; the
-// sign-in browser gets the same ones.
+// The cookie-store switches every browser on a webmail profile gets
+// (the ones Playwright passes Chromium, which the first profiles were
+// written with; kept so those profiles still read as signed in).
 export const COOKIE_STORE_SWITCHES = [
   "--password-store=basic",
   "--use-mock-keychain",
@@ -73,9 +71,6 @@ export interface WebmailSignin {
   // The hosts the inbox stays on when signed in (a signed-out profile
   // is sent to a sign-in or marketing host instead).
   mailHosts: string[];
-  // A selector present in the signed-in mailbox UI: its search box.
-  // [measure: confirm per provider on the first sign-in]
-  marker: string;
 }
 
 export const WEBMAIL_SIGNIN: Record<string, WebmailSignin> = {
@@ -83,25 +78,21 @@ export const WEBMAIL_SIGNIN: Record<string, WebmailSignin> = {
     label: "Gmail",
     inboxUrl: "https://mail.google.com/mail/u/0/#inbox",
     mailHosts: ["mail.google.com"],
-    marker: 'form[role="search"], input[name="q"]',
   },
   yahoo: {
     label: "Yahoo Mail",
     inboxUrl: "https://mail.yahoo.com/",
     mailHosts: ["mail.yahoo.com"],
-    marker: '[role="search"], input[type="search"], input[name="p"]',
   },
   aol: {
     label: "AOL Mail",
     inboxUrl: "https://mail.aol.com/",
     mailHosts: ["mail.aol.com"],
-    marker: '[role="search"], input[type="search"]',
   },
   "outlook-com": {
     label: "Outlook.com",
     inboxUrl: "https://outlook.live.com/mail/0/",
     mailHosts: ["outlook.live.com"],
-    marker: '[role="search"], #topSearchInput, input[type="search"]',
   },
 };
 
@@ -159,15 +150,14 @@ export interface SigninRecord {
   set: string;
   account_file: string;
   signed_in_at: string;
-  // The host the inbox was checked on: the inbox URL's host when the
-  // mailbox was read off the screen (`ocr`), the host the page stayed
-  // on under Playwright (`ocr+playwright`).
+  // The host the inbox was checked on: the inbox URL's host, the
+  // mailbox read off the screen.
   host: string;
   browser: string;
   // How the sign-in was verified: by OCR of the mailbox in the webmail
-  // browser started without automation (always), and with
-  // `--playwright-check` also under Playwright. Absent in records
-  // written before 2026-10-28 (Playwright only).
+  // browser started without automation. Records written before
+  // 2026-10-28 have none (Playwright only), and records of the removed
+  // `--playwright-check` say `ocr+playwright`; both are only read.
   verified_by?: "ocr" | "ocr+playwright";
 }
 
@@ -197,8 +187,7 @@ export interface WebmailBrowser {
 }
 
 // The webmail browser: the one executable every browser on a webmail
-// profile runs, the sign-in's (started without Playwright) and the
-// captures' (Playwright's `executablePath`).
+// profile runs, the sign-in's and the captures' (webmail_browser.ts).
 export function webmailBrowser(
   env: Record<string, string | undefined>,
 ): WebmailBrowser | { reason: string } {
@@ -211,55 +200,6 @@ export function webmailBrowser(
     return { reason: `${BROWSER_ENV}=${path} does not exist` };
   const label = env[BROWSER_LABEL_ENV];
   return { path, label: label === undefined || label === "" ? path : label };
-}
-
-export type SignedIn =
-  | { signedIn: true; host: string }
-  | { signedIn: false; host: string; reason: string };
-
-// Loads the inbox in a context opened on the profile and judges it: the
-// page must stay on one of the mail hosts and show the marker, within
-// the timeout. Never types anything.
-export async function checkSignedIn(
-  context: BrowserContext,
-  w: WebmailSignin,
-  timeoutMs = 30_000,
-): Promise<SignedIn> {
-  const page = context.pages()[0] ?? (await context.newPage());
-  try {
-    await page.goto(w.inboxUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: timeoutMs,
-    });
-  } catch (err) {
-    return {
-      signedIn: false,
-      host: "",
-      reason: `the inbox did not load: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`,
-    };
-  }
-  const deadline = Date.now() + timeoutMs;
-  let host = new URL(page.url()).host;
-  for (;;) {
-    host = new URL(page.url()).host;
-    if (w.mailHosts.includes(host)) {
-      const found = await page
-        .locator(w.marker)
-        .first()
-        .isVisible()
-        .catch(() => false);
-      if (found) return { signedIn: true, host };
-    }
-    if (Date.now() >= deadline) break;
-    await page.waitForTimeout(500);
-  }
-  return {
-    signedIn: false,
-    host,
-    reason: w.mailHosts.includes(host)
-      ? `the inbox loaded on ${host} but the mailbox marker (${w.marker}) did not appear within ${timeoutMs} ms`
-      : `the inbox was redirected to ${host}, not ${w.mailHosts.join(" or ")}: the profile is not signed in`,
-  };
 }
 
 // The preferences every browser of the sign-in recipe starts with on a
@@ -339,15 +279,46 @@ function writePrefsObject(path: string, prefs: Json): void {
   renameSync(tmp, path);
 }
 
-// Writes WEBMAIL_PROFILE_PREFS into the profile's Default/Preferences
-// before a browser starts on it (none may run on it then), keeping
-// everything else in the file; atomic, 0600. A file that is not a JSON
-// object is an error: it is never replaced.
-export function writeWebmailProfilePrefs(userDataDir: string): void {
+// The browser's colour mode, as a person sets it on Chrome's settings
+// page (Appearance, Mode: Light / Dark; `browser.theme.color_scheme2`,
+// 1 light, 2 dark, 0 the device's). It decides both Chrome's own
+// appearance and the `prefers-color-scheme` every page sees. The older
+// `browser.theme.color_scheme` is written to the same value: Chrome
+// migrates it over `color_scheme2` at start, so a stale dark one would
+// otherwise win. The mode is written explicitly for light as well, so
+// neither an earlier dark capture's value nor a dark desktop theme
+// inherited from the host (GTK_THEME) carries over. Measured 2026-10-31
+// (Google Chrome 147.0.7727.137 in a GuiAssert Xvfb session, throwaway
+// profiles, a loopback page reporting the media query and the CSS
+// system colours): 2 made Chrome's toolbar dark and every page dark
+// (`prefers-color-scheme: dark`, `Canvas` rgb(18,18,18)) on the first
+// load, a typed navigation and a reload; 1 kept every page light under
+// GTK_THEME=Adwaita:dark; a stale `color_scheme: 2` beside
+// `color_scheme2: 1` came out dark.
+export function colorSchemePrefs(scheme: "light" | "dark"): Json {
+  const v = scheme === "dark" ? 2 : 1;
+  return { browser: { theme: { color_scheme2: v, color_scheme: v } } };
+}
+
+// Writes WEBMAIL_PROFILE_PREFS and the colour mode (`colorSchemePrefs`)
+// into the profile's Default/Preferences before a browser starts on it
+// (none may run on it then), keeping everything else in the file;
+// atomic, 0600. A file that is not a JSON object is an error: it is
+// never replaced.
+export function writeWebmailProfilePrefs(
+  userDataDir: string,
+  scheme: "light" | "dark" = "light",
+): void {
   const path = join(userDataDir, "Default", "Preferences");
   writePrefsObject(
     path,
-    mergePrefs(readPrefsObject(path), WEBMAIL_PROFILE_PREFS as unknown as Json),
+    mergePrefs(
+      mergePrefs(
+        readPrefsObject(path),
+        WEBMAIL_PROFILE_PREFS as unknown as Json,
+      ),
+      colorSchemePrefs(scheme),
+    ),
   );
 }
 
@@ -539,7 +510,7 @@ export function holdsSecrets(s: SecretsAtRest): boolean {
 }
 
 // The command line of the sign-in browser: the webmail browser without
-// automation, on the account's profile, with Playwright's cookie-store
+// automation, on the account's profile, with the cookie-store
 // switches and the sandbox on. `unsafeNoSandbox` is the operator's
 // explicit override for a host without a usable sandbox (`--no-sandbox`:
 // the browser then loads the web with renderers that are not confined).
@@ -564,28 +535,6 @@ export function signinBrowserArgs(
     ...(opts.extra ?? []),
     url,
   ];
-}
-
-// The Playwright launch options that open an account's profile: the
-// capture's Chromium options, the webmail browser's executable, and
-// the sandbox on (unless the operator overrode it for the sign-in).
-export function webmailLaunchOptions(
-  env: Record<string, string | undefined>,
-  headless: boolean,
-  opts: { unsafeNoSandbox?: boolean } = {},
-): LaunchOptions & {
-  headless: boolean;
-  chromiumSandbox: boolean;
-  executablePath: string;
-} {
-  const browser = webmailBrowser(env);
-  if ("reason" in browser) throw new Error(browser.reason);
-  return {
-    ...launchOptions("chromium", false, process.platform, env),
-    headless,
-    chromiumSandbox: opts.unsafeNoSandbox !== true,
-    executablePath: browser.path,
-  };
 }
 
 function hasArg(cmdline: string, arg: string): boolean {

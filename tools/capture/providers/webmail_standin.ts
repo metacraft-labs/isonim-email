@@ -4,10 +4,11 @@
 //
 // Why stand-ins (the repository's mock policy): the real webmails need
 // a real account signed in, the real Gmail API sends real mail, and neither
-// can be reached from a test. Each stand-in implements the DOM contract
-// of one adapter in webmail_adapters.ts (the same locators, the same
-// folder URLs, moved to loopback by rebaseAdapter) and the behaviour
-// the procedure relies on:
+// can be reached from a test. Each stand-in implements the accessibility
+// contract of one adapter in webmail_adapters.ts (the roles and names its
+// locators match, the same folder URLs, moved to loopback by
+// rebaseAdapter), the mailbox wording the session check reads off the
+// screen, and the behaviour the procedure relies on:
 // - a session cookie that a "sign-in" (GET /login?account=NAME, the
 //   test playing the person) sets; without it, or once the test expires
 //   it, the mailbox redirects to a sign-in page on ANOTHER host
@@ -18,14 +19,18 @@
 // - Gmail's search (rfc822msgid:, in:spam, in:trash; no Spam or Trash
 //   unless asked), Yahoo's and Outlook.com's folders, opening a message,
 //   delete (to Trash) and delete forever (with Yahoo's and Outlook's
-//   confirmation), Outlook.com's background toggle (dark: the body
+//   confirmation; Gmail's Spam, as Gmail's, offers only delete forever), Outlook.com's background toggle (dark: the body
 //   recoloured and marked data-ogsc);
-// - test switches: drift (the body element loses the class the adapter
-//   finds it by), expire a session now or when a message is opened,
+// - every page reports what it sees of the browser (`probes`:
+//   navigator.webdriver, prefers-color-scheme, the user agent);
+// - test switches: drift (the body is hidden from the accessibility tree,
+//   or loses the name the adapter finds it by), expire a session now or
+//   when a message is opened,
 //   show an opened Gmail message under another subject (a message the
 //   adapter must not take for the delivered one), keep a message whose
 //   delete-forever was answered.
-// Chromium, Playwright, the profiles, TLS and the provider are real.
+// The webmail browser, GuiAssert, the profiles, TLS and the provider are
+// real.
 
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
@@ -131,8 +136,18 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// Every page reports what it sees of the browser once (`probes`).
+const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent));`;
+
 const page = (body: string, script = ""): string =>
-  `<!doctype html><html><head><meta charset="utf-8"><title>Mail</title><style>body{font:14px sans-serif;margin:0}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee}.main{margin-left:220px;padding:8px}</style></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Mail</title><style>body{font:16px sans-serif;margin:0;background:#fff;color:#111}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee;padding:8px}.main{margin-left:220px;padding:8px;width:800px}@media (prefers-color-scheme: dark){body{background:#202020;color:#eee}.nav{background:#333}}</style><script>${PROBE}</script></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
+
+export interface StandinProbe {
+  webdriver: string;
+  dark: boolean;
+  page: string;
+  ua: string;
+}
 
 export class StandinWebmail {
   readonly skin: Skin;
@@ -156,6 +171,8 @@ export class StandinWebmail {
   openedSubject: string | null = null;
   // User agents seen on the mailbox pages.
   userAgents: string[] = [];
+  // What every page loaded saw of the browser.
+  probes: StandinProbe[] = [];
   // Every delete-forever, with when.
   destroyed: { id: string; at: number }[] = [];
 
@@ -258,6 +275,15 @@ export class StandinWebmail {
   ): Promise<void> {
     const url = new URL(req.url ?? "/", this.origin);
     const host = req.headers.host ?? "";
+    if (url.pathname === "/probe") {
+      this.probes.push({
+        webdriver: url.searchParams.get("webdriver") ?? "",
+        dark: url.searchParams.get("dark") === "true",
+        page: url.searchParams.get("page") ?? "",
+        ua: url.searchParams.get("ua") ?? "",
+      });
+      return this.send(res, 204, "text/plain", "");
+    }
     // The sign-in page, on another host: it records any typing.
     if (url.pathname === "/signin") {
       this.signinVisits++;
@@ -266,7 +292,7 @@ export class StandinWebmail {
         200,
         "text/html",
         page(
-          '<form><input name="identifier"><input type="password" name="password"></form><p>Sign in</p>',
+          '<form><input name="identifier" aria-label="Email or phone" autofocus><input type="password" name="password" aria-label="Password"></form><h1>Sign in</h1><p>to continue to your mailbox</p>',
           `for (const i of document.querySelectorAll("input")) i.addEventListener("input", () => fetch("/signin-typed", {method: "POST"}));`,
         ),
       );
@@ -331,16 +357,14 @@ export class StandinWebmail {
   // --- Gmail: a hash-routed shell whose views come from /api/view ----------
 
   private gmailShell(url: URL, res: ServerResponse): void {
-    const mobile = url.pathname.startsWith("/mail/mu/");
-    if (!url.pathname.startsWith("/mail/"))
+    if (!url.pathname.startsWith("/mail/u/"))
       return this.send(res, 302, "text/plain", "", {
         location: "/mail/u/0/#inbox",
       });
     const script = `
-      const mobile = ${mobile};
       async function render(id) {
         const h = location.hash;
-        const r = await fetch("/api/view?mobile=" + (mobile ? 1 : 0) + "&hash=" + encodeURIComponent(h) + (id ? "&id=" + id : ""));
+        const r = await fetch("/api/view?hash=" + encodeURIComponent(h) + (id ? "&id=" + id : ""));
         if (r.status === 401) { location.href = ${JSON.stringify(this.signinUrl())}; return; }
         document.getElementById("main").innerHTML = await r.text();
         for (const row of document.querySelectorAll("[data-open]")) row.addEventListener("click", () => render(row.dataset.open));
@@ -356,18 +380,17 @@ export class StandinWebmail {
       200,
       "text/html",
       page(
-        `<div class="nav" role="navigation">Gmail</div><div class="main"><form role="search"><input name="q"></form><div role="main" id="main"></div></div>`,
+        `<div class="nav" role="navigation"><p>Gmail</p><p>Compose</p><p>Inbox</p></div><div class="main"><form role="search"><input name="q" aria-label="Search mail"></form><div role="main" id="main"></div></div>`,
         script,
       ),
     );
   }
 
   private gmailView(url: URL, account: string, res: ServerResponse): void {
-    const mobile = url.searchParams.get("mobile") === "1";
     const hash = url.searchParams.get("hash") ?? "";
     const id = url.searchParams.get("id");
     const q = decodeURIComponent(
-      hash.replace(/^#(tl\/)?search\//, "").replace(/\+/g, " "),
+      hash.replace(/^#search\//, "").replace(/\+/g, " "),
     );
     const inSpam = /(^| )in:spam( |$)/.test(q);
     const inTrash = /(^| )in:trash( |$)/.test(q);
@@ -388,36 +411,32 @@ export class StandinWebmail {
         this.expire(account);
         return this.send(res, 401, "text/html", "");
       }
-      const bodyClass = this.drift ? "a3x" : mobile ? "msg-body" : "a3s aiL";
+      // Drift: the body hidden from the accessibility tree, so no node
+      // carries the story's text.
+      const hidden = this.drift ? ' aria-hidden="true"' : "";
       const del =
-        m.folder === "trash"
-          ? `<div role="button" data-act="destroy" data-id="${m.id}">Delete forever</div>`
-          : `<div role="button" aria-label="Delete" data-act="delete" data-id="${m.id}">Delete</div>`;
+        m.folder === "trash" || m.folder === "spam"
+          ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
+          : `<div role="button" tabindex="0" aria-label="Delete" data-act="delete" data-id="${m.id}">Delete</div>`;
       const shown = esc(this.openedSubject ?? m.subject);
-      const subject = mobile
-        ? `<div role="heading" aria-level="2">${shown}</div>`
-        : `<h2 class="hP">${shown}</h2>`;
       return this.send(
         res,
         200,
         "text/html",
-        `<div class="toolbar">${del}</div>${subject}<div class="ii gt"><div class="${bodyClass}">${m.html}</div></div>`,
+        `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP">${shown}</h2><div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div><div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div>`,
       );
     }
     const rows = list
-      .map((m) =>
-        mobile
-          ? `<div role="listitem" data-open="${m.id}"><span class="fl" email="sender@standin.invalid">${esc(m.fromName)}</span> <span class="Bk">${esc(m.subject)}</span> <span class="Ck">${esc(m.preview)}</span></div>`
-          : `<tr class="zA zE" data-open="${m.id}"><td><span class="yP" email="sender@standin.invalid" name="${esc(m.fromName)}">${esc(m.fromName)}</span></td><td><span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
+      .map(
+        (m) =>
+          `<tr class="zA zE" role="row" data-open="${m.id}"><td role="gridcell"><span class="yP" email="sender@standin.invalid">${esc(m.fromName)}</span></td><td role="gridcell"><span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
       )
       .join("");
     this.send(
       res,
       200,
       "text/html",
-      mobile
-        ? `<div role="list">${rows}</div>`
-        : `<table><tbody>${rows}</tbody></table>`,
+      `<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
     );
   }
 
@@ -437,7 +456,7 @@ export class StandinWebmail {
         location: "/d/folders/1",
       });
     const folder = folders[m1[1]!] ?? "inbox";
-    const nav = `<div class="nav" role="navigation"><input type="search" name="p"></div>`;
+    const nav = `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
     if (m1[2] !== undefined) {
       const m = this.find(account, m1[2]);
       if (m === undefined)
@@ -450,7 +469,7 @@ export class StandinWebmail {
         b.addEventListener("click", async () => {
           if (${trash}) {
             const d = document.createElement("div");
-            d.innerHTML = '<div role="dialog" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button data-test-id="primary-btn">OK</button></div>';
+            d.innerHTML = '<div role="dialog" aria-label="Delete forever?" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button data-test-id="primary-btn">OK</button></div>';
             document.body.append(d);
             d.querySelector("button").addEventListener("click", async () => {
               await fetch("/api/destroy?id=${m.id}", { method: "POST" });
@@ -461,15 +480,14 @@ export class StandinWebmail {
           await fetch("/api/delete?id=${m.id}", { method: "POST" });
           location.href = "/d/folders/${m1[1]}";
         });`;
-      const bodyAttr = this.drift
-        ? "message-body"
-        : "message-view-body-content";
+      // Drift: the body hidden from the accessibility tree.
+      const hidden = this.drift ? ' aria-hidden="true"' : "";
       return this.send(
         res,
         200,
         "text/html",
         page(
-          `${nav}<div class="main"><div data-test-id="message-view"><span data-test-id="message-group-subject-text">${esc(m.subject)}</span><button data-test-id="toolbar-delete">Delete</button><div data-test-id="${bodyAttr}">${m.html}</div></div></div>`,
+          `${nav}<div class="main"><div data-test-id="message-view"><button data-test-id="toolbar-delete">Delete</button><h2 data-test-id="message-group-subject-text">${esc(m.subject)}</h2><div data-test-id="message-view-body-content"${hidden}>${m.html}</div></div></div>`,
           script,
         ),
       );
@@ -508,7 +526,7 @@ export class StandinWebmail {
         location: "/mail/0/inbox",
       });
     const fname = m1[1]!;
-    const nav = `<div class="nav" role="navigation"><input id="topSearchInput" type="search"></div>`;
+    const nav = `<div class="nav" role="navigation"><p>New mail</p><p>Inbox</p><input id="topSearchInput" type="search" aria-label="Search"></div>`;
     if (m1[2] !== undefined) {
       const m = this.find(account, m1[2]);
       if (m === undefined)
@@ -533,7 +551,7 @@ export class StandinWebmail {
         document.querySelector('[data-del]').addEventListener("click", async () => {
           if (${trash}) {
             const d = document.createElement("div");
-            d.innerHTML = '<div role="dialog" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button>OK</button></div>';
+            d.innerHTML = '<div role="dialog" aria-label="Delete permanently?" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button>OK</button></div>';
             document.body.append(d);
             d.querySelector("button").addEventListener("click", async () => {
               await fetch("/api/destroy?id=${m.id}", { method: "POST" });
@@ -550,7 +568,7 @@ export class StandinWebmail {
         200,
         "text/html",
         page(
-          `${nav}<div class="main" role="main"><div role="heading" aria-level="2">${esc(m.subject)}</div><button aria-label="Delete" data-del>Delete</button><button aria-label="Switch background" aria-pressed="false" data-toggle>Background</button><div aria-label="${bodyLabel}" data-body>${m.html}</div></div>`,
+          `${nav}<div class="main" role="main"><div role="heading" aria-level="2">${esc(m.subject)}</div><button aria-label="Delete" data-del>Delete</button> <button aria-label="Switch background" aria-pressed="false" data-toggle>Background</button><div role="document" aria-label="${bodyLabel}" data-body>${m.html}</div></div>`,
           script,
         ),
       );

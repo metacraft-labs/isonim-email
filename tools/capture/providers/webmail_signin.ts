@@ -79,6 +79,7 @@ import {
   type Rect,
   type Secret,
 } from "./guiassert.ts";
+import { AUTOMATION_SWITCHES, sessionSwitches } from "./webmail_browser.ts";
 import {
   type ChallengeKind,
   classifyScreen,
@@ -105,48 +106,17 @@ export const SIGNIN_SCREEN = { width: 1280, height: 900 } as const;
 
 /**
  * The sign-in browser's switches beyond the profile's
- * (webmail_profiles.ts `signinBrowserArgs`). None of them is an
- * automation switch: no DevTools port, no --enable-automation, nothing
- * that sets navigator.webdriver, and none puts a bar or a warning in the
- * browser's window (checked on a screenshot of Google Chrome 147 in the
- * session, 2026-10-28).
- * - --force-renderer-accessibility: Chromium's accessibility tree on the
- *   session's AT-SPI bus, as it is built for a screen reader; the
- *   procedure reads the focused field from it. Needed: without it the
- *   browser exposed no page element at all in the session (probe,
- *   2026-10-28: `guiassert find --role text-field` found the page's two
- *   fields with it and none without). Not visible to a page: the web
- *   platform has no API that reports whether an assistive technology is
- *   attached, and screen-reader users run browsers in exactly this mode.
- * - --force-device-scale-factor=1: Google Chrome (a GTK-integrated
- *   build) otherwise picks a scale of about 1.047 on the session's Xvfb
- *   display and reports its accessibility extents in its own scaled
- *   pixels, which GuiAssert cannot place on the display (every field's
- *   bounds null, so a field that needs a click cannot be clicked; probe,
- *   2026-10-28; recorded as a GuiAssert issue). A page sees only
- *   `devicePixelRatio` 1, the common desktop value.
- * - --lang=en-US: the browser's own interface in English (its bubbles,
- *   and the address bar's accessible name, ADDRESS_BAR_NAME); the pages'
- *   language comes from the profile's preferences and the start URLs.
- * - the window placed on the whole display, so OCR reads all of it.
+ * (webmail_profiles.ts `signinBrowserArgs`): webmail_browser.ts
+ * `sessionSwitches` at the sign-in's display size. None of them is an
+ * automation switch.
  */
-export const SIGNIN_SESSION_SWITCHES: readonly string[] = [
-  "--force-renderer-accessibility",
-  "--force-device-scale-factor=1",
-  "--lang=en-US",
-  "--window-position=0,0",
-  `--window-size=${SIGNIN_SCREEN.width},${SIGNIN_SCREEN.height}`,
-];
+export const SIGNIN_SESSION_SWITCHES: readonly string[] = sessionSwitches(
+  SIGNIN_SCREEN.width,
+  SIGNIN_SCREEN.height,
+);
 
-/** Switches the sign-in browser must never carry. */
-export const AUTOMATION_SWITCHES: readonly RegExp[] = [
-  /^--remote-debugging/,
-  /^--enable-automation/,
-  /^--headless/,
-  /^--test-type/,
-  /^--remote-allow-origins/,
-  /^--disable-blink-features=AutomationControlled/,
-];
+/** Switches the sign-in browser must never carry (webmail_browser.ts). */
+export { AUTOMATION_SWITCHES };
 
 export interface SigninTimings {
   pollMs: number;

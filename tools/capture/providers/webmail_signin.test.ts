@@ -3122,11 +3122,18 @@ await sleep(600000);
         "--check-only",
         "--takeover",
         "--override-cooldown",
-        "--playwright-check",
       ]) {
         const r = run(c.env, "--typing-check", extra);
         assert.equal(r.status, 2, extra);
       }
+      // No mode opens a webmail profile under Playwright: the former
+      // --playwright-check is an unknown option.
+      const pwc = run(c.env, "--playwright-check");
+      assert.equal(pwc.status, 2, pwc.stdout + pwc.stderr);
+      assert.match(
+        pwc.stdout + pwc.stderr,
+        /unknown option --playwright-check/,
+      );
     });
   });
 

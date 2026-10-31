@@ -304,7 +304,6 @@ email-workspace-send-smoke to-set *args: email-shots-build
 # attempt per account, then a 24 h cool-down (exit 6). `--vnc` to watch,
 # `--takeover` to finish a challenge over VNC, `--manual` for a person's
 # sign-in, `--check-only`, `--override-cooldown` (operator),
-# `--playwright-check` (also under Playwright; visible to the provider),
 # `--typing-check` (types the password into a loopback page that
 # compares digests; contacts no provider, not an attempt).
 # Runbook: docs/webmail-signin.md.

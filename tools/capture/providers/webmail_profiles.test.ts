@@ -73,30 +73,24 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { resolveDriver } from "./browser_emulation.ts";
-import { launchOptions } from "../launch.ts";
 import { CREDENTIALS_SCHEMA } from "./requirements.ts";
 import {
   accountProfile,
   browsersOn,
-  checkSignedIn,
   PASSWORD_HASH_LOCATIONS,
   scrubPasswordHashes,
   webmailBrowser,
   profilesRoot,
   readSigninRecord,
-  rendererSandboxes,
   signinBrowserArgs,
   stopBrowser,
   holdsSecrets,
   secretsAtRest,
   waitSandboxed,
-  type WebmailSignin,
   WEBMAIL_PROFILE_PREFS,
-  webmailLaunchOptions,
   writeSigninRecord,
   writeWebmailProfilePrefs,
+  colorSchemePrefs,
 } from "./webmail_profiles.ts";
 
 const scriptDir = dirname(new URL(import.meta.url).pathname);
@@ -171,15 +165,48 @@ describe("hosted-webmail browser profiles", () => {
       },
       intl: { accept_languages: "en-US,en" },
       translate: { enabled: false, other: 3 },
+      browser: { theme: { color_scheme2: 1, color_scheme: 1 } },
     });
     assert.equal(mode(prefs), 0o600);
-    // A fresh profile gets them all.
+    // A fresh profile gets them all, light by default.
     const fresh = mkdtempSync(join(scratch, "prefs-"));
     writeWebmailProfilePrefs(fresh);
     assert.deepEqual(
       JSON.parse(readFileSync(join(fresh, "Default", "Preferences"), "utf8")),
-      WEBMAIL_PROFILE_PREFS,
+      {
+        ...WEBMAIL_PROFILE_PREFS,
+        browser: { theme: { color_scheme2: 1, color_scheme: 1 } },
+      },
     );
+  });
+
+  it("writes the colour mode a capture asks for, both of Chrome's keys, over whatever an earlier start left", () => {
+    assert.deepEqual(colorSchemePrefs("light"), {
+      browser: { theme: { color_scheme2: 1, color_scheme: 1 } },
+    });
+    assert.deepEqual(colorSchemePrefs("dark"), {
+      browser: { theme: { color_scheme2: 2, color_scheme: 2 } },
+    });
+    const dir = mkdtempSync(join(scratch, "prefs-"));
+    const prefs = join(dir, "Default", "Preferences");
+    const theme = () =>
+      JSON.parse(readFileSync(prefs, "utf8")).browser as Record<
+        string,
+        unknown
+      >;
+    writeWebmailProfilePrefs(dir, "dark");
+    assert.deepEqual(theme(), { theme: { color_scheme2: 2, color_scheme: 2 } });
+    // Chrome's own keys beside them are kept; a dark start is undone by
+    // the next light one (the sign-in's), the older key included.
+    const p = JSON.parse(readFileSync(prefs, "utf8"));
+    p.browser.theme.user_color = 5;
+    p.browser.window_placement = { top: 1 };
+    writeFileSync(prefs, JSON.stringify(p));
+    writeWebmailProfilePrefs(dir, "light");
+    assert.deepEqual(theme(), {
+      theme: { color_scheme2: 1, color_scheme: 1, user_color: 5 },
+      window_placement: { top: 1 },
+    });
   });
 
   it("counts the saved passwords a profile holds, without reading one, and fails on a database it cannot read", () => {
@@ -444,20 +471,11 @@ describe("hosted-webmail browser profiles", () => {
     });
     assert.ok("reason" in gone);
     assert.match(gone.reason, /no-such-browser does not exist/);
-    // The captures open a profile with that same executable.
-    assert.equal(
-      webmailLaunchOptions(
-        { ...process.env, ISONIM_EMAIL_WEBMAIL_BROWSER: exe },
-        true,
-      ).executablePath,
-      exe,
-    );
   });
 
-  describe("the signed-in check", () => {
+  describe("a profile's session across starts", () => {
     let server: Server;
     let port: number;
-    let pw: typeof import("playwright-core");
     // Requests for the inbox that carried the session cookie.
     let signedInVisits = 0;
     before(async () => {
@@ -497,138 +515,58 @@ describe("hosted-webmail browser profiles", () => {
       });
       await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
       port = (server.address() as AddressInfo).port;
-      const driver = resolveDriver(process.env);
-      if ("reason" in driver) throw new Error(driver.reason);
-      pw = await import(pathToFileURL(join(driver.dir, "index.mjs")).href);
     });
     after(() => new Promise<void>((r) => server.close(() => r())));
 
-    const webmail = (path = "/mail/"): WebmailSignin => ({
-      label: "Test webmail",
-      inboxUrl: `http://127.0.0.1:${port}${path}`,
-      mailHosts: [`127.0.0.1:${port}`],
-      marker: 'form[role="search"], input[name="q"]',
-    });
-    const open = (dir: string) =>
-      pw.chromium.launchPersistentContext(dir, {
-        ...launchOptions("chromium", false, process.platform, process.env),
-        headless: true,
-      });
-
-    it("reports a redirected profile as not signed in, and a profile holding its session as signed in after it is reopened", async () => {
-      const host = {
-        env: { ISONIM_EMAIL_WEBMAIL_PROFILES_DIR: join(scratch, "check") },
-        platform: "linux",
-      };
-      const p = accountProfile(
-        host,
-        "gmail-workspace",
-        "gmail-workspace/qa1.json",
-        true,
-      );
-
-      const first = await open(p.userDataDir);
-      try {
-        const r = await checkSignedIn(first, webmail(), 3000);
-        assert.equal(r.signedIn, false);
-        assert.ok(!r.signedIn);
-        assert.equal(r.host, `localhost:${port}`);
-        assert.match(
-          r.reason,
-          new RegExp(
-            `redirected to localhost:${port}, not 127\\.0\\.0\\.1:${port}: the profile is not signed in`,
-          ),
-        );
-        // What a person's sign-in leaves in the profile: a persistent
-        // session cookie.
-        await first.addCookies([
-          {
-            name: "session",
-            value: "yes",
-            domain: "127.0.0.1",
-            path: "/",
-            expires: Math.floor(Date.now() / 1000) + 86400,
-          },
-        ]);
-      } finally {
-        await first.close();
-      }
-
-      const second = await open(p.userDataDir);
-      try {
-        const r = await checkSignedIn(second, webmail(), 10_000);
-        assert.deepEqual(r, { signedIn: true, host: `127.0.0.1:${port}` });
-        // The mail host without the mailbox marker is not signed in.
-        const n = await checkSignedIn(second, webmail("/nomarker/"), 1500);
-        assert.equal(n.signedIn, false);
-        assert.ok(!n.signedIn);
-        assert.match(
-          n.reason,
-          /loaded on 127\.0\.0\.1:\d+ but the mailbox marker .* did not appear/,
-        );
-      } finally {
-        await second.close();
-      }
-    });
-
-    it("reads a profile signed in by the sandboxed sign-in browser back as signed in under Playwright, with the same executable", async () => {
+    it("reads a profile signed in by the sandboxed sign-in browser back as signed in when the same launch reopens it", async () => {
       const chromium = webmailBrowser(process.env);
       if ("reason" in chromium) throw new Error(chromium.reason);
-      // A regular release build, not Playwright's Chrome for Testing;
-      // Playwright opens the profile with that same executable.
-      assert.notEqual(chromium.path, pw.chromium.executablePath());
+      // A regular release build, not Playwright's Chrome for Testing.
       assert.match(chromium.label, /^(Google Chrome|Chromium) \d+\./);
-      const options = webmailLaunchOptions(process.env, true);
-      assert.equal(options.executablePath, chromium.path);
-      assert.equal(options.chromiumSandbox, true);
 
       const host = {
         env: { ISONIM_EMAIL_WEBMAIL_PROFILES_DIR: join(scratch, "signin") },
         platform: "linux",
       };
       const p = accountProfile(host, "yahoo", "yahoo/qa1.json", true);
-      const before = signedInVisits;
-      let said = "";
-      const child = spawn(
-        chromium.path,
-        signinBrowserArgs(p.userDataDir, `http://127.0.0.1:${port}/login`, {
-          headless: true,
-        }),
-        { stdio: ["ignore", "ignore", "pipe"] },
-      );
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (d: string) => {
-        said = (said + d).slice(-8192);
-      });
-      try {
-        const sandboxed = await waitSandboxed(child, p.userDataDir, () => said);
-        assert.ok(sandboxed.ok, JSON.stringify(sandboxed));
-        const deadline = Date.now() + 60_000;
-        while (signedInVisits === before && Date.now() < deadline)
-          await sleep(250);
-        assert.ok(
-          signedInVisits > before,
-          "the sign-in browser reached the inbox signed in",
+      // Starts the browser the way every start on a profile does (the
+      // cookie-store switches, the sandbox on), headless for the test,
+      // and waits for a signed-in visit of the inbox.
+      const visit = async (url: string): Promise<void> => {
+        const before = signedInVisits;
+        let said = "";
+        const child = spawn(
+          chromium.path,
+          signinBrowserArgs(p.userDataDir, url, { headless: true }),
+          { stdio: ["ignore", "ignore", "pipe"] },
         );
-      } finally {
-        await stopBrowser(child);
-      }
-
-      const context = await pw.chromium.launchPersistentContext(
-        p.userDataDir,
-        options,
-      );
-      try {
-        const r = await checkSignedIn(context, webmail(), 10_000);
-        assert.deepEqual(r, { signedIn: true, host: `127.0.0.1:${port}` });
-        // Playwright's browser on the profile is sandboxed as well.
-        assert.ok(
-          rendererSandboxes(p.userDataDir).some((x) => x.seccomp),
-          JSON.stringify(rendererSandboxes(p.userDataDir)),
-        );
-      } finally {
-        await context.close();
-      }
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (d: string) => {
+          said = (said + d).slice(-8192);
+        });
+        try {
+          const sandboxed = await waitSandboxed(
+            child,
+            p.userDataDir,
+            () => said,
+          );
+          assert.ok(sandboxed.ok, JSON.stringify(sandboxed));
+          const deadline = Date.now() + 60_000;
+          while (signedInVisits === before && Date.now() < deadline)
+            await sleep(250);
+          assert.ok(
+            signedInVisits > before,
+            `the browser reached the inbox signed in (${url})`,
+          );
+        } finally {
+          await stopBrowser(child);
+        }
+      };
+      // The sign-in: the site sets its session cookie.
+      await visit(`http://127.0.0.1:${port}/login`);
+      // Reopened straight on the inbox: the cookie, written by the first
+      // browser and sealed with the same store, is sent again.
+      await visit(`http://127.0.0.1:${port}/mail/`);
     });
 
     it("refuses a sign-in browser without the sandbox, and one that aborts for want of it, naming why", async () => {
