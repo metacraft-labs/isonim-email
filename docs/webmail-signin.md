@@ -82,9 +82,16 @@ account file's address and password:
   "Reject" choice of every row, then a save control ("Save choices",
   "Запазване на избора", ...) or "Continue". A row's choices may be
   named by the choice alone ("Отхвърляне" / "Разрешаване") or by the
-  row's purpose and the choice ("За предоставяне на интелигентни
-  функции, Отхвърляне", as Yahoo's second consent page names them);
-  each purpose must then have exactly one reject and one allow choice.
+  row's purpose and the choice, joined by a comma (or another
+  separator) or by a space ("За предоставяне на интелигентни функции,
+  Отхвърляне" and "За да Ви показваме персонализирани реклами и
+  съдържание Отхвърляне", both seen on Yahoo's second consent page);
+  each purpose must then have exactly one reject and one allow choice,
+  whichever way each is joined. When only a space joins them, the words
+  before the choice must read as a purpose: a name such as "Ads, do not
+  reject", "Click to reject" or "Без отхвърляне" (a negation, a modal,
+  "to", "or", "if", a preposition before the word) or one that already names
+  a choice ("Allow or Reject") is no choice, and stops the attempt.
   Rows off the screen in a dialog that scrolls are reached with the
   mouse wheel, up or down, whichever way they lie; a choice already on
   "Reject" is left as it is. A "Reject all" or save control is clicked

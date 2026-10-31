@@ -36,8 +36,10 @@
 // its continue control, never its allow choices; Yahoo's second consent
 // page as measured on 2026-10-29 (reached through the first page's
 // "Отхвърляне на всички"), a dialog that scrolls, shown scrolled to its
-// end, whose radio buttons are named "<purpose>, <choice>", is answered
-// by rejecting every purpose (the wheel turned up to the one above the
+// end, whose radio buttons are named "<purpose>, <choice>" or, through
+// `aria-labelledby` naming the row's title and its column's header,
+// "<purpose> <choice>" (as measured on 2026-10-30; one row mixes the
+// two), is answered by rejecting every purpose (the wheel turned up to the one above the
 // visible part, whose Allow was selected), then its "Запазване на избора"
 // once, and a choice named otherwise stops it consent-required with no
 // input on the dialog and nothing posted; the
@@ -276,10 +278,15 @@ describe("the automated sign-in in a real GuiAssert session", () => {
         // Yahoo's two mail consent pages as measured on 2026-10-29: a
         // page with "Отхвърляне на всички" / "Приемане на всички", then a
         // dialog that scrolls, shown scrolled to its end, whose radio
-        // buttons are named "<purpose>, <choice>": the smart-features
-        // purpose above the visible part (Allow selected), ads (Reject
-        // selected), statistics (nothing selected), and "Запазване на
-        // избора" at its end. `sessionId=odd` names one choice otherwise.
+        // buttons are named "<purpose>, <choice>" (`aria-label`) or
+        // "<purpose> <choice>" (`aria-labelledby` naming the row's bold
+        // title and its column's header, which Chrome joins with a
+        // space; Yahoo's names on 2026-10-30): the smart-features purpose
+        // above the visible part (Allow selected; both comma), ads
+        // (Reject selected; both space, the measured name), statistics
+        // (nothing selected; its Reject space, its Allow comma), and
+        // "Запазване на избора" at its end. `sessionId=odd` names one
+        // choice otherwise.
         if (url.pathname === "/v2/collectConsent" && req.method === "GET")
           return html(
             `<h1>Yahoo е част от семейството на Yahoo</h1><p>Ние и нашите партньори използваме бисквитки.</p><form method="post" action="/v2/collectConsent?sessionId=${url.searchParams.get("sessionId") ?? ""}"><button name="r" value="reject">Отхвърляне на всички</button> <button name="r" value="accept">Приемане на всички</button></form>`,
@@ -300,27 +307,38 @@ describe("the automated sign-in in a real GuiAssert session", () => {
             "<p>Използваме информацията, за да подобряваме услугите си и да Ви показваме подходящо съдържание.</p>".repeat(
               n,
             );
+          // How each choice is named: "," an `aria-label` "<title>,
+          // <word>"; " " an `aria-labelledby` of the title and the
+          // column's header above the radio button.
           const purpose = (
             id: string,
             title: string,
             on: "reject" | "allow" | null,
+            names: [", " | " ", ", " | " "],
             reject = "Отхвърляне",
-          ) =>
-            `<div class="row"><p class="t"><b>${title}</b> въз основа на нашето предположение за Вашите интереси.</p><span class="c"><input type="radio" name="${id}" value="reject" aria-label="${title}, ${reject}"${on === "reject" ? " checked" : ""}></span><span class="c"><input type="radio" name="${id}" value="allow" aria-label="${title}, Разрешаване"${on === "allow" ? " checked" : ""}></span></div>`;
+          ) => {
+            const choice = (
+              value: "reject" | "allow",
+              word: string,
+              sep: ", " | " ",
+            ) =>
+              `<span class="c"><span class="hd" id="${id}-${value}">${word}</span><input type="radio" name="${id}" value="${value}" ${sep === " " ? `aria-labelledby="${id}-t ${id}-${value}"` : `aria-label="${title}, ${word}"`}${on === value ? " checked" : ""}></span>`;
+            return `<div class="row"><p class="t"><b id="${id}-t">${title}</b> въз основа на нашето предположение за Вашите интереси.</p>${choice("reject", reject, names[0])}${choice("allow", "Разрешаване", names[1])}</div>`;
+          };
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           return res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Welcome to Mail!</title>
 <style>body{margin:0;background:#777;font-family:Roboto,sans-serif;font-size:18px}
 .dlg{position:fixed;top:100px;left:260px;width:712px;height:600px;overflow-y:auto;background:#fff;border-radius:8px;padding:0 24px}
 .row{display:flex;align-items:flex-start;margin:20px 0}.t{width:480px;margin:0}
-.c{width:100px;text-align:center}.h{display:flex;justify-content:flex-end}
+.c{width:100px;text-align:center}.h{display:flex;justify-content:flex-end}.hd{display:block;font-size:13px}
 input[type=radio]{width:22px;height:22px;margin:4px}button{font-size:18px;padding:10px 28px;margin:20px 0 40px}</style>
 </head><body><div class="dlg"><form method="post" action="/mailbox/collectConsent">
 <h2>yahoo!</h2>${filler(3)}
-${purpose("smart", "За предоставяне на интелигентни функции", "allow", odd ? "Може би" : "Отхвърляне")}
+${purpose("smart", "За предоставяне на интелигентни функции", "allow", [", ", ", "], odd ? "Може би" : "Отхвърляне")}
 <h3>Използване на информация само от търговски имейли</h3>${filler(4)}
 <div class="h"><span class="c">Отхвърляне</span><span class="c">Разрешаване</span></div>
-${purpose("ads", "За да Ви показваме персонализирани реклами и съдържание", "reject")}
-${purpose("stats", "За създаване и споделяне на обобщени статистики", null)}
+${purpose("ads", "За да Ви показваме персонализирани реклами и съдържание", "reject", [" ", " "])}
+${purpose("stats", "За създаване и споделяне на обобщени статистики", null, [" ", ", "])}
 <p>Вижте нашия Център за поверителност за повече подробности.</p>
 <button>Запазване на избора</button></form></div>
 <script>const d = document.querySelector('.dlg'); d.scrollTop = d.scrollHeight;</script>
@@ -996,7 +1014,7 @@ ${purpose("stats", "За създаване и споделяне на обоб�
     },
   });
 
-  it("answers Yahoo's per-purpose consent dialog after its reject-all page in real Chrome: the off-screen purpose reached by the wheel, every purpose rejected, saved once, then the sign-in", async () => {
+  it("answers Yahoo's per-purpose consent dialog after its reject-all page in real Chrome, its rows named with a comma or a space (the names Chrome computes): the off-screen purpose reached by the wheel, every purpose rejected, saved once, then the sign-in", async () => {
     mode = "ok";
     received.identifier.length = 0;
     received.password.length = 0;
@@ -1035,6 +1053,14 @@ ${purpose("stats", "За създаване и споделяне на обоб�
       const saved = a.events.filter((e) =>
         /every row rejected \(3\); clicked "Запазване на избора"/.test(e),
       );
+      // The statistics' Reject, named by `aria-labelledby`: Chrome joins
+      // the row's title and the column's header with one space.
+      const stats = a.events.findIndex((e) =>
+        /chose "За създаване и споделяне на обобщени статистики Отхвърляне" on 1 row/.test(
+          e,
+        ),
+      );
+      assert.ok(stats >= 0 && stats < up, a.events.join("\n"));
       assert.ok(up >= 0 && smart > up, a.events.join("\n"));
       assert.equal(saved.length, 1, a.events.join("\n"));
       assert.ok(a.events.indexOf(saved[0]!) > smart);

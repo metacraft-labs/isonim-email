@@ -35,7 +35,8 @@
 //   the page is in) is answered the most privacy-preserving way, by exact
 //   control names (CONSENT_CONTROLS): a reject-all control, or every
 //   row's reject choice (a bare pair, or a per-purpose pair named
-//   "<purpose>, <choice>"; those off the screen reached by the wheel, up
+//   "<purpose>, <choice>" or "<purpose> <choice>", the purpose ending in
+//   no negation or linking word; those off the screen reached by the wheel, up
 //   or down) and then a save control or a continue control; a reject-all
 //   or save control is clicked once per page address (`stuckMs` for the
 //   page to move on), at most CONSENT_MAX_SUBMITS per attempt; never an
@@ -499,6 +500,139 @@ export const CONSENT_SEPARATORS: readonly string[] = [
   "\u00b7",
 ];
 
+/**
+ * Words that, ending what comes before a choice word named after white
+ * space, make the choice word part of a phrase instead of a choice
+ * (normalised, whole words): negations, auxiliaries and modals, and
+ * infinitive markers, prepositions, conjunctions and subordinators, in
+ * English and Bulgarian ("do not reject", "click to reject", "accept or reject";
+ * "без отхвърляне", "право на отхвърляне", "искане за разрешаване").
+ * A purpose does not end in one.
+ */
+export const CONSENT_PHRASE_ENDS: readonly string[] = [
+  // English: negations.
+  "not",
+  "no",
+  "never",
+  "dont",
+  "doesnt",
+  "didnt",
+  "cannot",
+  "cant",
+  "wont",
+  "without",
+  "isnt",
+  "arent",
+  "wasnt",
+  "werent",
+  "hasnt",
+  "havent",
+  "hadnt",
+  "shouldnt",
+  "wouldnt",
+  "couldnt",
+  "mustnt",
+  "neednt",
+  "shant",
+  "aint",
+  // What is left of a contraction whose apostrophe `normalize` does not
+  // drop ("Don´t" -> "don t").
+  "t",
+  // English: auxiliaries and modals.
+  "do",
+  "does",
+  "did",
+  "can",
+  "could",
+  "may",
+  "might",
+  "must",
+  "shall",
+  "should",
+  "will",
+  "would",
+  "need",
+  "let",
+  "lets",
+  // English: the infinitive's "to", prepositions, conjunctions and
+  // subordinators.
+  "to",
+  "or",
+  "and",
+  "nor",
+  "but",
+  "then",
+  "for",
+  "of",
+  "on",
+  "by",
+  "with",
+  "in",
+  "out",
+  "at",
+  "as",
+  "from",
+  "into",
+  "about",
+  "against",
+  "than",
+  "instead",
+  "rather",
+  "except",
+  "unless",
+  "if",
+  "whether",
+  "when",
+  "before",
+  "after",
+  "until",
+  "why",
+  "how",
+  // Bulgarian: negations.
+  "не",
+  "без",
+  "ни",
+  "нито",
+  "никога",
+  "няма",
+  "недей",
+  // Bulgarian: auxiliaries and modals.
+  "ще",
+  "може",
+  "трябва",
+  "нека",
+  // Bulgarian: the particle "да", prepositions, conjunctions and
+  // subordinators.
+  "да",
+  "или",
+  "и",
+  "а",
+  "но",
+  "за",
+  "на",
+  "от",
+  "с",
+  "със",
+  "при",
+  "след",
+  "преди",
+  "по",
+  "към",
+  "във",
+  "чрез",
+  "срещу",
+  "относно",
+  "вместо",
+  "освен",
+  "отколкото",
+  "ако",
+  "дали",
+  "когато",
+  "докато",
+  "защо",
+  "как",
+];
+
 /** A consent row's radio button: its choice, and its purpose when named. */
 export interface ConsentRadio {
   choice: "reject" | "allow";
@@ -511,20 +645,46 @@ export interface ConsentRadio {
  * a purpose, a separator (CONSENT_SEPARATORS, the last one in the name)
  * and exactly a listed reject or allow name (a per-purpose pair, as
  * Yahoo names them: "За предоставяне на интелигентни функции,
- * Отхвърляне"); else a listed name, exactly or followed by more words
- * that do not name the other choice (a bare pair); null otherwise.
+ * Отхвърляне"); or a purpose, white space and exactly such a name as the
+ * last word (as Yahoo also names them: "За да Ви показваме
+ * персонализирани реклами и съдържание Отхвърляне"), when the purpose
+ * does not end in a word of CONSENT_PHRASE_ENDS and names no choice,
+ * reject-all or accepting word itself (otherwise null, not a bare
+ * choice); else a listed name, exactly or followed by more words that do
+ * not name the other choice (a bare pair); null otherwise. The purpose is
+ * normalised, so a row's choices pair whichever form each is named in.
  */
 export function consentRadio(name: string | null): ConsentRadio | null {
   if (name === null) return null;
   const reject = CONSENT_CONTROLS.reject.map(normalize);
   const allow = CONSENT_CONTROLS.allow.map(normalize);
+  const choiceOf = (word: string): "reject" | "allow" | null =>
+    reject.includes(word) ? "reject" : allow.includes(word) ? "allow" : null;
   const cut = Math.max(...CONSENT_SEPARATORS.map((c) => name.lastIndexOf(c)));
   if (cut >= 0) {
     const purpose = normalize(name.slice(0, cut));
-    const word = normalize(name.slice(cut + 1));
+    const choice = choiceOf(normalize(name.slice(cut + 1)));
+    if (purpose.trim() !== "" && choice !== null) return { choice, purpose };
+  }
+  // "<purpose> <choice>": the last word, split off at white space.
+  const spaced = /^(.*\S)\s+(\S+)\s*$/su.exec(name.normalize("NFKC"));
+  const choice = spaced === null ? null : choiceOf(normalize(spaced[2]!));
+  if (spaced !== null && choice !== null) {
+    const purpose = normalize(spaced[1]!);
     if (purpose.trim() !== "") {
-      if (reject.includes(word)) return { choice: "reject", purpose };
-      if (allow.includes(word)) return { choice: "allow", purpose };
+      const words = purpose.trim().split(" ");
+      const names = [
+        ...CONSENT_CONTROLS.reject,
+        ...CONSENT_CONTROLS.allow,
+        ...CONSENT_CONTROLS.rejectAll,
+        ...CONSENT_CONTROLS.never,
+      ].map(normalize);
+      if (
+        CONSENT_PHRASE_ENDS.includes(words[words.length - 1]!) ||
+        names.some((w) => purpose.includes(w))
+      )
+        return null;
+      return { choice, purpose };
     }
   }
   const n = normalize(name);

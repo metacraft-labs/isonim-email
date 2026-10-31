@@ -189,10 +189,12 @@ export interface SignInAgainRule {
  * buttons; measured 2026-10-29: Yahoo's second mail consent, a scrolling
  * dialog whose radio buttons are named by purpose and choice, "За
  * предоставяне на интелигентни функции, Отхвърляне", with a "Запазване на
- * избора" button). A reject or allow choice is a radio button named as the
+ * избора" button; measured 2026-10-30: the same dialog naming a row "За да
+ * Ви показваме персонализирани реклами и съдържание Отхвърляне", with no
+ * separator). A reject or allow choice is a radio button named as the
  * word alone (or followed by words that do not name the other), or as a
- * purpose, a separator and exactly the word (webmail_signin.ts
- * `consentRadio`). The procedure clicks a reject-all control, or every
+ * purpose, a separator or white space, and exactly the word
+ * (webmail_signin.ts `consentRadio`). The procedure clicks a reject-all control, or every
  * reject choice and then a save control (once) or a continue control; it
  * never clicks a name in `never`, and no other list may contain a word of
  * it (the test checks it).

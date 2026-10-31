@@ -134,6 +134,7 @@ import {
   AUTOMATION_SWITCHES,
   CONSENT_MAX_PROCEED,
   CONSENT_MAX_SUBMITS,
+  CONSENT_PHRASE_ENDS,
   consentChoice,
   consentRadio,
   driveSignin,
@@ -146,6 +147,7 @@ import { attemptPath, readAttempt } from "./webmail_signin_guard.ts";
 import {
   CONSENT_CONTROLS,
   GMAIL_SIGNIN,
+  normalize,
   OUTLOOK_SIGNIN,
   type ProviderSignin,
   YAHOO_SIGNIN,
@@ -1090,8 +1092,6 @@ describe("the automated sign-in procedure", () => {
       "Ads, Reject all",
       "Ads, Отхвърляне на всички",
       "Ads, Decline",
-      "Personalised ads Reject",
-      `${SMART} Отхвърляне`,
       `${SMART}, Може би`,
       "Ads,",
     ])
@@ -1100,6 +1100,133 @@ describe("the automated sign-in procedure", () => {
     assert.ok(CONSENT_CONTROLS.save.includes("Запазване на избора"));
     assert.ok(CONSENT_CONTROLS.save.includes("Save choices"));
     assert.ok(CONSENT_CONTROLS.save.includes("Save and continue"));
+  });
+
+  it("names a per-purpose choice by the exact word after white space, the purpose ending in no negation or linking word and naming no choice", () => {
+    // The name measured on Yahoo's page (2026-10-30), and its allow.
+    const LIVE = "За да Ви показваме персонализирани реклами и съдържание";
+    assert.deepEqual(consentRadio(`${LIVE} Отхвърляне`), {
+      choice: "reject",
+      purpose: " за да ви показваме персонализирани реклами и съдържание ",
+    });
+    assert.deepEqual(consentRadio(`${LIVE} Разрешаване`), {
+      choice: "allow",
+      purpose: " за да ви показваме персонализирани реклами и съдържание ",
+    });
+    // The two forms give the same purpose, so a row may mix them.
+    assert.deepEqual(
+      consentRadio("За предоставяне на интелигентни функции Отхвърляне"),
+      consentRadio("За предоставяне на интелигентни функции, Отхвърляне"),
+    );
+    assert.deepEqual(consentRadio(`${SMART} Отхвърляне`), {
+      choice: "reject",
+      purpose: normalize(SMART),
+    });
+    // English, case, white space of any kind (a no-break space, a line
+    // break, several), a full stop after the word.
+    assert.deepEqual(consentRadio("Personalised ads Reject"), {
+      choice: "reject",
+      purpose: " personalised ads ",
+    });
+    assert.equal(consentChoice("Personalised ads ALLOW"), "allow");
+    assert.equal(consentChoice("Ads\u00a0Reject"), "reject");
+    assert.equal(consentChoice("Ads\n  Reject "), "reject");
+    assert.equal(consentChoice("Ads Reject."), "reject");
+    // Not a choice: a negation, an auxiliary or modal, an infinitive
+    // marker, a preposition or conjunction before the word, in either
+    // language; a purpose that names a choice; the word inside another
+    // word or more than the word; no purpose.
+    for (const name of [
+      "Ads, do not reject",
+      "Ads do not reject",
+      "Ads don't allow",
+      "Ads, never Reject",
+      "We may reject",
+      "Ads you can allow",
+      "Click to reject",
+      "Accept or reject",
+      "Ads and allow",
+      "Ads without Reject",
+      "Ads Reject all",
+      "Ads Rejected",
+      "Ads/Reject",
+      "Ads Unreject",
+      `${SMART} не Отхвърляне`,
+      `${SMART}, без Отхвърляне`,
+      "Без отхвърляне",
+      "Право на отхвърляне",
+      "Искане за разрешаване",
+      "Приемане или отхвърляне",
+      `${SMART} и Разрешаване`,
+      `${SMART} Отхвърляне на всички`,
+      "Allow or Reject",
+      "Allow us to show ads Reject",
+      "Reject all Reject",
+      "Accept cookies Reject",
+      "Приемане на бисквитки Отхвърляне",
+      "Reject Reject",
+      // A negated contraction, also with an apostrophe the normalisation
+      // keeps; a subordinator or preposition before the word.
+      "Ads you shouldn't Reject",
+      "Don\u00b4t Reject",
+      "Don\u2032t allow",
+      "If Reject",
+      "Learn more about Reject",
+      "Opt in Allow",
+      "Rather than Reject",
+      "Недей Отхвърляне",
+      "Ако Отхвърляне",
+      "Вместо Разрешаване",
+    ])
+      assert.equal(consentRadio(name), null, name);
+    // Every listed phrase end, in a purpose before a choice word: no choice.
+    for (const end of CONSENT_PHRASE_ENDS) {
+      assert.equal(normalize(end).trim(), end, end);
+      assert.equal(consentRadio(`Ads ${end} Reject`), null, end);
+      assert.equal(consentRadio(`Ads ${end} Allow`), null, end);
+    }
+    // A bare choice stays bare.
+    assert.deepEqual(consentRadio(" Отхвърляне "), {
+      choice: "reject",
+      purpose: null,
+    });
+    assert.deepEqual(consentRadio("— Reject"), {
+      choice: "reject",
+      purpose: null,
+    });
+  });
+
+  it("answers Yahoo's per-purpose dialog whose rows mix both namings (a separator, white space, one of each in a row) as the comma-only one", async () => {
+    const S = (p: ReturnType<typeof P>) => ({
+      ...p,
+      name: (p.name ?? "").replace(", ", " "),
+    });
+    const radios = purposeRadios();
+    const h = harness(
+      purposeScenario({
+        radios: [
+          radios[0]!,
+          radios[1]!,
+          S(radios[2]!),
+          S(radios[3]!),
+          S(radios[4]!),
+          radios[5]!,
+        ],
+      }),
+    );
+    const r = await driveSignin(h.ctx(YAHOO_SIGNIN));
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: true });
+    assert.deepEqual(inputs(h), [
+      "click 500,810",
+      "click 852,550",
+      "scroll",
+      "scroll",
+      "scroll",
+      "click 852,310",
+      "scroll",
+      "scroll",
+      "click 390,780",
+    ]);
   });
 
   it("answers Yahoo's per-purpose consent dialog after its reject-all page: every purpose's Reject (scrolling up to the one above), then 'Запазване на избора' once, never an allow choice", async () => {
@@ -1153,10 +1280,22 @@ describe("the automated sign-in procedure", () => {
         P(0, SMART, "reject", { name: `${SMART}, Може би` }),
         P(0, SMART, "allow"),
       ],
-      // The choice word without its separator.
+      // The choice word after a negation, no separator.
+      [
+        P(0, SMART, "reject", { name: `${SMART} не Отхвърляне` }),
+        P(0, SMART, "allow", { name: `${SMART} не Разрешаване` }),
+      ],
+      // A negated pair after a separator ("…, do not reject" / "…, do
+      // not allow"): the pairing alone would hold, the negation does not.
+      [
+        P(0, SMART, "reject", { name: `${SMART}, без Отхвърляне` }),
+        P(0, SMART, "allow", { name: `${SMART}, без Разрешаване` }),
+      ],
+      // A purpose's two choices in the white-space form with different
+      // purposes: no pair.
       [
         P(0, SMART, "reject", { name: `${SMART} Отхвърляне` }),
-        P(0, SMART, "allow"),
+        P(0, SMART, "allow", { name: `${ADS} Разрешаване` }),
       ],
       // Two rejects for one purpose, none to allow.
       [P(0, SMART, "reject"), P(0, SMART, "reject")],
