@@ -288,6 +288,130 @@ export function storyTexts(html: string): string[] {
   return out;
 }
 
+/**
+ * The accessible name of the story's own wrapper, the element with
+ * `role="article"` the library puts around every email (catalogue §9),
+ * read from its `aria-label` (entities decoded); null when the HTML has
+ * none. A webmail that prunes its own containers keeps this one: Chrome
+ * reports it as an `article` node, named so, of the body's whole box.
+ */
+export function storyArticleLabel(html: string): string | null {
+  for (const m of html.matchAll(/<[a-z][a-z0-9]*\b([^>]*)>/gi)) {
+    const attrs = m[1]!;
+    if (!/\brole\s*=\s*(["'])article\1/i.test(attrs)) continue;
+    const label = /\baria-label\s*=\s*(["'])(.*?)\1/is.exec(attrs)?.[2];
+    if (label === undefined) return null;
+    const t = decodeEntities(label).replace(/\s+/g, " ").trim();
+    return t === "" ? null : t;
+  }
+  return null;
+}
+
+/**
+ * The story's article in the tree: the single showing `article` node of
+ * `scope`, not holding `subject`, whose name is `label` (normalized);
+ * null when there is none or more than one.
+ */
+export function findStoryArticle(
+  flat: Flat[],
+  label: string,
+  o: { scope: Flat; subject: Flat },
+): Flat | null {
+  const want = normText(label);
+  if (want === "") return null;
+  const found = findShowing(flat, { nativeRole: "article" }, o.scope).filter(
+    (f) => normText(f.node.name ?? "") === want && !isWithin(o.subject, f),
+  );
+  return found.length === 1 ? found[0]! : null;
+}
+
+/**
+ * The first showing node inside `body` (not `body` itself) whose bounds
+ * reach past `rect` by more than a pixel (content the webmail clips or
+ * scrolls), with how far it reaches; null when everything is inside.
+ */
+export function overflowPast(
+  flat: Flat[],
+  body: Flat,
+  rect: Rect,
+): { node: Flat; extent: Rect } | null {
+  const [x, y, w, h] = rect;
+  for (const f of subtree(flat, body)) {
+    if (f === body || !showing(f.node)) continue;
+    const b = f.node.bounds;
+    if (
+      b[0] < x - 1 ||
+      b[1] < y - 1 ||
+      b[0] + b[2] > x + w + 1 ||
+      b[1] + b[3] > y + h + 1
+    )
+      return { node: f, extent: b };
+  }
+  return null;
+}
+
+/**
+ * The nearest showing ancestor of `body` below `stop` (the page's
+ * document, left out with everything above it) whose own box `rect`
+ * reaches past by more than a pixel, with that box: a container of the
+ * webmail narrower or shorter than the body (its message pane) clips it
+ * there, or lets the body run under the webmail's own chrome beside it.
+ * Ancestors not showing (Chrome's zero-size wrappers among them) are
+ * skipped; null when every one holds the body.
+ */
+export function clippedBy(
+  body: Flat,
+  rect: Rect,
+  stop: Flat | null,
+): { node: Flat; box: Rect } | null {
+  const [x, y, w, h] = rect;
+  for (let a = body.parent; a !== null && a !== stop; a = a.parent) {
+    if (!showing(a.node)) continue;
+    const b = a.node.bounds;
+    if (
+      x < b[0] - 1 ||
+      y < b[1] - 1 ||
+      x + w > b[0] + b[2] + 1 ||
+      y + h > b[1] + b[3] + 1
+    )
+      return { node: a, box: b };
+  }
+  return null;
+}
+
+/**
+ * The part of the display the page shows: its document's bounds within
+ * the window (the window when the document is not read).
+ */
+export function visibleArea(
+  doc: Rect | null,
+  windowWidth: number,
+  windowHeight: number,
+): Rect {
+  if (doc === null) return [0, 0, windowWidth, windowHeight];
+  const x0 = Math.max(0, doc[0]);
+  const y0 = Math.max(0, doc[1]);
+  const x1 = Math.min(windowWidth, doc[0] + doc[2]);
+  const y1 = Math.min(windowHeight, doc[1] + doc[3]);
+  return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)];
+}
+
+/**
+ * Which edge of `view` the region `r` touches or crosses (left, top,
+ * right, bottom; the first found), or null when it lies strictly inside:
+ * a body at an edge may be cut there.
+ */
+export function touchedEdge(
+  r: Rect,
+  view: Rect,
+): "left" | "top" | "right" | "bottom" | null {
+  if (r[0] <= view[0]) return "left";
+  if (r[1] <= view[1]) return "top";
+  if (r[0] + r[2] >= view[0] + view[2]) return "right";
+  if (r[1] + r[3] >= view[1] + view[3]) return "bottom";
+  return null;
+}
+
 /** A node's own text: its name and its text content, normalized. */
 export function nodeText(n: GaNode): string {
   return normText(`${n.name ?? ""} ${n.text ?? ""}`);
@@ -370,6 +494,161 @@ export function tokenRows(
   return f === null
     ? { rows: [], locator: null, seen }
     : { rows: f.rows, locator: f.locator, seen };
+}
+
+// ---------------------------------------------------------------------------
+// The mailbox, by its structure (whatever language it is shown in)
+// ---------------------------------------------------------------------------
+
+/** The structural signals of a mailbox page (`mailboxSignals`). */
+export type MailboxSignal =
+  | "message-list"
+  | "folder-navigation"
+  | "compose"
+  | "title-account";
+
+const LIST_ROLES = new Set(["list", "table", "tree"]);
+const LIST_NATIVE = new Set(["list box", "table", "tree table", "grid"]);
+const ROW_ROLES = new Set(["list-item", "row", "tree-item"]);
+const NAV_ITEMS = new Set(["link", "tree-item", "list-item"]);
+
+/**
+ * The structural signals of a mailbox in the tree a call returned, none
+ * of them by an element's name, so they hold in any language:
+ * - `message-list`: a list box, table or grid in the page holding at
+ *   least one showing row, or a plain list or tree whose showing items
+ *   hold a check box (a mailbox's rows carry one to select them; a menu
+ *   or a page's link list does not);
+ * - `folder-navigation`: a navigation landmark, tree or list in the page,
+ *   neither holding nor inside the message list, with at least three
+ *   showing links, tree items or list items;
+ * - `compose`: a showing button in the page's upper left (its
+ *   centre left of 35 % of the page's width and above 35 % of its
+ *   height), outside the message list;
+ * - `title-account`: the window's title carries `address` (compared
+ *   case-insensitively; only whether it does is returned).
+ * The page is the largest showing `document web` node (the whole tree
+ * when there is none).
+ */
+export function mailboxSignals(
+  root: GaNode,
+  address: string | null,
+): MailboxSignal[] {
+  const flat = flatten(root);
+  let page: Flat | null = null;
+  let area = -1;
+  for (const f of findShowing(flat, { nativeRole: "document web" })) {
+    const b = f.node.bounds!;
+    if (b[2] * b[3] > area) {
+      area = b[2] * b[3];
+      page = f;
+    }
+  }
+  const inPage = page === null ? flat : subtree(flat, page);
+  const out: MailboxSignal[] = [];
+  const count = (f: Flat, roles: Set<string>): number =>
+    subtree(flat, f).filter(
+      (x) => x !== f && roles.has(x.node.role) && showing(x.node),
+    ).length;
+  const rowsWithBox = (f: Flat): number =>
+    subtree(flat, f).filter(
+      (x) =>
+        x !== f &&
+        ROW_ROLES.has(x.node.role) &&
+        showing(x.node) &&
+        count(x, new Set(["checkbox"])) > 0,
+    ).length;
+  const list =
+    inPage.find(
+      (f) =>
+        showing(f.node) &&
+        (LIST_NATIVE.has(f.node.nativeRole) || f.node.role === "table"
+          ? count(f, ROW_ROLES) > 0
+          : LIST_ROLES.has(f.node.role) && rowsWithBox(f) > 0),
+    ) ?? null;
+  if (list !== null) out.push("message-list");
+  const apart = (f: Flat): boolean =>
+    list === null || (!isWithin(f, list) && !isWithin(list, f));
+  if (
+    inPage.some(
+      (f) =>
+        f !== page &&
+        showing(f.node) &&
+        (f.node.nativeRole === "landmark" ||
+          LIST_ROLES.has(f.node.role) ||
+          LIST_NATIVE.has(f.node.nativeRole)) &&
+        apart(f) &&
+        count(f, NAV_ITEMS) >= 3,
+    )
+  )
+    out.push("folder-navigation");
+  const pb = page?.node.bounds ?? root.bounds ?? null;
+  if (
+    pb !== null &&
+    inPage.some((f) => {
+      if (
+        f.node.role !== "button" ||
+        !showing(f.node) ||
+        (list !== null && isWithin(f, list))
+      )
+        return false;
+      const [x, y, w, h] = f.node.bounds;
+      return (
+        x + w / 2 < pb[0] + pb[2] * 0.35 && y + h / 2 < pb[1] + pb[3] * 0.35
+      );
+    })
+  )
+    out.push("compose");
+  const want = (address ?? "").trim().toLowerCase();
+  if (
+    want !== "" &&
+    flat.some(
+      (f) =>
+        f.node.role === "window" &&
+        (f.node.name ?? "").toLowerCase().includes(want),
+    )
+  )
+    out.push("title-account");
+  return out;
+}
+
+/** How a folder's list reads (hosted_webmail.ts `settleList`). */
+export type ListState = "rows" | "empty" | "quiet" | "loading";
+
+/**
+ * One reading of a folder's list: `loading` while a `loading` locator
+ * shows in the list's scope; `rows` when a row locator matches inside
+ * the page; `empty` when an `empty` notice shows in the scope; else
+ * `loading` for an adapter that declares empty notices (a list drawn as
+ * placeholders, which are not in the tree) and `quiet` for one that
+ * declares none. The scope is the `scope` locator's single showing match,
+ * or the page. `key` is the reading's identity: two equal keys in a row
+ * are a settled list.
+ */
+export function readList(
+  flat: Flat[],
+  o: {
+    page: Flat | null;
+    rows: A11yLocator[];
+    scope: A11yLocator | null;
+    loading: A11yLocator[];
+    empty: A11yLocator[];
+  },
+): { state: ListState; rows: number; scope: "list" | "page"; key: string } {
+  const scoped = o.scope === null ? [] : findShowing(flat, o.scope, o.page);
+  const scope = scoped.length === 1 ? scoped[0]! : o.page;
+  const where = scoped.length === 1 ? "list" : "page";
+  const seen = tokenRows(flat, o.rows, "", o.page).seen;
+  const key = (state: ListState): string =>
+    `${state}:${seen.map((f) => rowText(f.node)).join("\u0001")}`;
+  const shows = (locs: A11yLocator[]): boolean =>
+    locs.some((l) => findShowing(flat, l, scope).length > 0);
+  let state: ListState;
+  if (shows(o.loading)) state = "loading";
+  else if (seen.length > 0) state = "rows";
+  else if (shows(o.empty)) state = "empty";
+  else state = o.empty.length > 0 ? "loading" : "quiet";
+  return { state, rows: seen.length, scope: where, key: key(state) };
 }
 
 /**

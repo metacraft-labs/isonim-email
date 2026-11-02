@@ -22,7 +22,19 @@
 // suggestions list a row locator does not match, a nested row, or a row
 // of another run; the token on the page outside any row is reported. A
 // failure's tree summary keeps showing nodes only, clipped, capped, with
-// the account's address replaced.
+// the account's address replaced. A folder's list reads loading while a
+// loading indicator shows, or, for an adapter that declares an empty
+// notice, while it shows neither a row nor the notice (the placeholders
+// of a list still loading are not in the tree); rows, empty or quiet
+// otherwise, looked for in the list's scope. The story's article is
+// found by its role="article" label (entities decoded) as the single
+// article node of that name, never one holding the subject; a node
+// inside a body reaching past its box is reported, and a region
+// touching an edge of the visible page is. A mailbox's structural
+// signals (a message list of selectable rows, a folder navigation, a
+// compose control in the upper left, the account's address in the
+// window's title) are read without any name, so a Bulgarian mailbox has
+// them all, and a sign-in page none that counts.
 // Run with:
 //   node --test tools/capture/providers/a11y_tree.test.ts
 
@@ -30,27 +42,36 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readPng, writePng } from "../contact_sheet.ts";
 import {
+  type A11yLocator,
   addressBarValue,
   carriesToken,
   clickTarget,
   clipText,
   findShowing,
+  findStoryArticle,
   flatten,
   insideRect,
   locateStoryRegion,
   locationHost,
+  mailboxSignals,
   matches,
   MASK_RGB,
   meanLuminance,
+  clippedBy,
+  overflowPast,
   paintMasks,
   percentDecoded,
+  readList,
   rowText,
   sameLocation,
+  storyArticleLabel,
   storyTexts,
   structureFingerprint,
   tokenNodes,
   tokenRows,
+  touchedEdge,
   treeSummary,
+  visibleArea,
 } from "./a11y_tree.ts";
 import type { GaNode, Rect } from "./guiassert.ts";
 import { WEBMAIL_CHROME } from "./webmail_adapters.ts";
@@ -663,5 +684,381 @@ describe("pixels", () => {
   it("the mean luminance tells dark from light", () => {
     assert.equal(Math.round(meanLuminance(solid(4, 4, 0))), 0);
     assert.equal(Math.round(meanLuminance(solid(4, 4, 255))), 255);
+  });
+});
+
+describe("a folder's list, the story's article and clipping", () => {
+  // Outlook.com's Junk Email as the live tree of 2026-10-31 shows it
+  // while its list loads: the "Message list" landmark with a banner and
+  // an empty section; the placeholder rows are not in the tree.
+  const outlookList = (inner: GaNode[]): GaNode =>
+    n(
+      "window",
+      "frame",
+      "Mail",
+      [0, 0, 1440, 2400],
+      [
+        n(
+          "group",
+          "document web",
+          "Mail",
+          [0, 90, 1440, 2300],
+          [
+            n(
+              "group",
+              "landmark",
+              "Navigation",
+              [0, 200, 260, 2000],
+              [
+                text("Junk Email", [96, 393, 80, 20]),
+                text("Nothing is selected", [700, 400, 200, 20]),
+              ],
+            ),
+            n(
+              "group",
+              "landmark",
+              "Message list",
+              [266, 219, 351, 2176],
+              inner,
+            ),
+            // The reading pane's own notice, outside the list's scope.
+            text("Nothing in reading pane", [700, 500, 200, 20]),
+          ],
+        ),
+      ],
+    );
+  const OUTLOOK: {
+    rows: A11yLocator[];
+    scope: A11yLocator | null;
+    loading: A11yLocator[];
+    empty: A11yLocator[];
+  } = {
+    rows: [{ role: "list-item" }],
+    scope: { nativeRole: "landmark", name: "Message list" },
+    loading: [{ nativeRole: "progress bar" }],
+    empty: [{ namePattern: "^(nothing in |looks empty)" }],
+  };
+  const read = (root: GaNode, o: Partial<typeof OUTLOOK> = {}) => {
+    const flat = flatten(root);
+    return readList(flat, {
+      ...OUTLOOK,
+      ...o,
+      page: findShowing(flat, { nativeRole: "document web" })[0]!,
+    });
+  };
+
+  it("reads a list still drawn as placeholders as loading, an empty folder's notice as empty, rows as rows", () => {
+    const banner = text(
+      "Items in Junk Email will be permanently deleted",
+      [303, 275, 289, 33],
+    );
+    const loading = outlookList([
+      banner,
+      n("group", "section", "", [267, 318, 350, 2077]),
+    ]);
+    assert.equal(read(loading).state, "loading");
+    assert.equal(read(loading).scope, "list");
+    // Without empty notices declared the same tree is quiet.
+    assert.equal(read(loading, { empty: [] }).state, "quiet");
+    // A notice outside the list's scope does not make it empty.
+    const empty = outlookList([
+      banner,
+      text("Nothing in folder", [300, 400, 200, 20]),
+    ]);
+    assert.equal(read(empty).state, "empty");
+    const rows = outlookList([
+      n(
+        "list",
+        "list box",
+        "",
+        [267, 318, 350, 400],
+        [
+          n(
+            "list-item",
+            "list item",
+            "Acme Billing Your receipt",
+            [267, 318, 350, 60],
+          ),
+        ],
+      ),
+    ]);
+    const r = read(rows);
+    assert.equal(r.state, "rows");
+    assert.equal(r.rows, 1);
+    // A progress bar wins over everything.
+    const busy = outlookList([
+      n("unknown", "progress bar", "", [267, 230, 350, 4]),
+      text("Nothing in folder", [300, 400, 200, 20]),
+    ]);
+    assert.equal(read(busy).state, "loading");
+    // A list whose scope is not shown is read in the page.
+    const noScope = read(empty, { scope: { name: "No such list" } });
+    assert.equal(noScope.scope, "page");
+    // Two readings of the same list have the same key; another row
+    // changes it.
+    assert.equal(read(rows).key, read(rows).key);
+    assert.notEqual(read(rows).key, read(empty).key);
+  });
+
+  it("finds the story's article by its label, never one holding the subject, and reads the label from the HTML", () => {
+    assert.equal(
+      storyArticleLabel(
+        '<body><div style="display:none">pre</div><div role="article" aria-roledescription="email" aria-label="Your receipt &amp; invoice" lang="en"><table role="presentation"></table></div></body>',
+      ),
+      "Your receipt & invoice",
+    );
+    assert.equal(storyArticleLabel("<div role='article'>no label</div>"), null);
+    assert.equal(storyArticleLabel("<div>none</div>"), null);
+    const subject = n(
+      "label",
+      "heading",
+      "[es:t1:abc] Your receipt",
+      [332, 219, 589, 27],
+    );
+    const article = n(
+      "group",
+      "article",
+      "Your receipt & invoice",
+      [332, 351, 815, 1312],
+      [text("Thanks for your order", [463, 495, 553, 36])],
+    );
+    const tree = n(
+      "group",
+      "document web",
+      "Mail",
+      [4, 87, 1231, 2308],
+      [
+        subject,
+        article,
+        // Gmail's own reply links below, and a look-alike article that
+        // holds the subject (a whole conversation named the same).
+        n("link", "link", "Reply", [332, 1699, 104, 36]),
+      ],
+    );
+    const flat = flatten(tree);
+    const scope = flat[0]!;
+    const subj = flat.find((f) => f.node === subject)!;
+    const found = findStoryArticle(flat, "Your receipt  & INVOICE", {
+      scope,
+      subject: subj,
+    });
+    assert.equal(found?.node, article);
+    assert.equal(
+      findStoryArticle(flat, "Another story", { scope, subject: subj }),
+      null,
+    );
+    const holding = n(
+      "group",
+      "article",
+      "Your receipt & invoice",
+      [4, 87, 1231, 2308],
+      [subject],
+    );
+    const flat2 = flatten(
+      n("group", "document web", "Mail", [4, 87, 1231, 2308], [holding]),
+    );
+    assert.equal(
+      findStoryArticle(flat2, "Your receipt & invoice", {
+        scope: flat2[0]!,
+        subject: flat2.find((f) => f.node === subject)!,
+      }),
+      null,
+    );
+  });
+
+  it("reports content reaching past the body's box, and a region touching an edge of the visible page", () => {
+    const wide = n("table", "table", "Items", [463, 600, 1300, 100]);
+    const body = n(
+      "group",
+      "article",
+      "Story",
+      [332, 351, 815, 1312],
+      [text("Inside", [463, 495, 553, 36]), wide],
+    );
+    const flat = flatten(body);
+    const over = overflowPast(flat, flat[0]!, body.bounds!);
+    assert.equal(over?.node.node, wide);
+    assert.deepEqual(over?.extent, [463, 600, 1300, 100]);
+    const fits = n(
+      "group",
+      "article",
+      "Story",
+      [332, 351, 815, 1312],
+      [
+        text("Inside", [463, 495, 553, 36]),
+        // One pixel of rounding is not clipping.
+        text("Edge", [1100, 500, 48, 20]),
+      ],
+    );
+    const flat2 = flatten(fits);
+    assert.equal(overflowPast(flat2, flat2[0]!, fits.bounds!), null);
+    // A container narrower than the body (the webmail's message pane)
+    // clips it; one holding it, or a zero-size wrapper, does not.
+    const story = n("group", "article", "Story", [332, 351, 815, 600]);
+    const pane = n("group", "section", "", [300, 300, 700, 900], [story]);
+    const doc = n(
+      "group",
+      "document web",
+      "",
+      [0, 80, 1440, 2000],
+      [n("group", "landmark", "", [200, 200, 1200, 1500], [pane])],
+    );
+    const f3 = flatten(doc);
+    const at = f3.find((f) => f.node === story)!;
+    const docF = f3[0]!;
+    assert.deepEqual(clippedBy(at, story.bounds!, docF), {
+      node: f3.find((f) => f.node === pane)!,
+      box: [300, 300, 700, 900],
+    });
+    pane.bounds = [300, 300, 900, 900];
+    assert.equal(clippedBy(at, story.bounds!, docF), null);
+    pane.bounds = [0, 0, 0, 0];
+    assert.equal(clippedBy(at, story.bounds!, docF), null);
+    // The document itself, and what is above it, are not looked at.
+    pane.bounds = [300, 300, 900, 900];
+    doc.bounds = [0, 80, 1000, 2000];
+    assert.equal(clippedBy(at, story.bounds!, docF), null);
+    // The visible page: the document within the window.
+    const view = visibleArea([4, 87, 1300, 2400], 1240, 2400);
+    assert.deepEqual(view, [4, 87, 1236, 2313]);
+    assert.deepEqual(visibleArea(null, 1240, 2400), [0, 0, 1240, 2400]);
+    assert.equal(touchedEdge([332, 351, 815, 1312], view), null);
+    assert.equal(touchedEdge([227, 287, 1013, 1000], view), "right");
+    assert.equal(touchedEdge([4, 287, 100, 100], view), "left");
+    assert.equal(touchedEdge([300, 87, 100, 100], view), "top");
+    assert.equal(touchedEdge([300, 300, 100, 2100], view), "bottom");
+  });
+});
+
+describe("a mailbox's structure", () => {
+  const ADDR = "qa.tester@example.com";
+  const row = (i: number) =>
+    n(
+      "list-item",
+      "list item",
+      "",
+      [300, 300 + i * 60, 900, 60],
+      [
+        n("checkbox", "check box", "", [304, 310 + i * 60, 20, 20]),
+        n("link", "link", `Изпращач ${i} Тема ${i}`, [
+          340,
+          300 + i * 60,
+          800,
+          60,
+        ]),
+      ],
+    );
+  const folders = ["Входяща поща", "Непрочетени", "Кошче", "Спам"];
+  const bulgarian = (title: string, rows = 3) =>
+    n(
+      "window",
+      "frame",
+      title,
+      [0, 0, 1440, 2400],
+      [
+        n(
+          "group",
+          "document web",
+          title,
+          [0, 90, 1440, 2300],
+          [
+            n("button", "push button", "Ново съобщение", [20, 120, 200, 40]),
+            n(
+              "text-field",
+              "entry",
+              "Търсете в пощата си",
+              [300, 110, 600, 40],
+            ),
+            n(
+              "group",
+              "landmark",
+              "",
+              [0, 180, 260, 1200],
+              [
+                n(
+                  "list",
+                  "list",
+                  "",
+                  [0, 180, 260, 400],
+                  folders.map((f, i) =>
+                    n(
+                      "list-item",
+                      "list item",
+                      "",
+                      [0, 180 + i * 40, 260, 40],
+                      [n("link", "link", f, [10, 180 + i * 40, 240, 40])],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            n(
+              "list",
+              "list",
+              "",
+              [300, 300, 900, 1200],
+              Array.from({ length: rows }, (_, i) => row(i)),
+            ),
+          ],
+        ),
+      ],
+    );
+
+  it("reads every signal of a Bulgarian mailbox, none by its names", () => {
+    assert.deepEqual(
+      mailboxSignals(
+        bulgarian(`(1 непрочетен) – ${ADDR} - Google Chrome`),
+        ADDR,
+      ),
+      ["message-list", "folder-navigation", "compose", "title-account"],
+    );
+    // Another account's title, or none asked for: no title signal.
+    assert.deepEqual(
+      mailboxSignals(bulgarian("(1 непрочетен) – other@example.com"), ADDR),
+      ["message-list", "folder-navigation", "compose"],
+    );
+    // An empty Inbox: no message list.
+    assert.deepEqual(mailboxSignals(bulgarian(`${ADDR}`, 0), null), [
+      "folder-navigation",
+      "compose",
+    ]);
+  });
+
+  it("finds no message list in a page's menu of links, and no compose control right or low on the page", () => {
+    const signin = n(
+      "window",
+      "frame",
+      "Yahoo",
+      [0, 0, 1440, 2400],
+      [
+        n(
+          "group",
+          "document web",
+          "Sign in",
+          [0, 90, 1440, 2300],
+          [
+            n(
+              "list",
+              "list",
+              "",
+              [0, 100, 1440, 40],
+              ["Mail", "News", "Finance", "Sports"].map((t, i) =>
+                n(
+                  "list-item",
+                  "list item",
+                  "",
+                  [i * 200, 100, 200, 40],
+                  [n("link", "link", t, [i * 200, 100, 200, 40])],
+                ),
+              ),
+            ),
+            n("button", "push button", "Next", [900, 1500, 200, 40]),
+          ],
+        ),
+      ],
+    );
+    // The menu is a navigation, never a message list (no check boxes);
+    // the only button is low and right.
+    assert.deepEqual(mailboxSignals(signin, ADDR), ["folder-navigation"]);
   });
 });

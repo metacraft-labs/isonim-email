@@ -42,7 +42,13 @@
 //      interstitial matched, because a password screen may offer "email a
 //      code" as an alternative, and a recovery-phone interstitial talks
 //      about text messages;
-//   7. otherwise `unknown`: never guessed at.
+//   7. the mailbox by its structure (`done`, `by: "structure"`), in any
+//      language: the page's structural signals on one of the provider's
+//      mailbox addresses (read from the address bar, never OCR; its
+//      path, not its query: no sign-in, challenge or consent page is on
+//      one), and only when nothing above matched, so a phrase of any of
+//      them still wins on a mailbox address;
+//   8. otherwise `unknown`: never guessed at.
 //
 // A phrase is never both a challenge and an interstitial of one
 // provider (the test checks it): hard challenges come first, so such an
@@ -246,6 +252,12 @@ export interface ProviderSignin {
   /** Its "sign in again" page, when it has one. */
   signInAgain?: SignInAgainRule;
   done: ScreenMatch;
+  /**
+   * The mailbox's own addresses (host and path): on one of them, a page
+   * whose structure is a mailbox's is the mailbox in any language
+   * (`classifyScreen`'s `structure`).
+   */
+  mailbox?: AddressRule;
   /** In order of precedence. */
   steps: StepScreen[];
   /** The accessible name of the address field. */
@@ -291,7 +303,7 @@ function firstPhrase(
 }
 
 export type Screen =
-  | { kind: "done" }
+  | { kind: "done"; by?: "structure"; signals?: string[] }
   | { kind: "challenge"; challenge: ChallengeKind; phrase: string }
   | { kind: "error"; error: SigninErrorKind; phrase: string }
   | { kind: "step"; step: StepId }
@@ -436,15 +448,57 @@ function morePrecise(
 }
 
 /**
+ * Whether a page's structural signals (a11y_tree.ts `mailboxSignals`)
+ * make it the mailbox, on one of the provider's mailbox addresses: at
+ * least two, one of them the message list or the account's address in
+ * the window's title.
+ */
+export function mailboxByStructure(
+  p: ProviderSignin,
+  location: string | null | undefined,
+  signals: readonly string[],
+): boolean {
+  return (
+    onMailboxAddress(p, location) &&
+    signals.length >= 2 &&
+    (signals.includes("message-list") || signals.includes("title-account"))
+  );
+}
+
+/**
+ * Whether `location` is one of the provider's mailbox addresses: its host
+ * one of the rule's, and its path (before any query or fragment)
+ * beginning with one of the rule's paths. Stricter than a consent
+ * address, which may carry its path anywhere: a page whose query only
+ * names a mailbox path (a sign-in page's `done=` on the mail host) is not
+ * the mailbox.
+ */
+export function onMailboxAddress(
+  p: ProviderSignin,
+  location: string | null | undefined,
+): boolean {
+  if (p.mailbox === undefined || location === null || location === undefined)
+    return false;
+  const l = splitLocation(location);
+  if (l === null || !p.mailbox.hosts.includes(l.host)) return false;
+  const path = l.rest.replace(/[?#].*$/s, "");
+  return p.mailbox.paths.some((x) => path.startsWith(x.toLowerCase()));
+}
+
+/**
  * Classifies one OCR text of the display (the order is the header's).
  * `location` is the page's address from the browser's address bar, when
- * the caller read it (only a consent page and the "sign in again" page
- * need it).
+ * the caller read it (a consent page, the "sign in again" page and the
+ * mailbox by structure need it). `structure`: the page's structural
+ * signals, when the caller read its tree; on a mailbox address they make
+ * it the mailbox whatever language it is in (`mailboxByStructure`), but
+ * only when nothing else matched (last, after the soft challenges).
  */
 export function classifyScreen(
   p: ProviderSignin,
   ocrText: string,
   location?: string | null,
+  structure?: readonly string[] | null,
 ): Screen {
   const norm = normalize(ocrText);
   if (onConsentPage(p, ocrText, location)) {
@@ -511,6 +565,15 @@ export function classifyScreen(
       challenge: p.softChallenges[soft.index]!.kind,
       phrase: soft.phrase,
     };
+  // Last: the structure makes the mailbox only of a page no phrase above
+  // names, so a challenge, an error, a sign-in step or an account-setup
+  // screen read on a mailbox address keeps its reading.
+  if (
+    structure !== null &&
+    structure !== undefined &&
+    mailboxByStructure(p, location, structure)
+  )
+    return { kind: "done", by: "structure", signals: [...structure] };
   return { kind: "unknown" };
 }
 
@@ -740,6 +803,7 @@ export const GMAIL_SIGNIN: ProviderSignin = {
     control: "Next",
   },
   done: { all: ["compose", "inbox"] },
+  mailbox: { hosts: ["mail.google.com"], paths: ["/mail/"] },
   steps: [
     { step: "password", any: ["enter your password"] },
     { step: "address", all: ["sign in"], any: ["email or phone"] },
@@ -789,6 +853,9 @@ export const YAHOO_SIGNIN: ProviderSignin = {
     "https://login.yahoo.com/?.src=ym&.lang=en-US&done=https%3A%2F%2Fmail.yahoo.com%2F",
   consent: YAHOO_CONSENT,
   done: { all: ["compose", "inbox"] },
+  // Measured 2026-10-31: a signed-in profile's Inbox at
+  // mail.yahoo.com/n/folders/00_1 (the capture adapter's are /d/folders/).
+  mailbox: { hosts: ["mail.yahoo.com"], paths: ["/n/", "/d/"] },
   // Measured 2026-10-28: the address screen reads "Sign in to Yahoo
   // Mail", "Username, email or phone number", "Stay signed in", "Next"
   // (with a large advertisement beside it). The password screen's
@@ -848,6 +915,7 @@ export const AOL_SIGNIN: ProviderSignin = {
   set: "aol",
   label: "AOL Mail",
   startUrl: "https://login.aol.com/?done=https%3A%2F%2Fmail.aol.com%2F",
+  mailbox: { hosts: ["mail.aol.com"], paths: ["/n/", "/d/"] },
 };
 
 export const OUTLOOK_SIGNIN: ProviderSignin = {
@@ -856,6 +924,7 @@ export const OUTLOOK_SIGNIN: ProviderSignin = {
   // nlp=1 skips the marketing page and asks for the sign-in directly.
   startUrl: "https://outlook.live.com/mail/0/?nlp=1",
   done: { all: ["new mail", "inbox"] },
+  mailbox: { hosts: ["outlook.live.com"], paths: ["/mail/0"] },
   steps: [
     { step: "stay-signed-in", all: ["stay signed in"] },
     { step: "password", any: ["enter password", "enter your password"] },

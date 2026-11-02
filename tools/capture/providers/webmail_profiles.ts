@@ -155,10 +155,12 @@ export interface SigninRecord {
   host: string;
   browser: string;
   // How the sign-in was verified: by OCR of the mailbox in the webmail
-  // browser started without automation. Records written before
+  // browser started without automation (its phrases), or by the
+  // mailbox's structure on its address (`structure`: a mailbox shown in
+  // another language). Records written before
   // 2026-10-28 have none (Playwright only), and records of the removed
   // `--playwright-check` say `ocr+playwright`; both are only read.
-  verified_by?: "ocr" | "ocr+playwright";
+  verified_by?: "ocr" | "structure" | "ocr+playwright";
 }
 
 export function writeSigninRecord(p: AccountProfile, r: SigninRecord): void {
@@ -232,12 +234,22 @@ export function webmailBrowser(
 //   of the browser, not of the page) shows over a consent page in the
 //   host region's language. Measured 2026-10-30: that bubble over a
 //   Bulgarian consent page stopped an attempt consent-required.
+// - Site notifications blocked (Settings, Site settings, Notifications,
+//   "Don't allow sites to send notifications";
+//   `profile.default_content_setting_values.notifications` 2, the
+//   `DefaultNotificationsSetting` policy's preference): every page reads
+//   `Notification.permission` "denied", so a page offers no prompt of
+//   its own (Gmail's "Enable desktop notifications" toast asks only
+//   while it is undecided) and Chrome shows no permission bubble.
+//   Measured 2026-10-31: Gmail's toast lay over the live capture's
+//   frames.
 export const WEBMAIL_PROFILE_PREFS = {
   credentials_enable_service: false,
   credentials_enable_autosignin: false,
   profile: {
     password_manager_enabled: false,
     password_manager_leak_detection: false,
+    default_content_setting_values: { notifications: 2 },
   },
   signin: {
     interception_enabled: false,

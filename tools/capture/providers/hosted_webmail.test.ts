@@ -67,6 +67,25 @@
 //   evidence; a theme that does not follow the browser fails the
 //   capture in that scheme, never a capture in the other; a delete in
 //   Junk Email that is permanent is recorded `via: "permanent"`.
+// - Outlook.com's lists drawn as placeholders for a while (not in the
+//   tree): a look waits for the list to settle and records it; the
+//   Inbox shown at the bare /mail/0/ is the Inbox (`location_matched`);
+//   a folder whose list never settles is never read as "not there", and
+//   the delivery failure says so;
+// - Gmail: the body is the story's own article (its role="article"
+//   wrapper), its box exactly, never the Reply links below; content
+//   reaching past it fails the capture as clipped; the profile blocks
+//   notifications (every page reads the permission denied, so Gmail's
+//   toast does not show), and a toast shown anyway is dismissed with
+//   "No thanks", never "OK"; the permanent delete in Trash is the open
+//   message's "Delete" (or "Delete forever" where that is offered), only
+//   behind the Trash guard: without the Trash chip nothing is clicked
+//   and the cleanup fails.
+// - Yahoo in Bulgarian (no English mailbox phrase on its pages): the
+//   session check recognises the mailbox by its structure, a folder
+//   whose old URL sends elsewhere is opened by its link named in the
+//   locale table, and the delete and its confirmation are found by their
+//   Bulgarian names.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails need a real account signed in and the Gmail API sends
@@ -180,6 +199,7 @@ const FAST: Partial<HostedWebmailTimings> = {
   arrivalTimeoutMs: 8_000,
   pollMs: 300,
   listSettleMs: 2_500,
+  listLoadMs: 8_000,
   stepTimeoutMs: 15_000,
   leaseWaitMs: 1_500,
   leasePollMs: 100,
@@ -221,6 +241,38 @@ function mime(name: string, colour = "#336699"): Uint8Array {
         "Content-Type: text/html; charset=utf-8",
         "",
         `<html><body><div style="display:none">Preheader words for ${name}</div><div style="background:${colour};color:#ffffff;width:320px;height:140px;padding:12px;font:16px sans-serif">Receipt ${name}</div><p style="color:#222222">Thank you.</p></body></html>`,
+        "--b1--",
+        "",
+      ].join("\r\n"),
+      "latin1",
+    ),
+  );
+}
+
+// A story as the library writes it: its body inside its own
+// role="article" wrapper, named by its aria-label, 340 px tall (a 300 px
+// colour block and a 40 px line that says "Reply", as Gmail's own Reply
+// link below it does); `wide`: a table reaching 200 px past it.
+function mimeArticle(name: string, wide = false): Uint8Array {
+  return new Uint8Array(
+    Buffer.from(
+      [
+        'From: "Acme Billing" <billing@acme.invalid>',
+        "To: someone@acme.invalid",
+        `Subject: Your receipt ${name}`,
+        `Message-ID: <${name}@acme.invalid>`,
+        "Date: Sat, 17 Oct 2026 10:00:00 +0000",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/alternative; boundary="b1"',
+        "",
+        "--b1",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "Your receipt",
+        "--b1",
+        "Content-Type: text/html; charset=utf-8",
+        "",
+        `<html><body><div style="display:none">Preheader words for ${name}</div><div role="article" aria-roledescription="email" aria-label="Your receipt ${name}" lang="en" style="background:#eeeeee;margin:0;padding:0"><div style="background:#336699;color:#ffffff;height:300px;box-sizing:border-box;padding:12px;font:16px sans-serif">Receipt ${name}</div><p style="margin:0;height:40px;color:#222222;font:16px sans-serif">Questions? Reply to this email.</p>${wide ? '<table style="width:1000px;border-collapse:collapse"><tr><td style="font:16px sans-serif">Wide column</td></tr></table>' : ""}</div></body></html>`,
         "--b1--",
         "",
       ].join("\r\n"),
@@ -1347,6 +1399,9 @@ describe("hosted-webmail variants", () => {
       gm.rewriteMessageId = true;
       gm.rowNamedBySender = true;
       gm.suggestions = true;
+      // The open message in Trash offering "Delete forever" (the
+      // permanent delete's second alternative).
+      gm.trashForever = true;
       const m = mime("search");
       const results = await captureAll(
         w.provider(),
@@ -1380,6 +1435,224 @@ describe("hosted-webmail variants", () => {
         [["removed", "trash"]],
       );
       assert.deepEqual(gm.messages, []);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Gmail: the body is the story's article, its box exactly; content past it fails as clipped; notifications blocked, a toast dismissed with No thanks; the Trash delete only behind the Trash guard", async () => {
+    const w = await world("gmail-article", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.toastAlways = true;
+      gm.noTrashChipFor = "nochip";
+      const a = mimeArticle("article");
+      const b = mimeArticle("wide", true);
+      const c = mimeArticle("nochip");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [
+          req("a", a, "gmail-web"),
+          req("b", b, "gmail-web"),
+          req("c", c, "gmail-web"),
+        ],
+        [message("a", a), message("b", b), message("c", c)],
+      );
+      const ra = results.find((r) => r.request.story === "a")!;
+      const rb = results.find((r) => r.request.story === "b")!;
+      const rc = results.find((r) => r.request.story === "c")!;
+      assert.equal(ra.status, "done", ra.reason);
+      assert.equal(rc.status, "done", rc.reason);
+      // The story's article: its whole box, nothing of Gmail's below.
+      assert.equal(prov(ra).crop.locator, "story article");
+      const img = readPng(ra.png!);
+      assert.equal(img.width, 800);
+      // Its box exactly (Chrome's bounds may round a pixel up).
+      assert.ok(Math.abs(img.height - 340) <= 1, String(img.height));
+      assert.equal(prov(ra).crop.height, img.height);
+      assert.deepEqual(prov(ra).width_check, {
+        requested: 800,
+        measured: 800,
+        delta: 0,
+      });
+      const px = (x: number, y: number) =>
+        Array.from(
+          img.data.slice((y * img.width + x) * 4, (y * img.width + x) * 4 + 3),
+        );
+      assert.deepEqual(px(2, 2), [0x33, 0x66, 0x99]);
+      assert.deepEqual(px(790, 330), [0xee, 0xee, 0xee]);
+      assert.deepEqual(px(2, 338), [0xee, 0xee, 0xee]);
+      // Content reaching past the body's box is clipped: not captured.
+      assert.equal(rb.status, "failed");
+      assert.match(
+        rb.reason!,
+        /^Gmail: inside the message body \[.*\], a .* node reaches \[.*\], past the body's box: the webmail clips or scrolls the body/,
+      );
+      assert.equal(rb.png, undefined);
+      evidence(w, prov(rb).failure);
+      // Notifications are blocked in the profile: every page read the
+      // permission denied. The toast shown anyway was dismissed with
+      // "No thanks", never "OK".
+      assert.ok(gm.probes.length > 0);
+      for (const p of gm.probes) assert.equal(p.notif, "denied", p.page);
+      assert.ok(gm.events.includes("toast-no"), JSON.stringify(gm.events));
+      assert.ok(!gm.events.includes("toast-ok"), JSON.stringify(gm.events));
+      assert.ok(
+        results.some((r) =>
+          (prov(r).notices_dismissed ?? []).includes(
+            "name~/^Enable desktop notifications/i",
+          ),
+        ),
+      );
+      // The permanent delete in Trash: the open message's "Delete"
+      // behind the guard; without the Trash chip nothing is clicked.
+      const recs = cleanup(w);
+      const byMid = (r: CaptureResult) =>
+        recs.find((x) => x.message_id === prov(r).delivery.message_id)!;
+      assert.equal(byMid(ra).state, "removed");
+      assert.equal(byMid(ra).via, "trash");
+      assert.equal(byMid(rb).state, "removed");
+      const failed = byMid(rc);
+      assert.equal(failed.state, "failed");
+      assert.match(
+        String(failed.reason),
+        /^Gmail: the opened message is not shown in Trash \(the Trash guard: .*role=button name="Search for all messages with label Trash" shown/,
+      );
+      assert.equal((failed.failure as any).step, "cleanup-delete-forever");
+      assert.equal(gm.destroyed.length, 2);
+      assert.deepEqual(
+        gm.messages.map((m) => [m.folder, m.subject.includes("nochip")]),
+        [["trash", true]],
+      );
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Outlook.com: a list drawn as placeholders is waited for, never read as empty; the bare /mail/0/ is the Inbox; a list that never settles is no 'not there'", async () => {
+    const w = await world("outlook-loading", { only: ["outlook-com"] });
+    try {
+      const ol = w.webmails["outlook-com"];
+      ol.filing = ({ subject }) =>
+        subject.includes("lost") ? "withhold" : "spam";
+      // Longer than a look's first wait for the row (listSettleMs).
+      ol.listLoadingMs = 4_500;
+      const m = mime("loading");
+      const results = await captureAll(
+        w.provider({ timings: { arrivalTimeoutMs: 60_000 } }),
+        w,
+        [req("s", m, "outlook-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(prov(r).arrival.folder, "spam");
+      const looks = prov(r).arrival.looks as Record<string, any>[];
+      const inbox = looks.filter((l) => l.folder === "inbox");
+      assert.ok(inbox.length >= 1, JSON.stringify(looks));
+      for (const l of inbox) {
+        // The Inbox shown at /mail/0/ is the Inbox.
+        assert.doesNotMatch(l.location, /inbox/, JSON.stringify(l));
+        assert.equal(l.location_matched, true, JSON.stringify(l));
+        // Read empty only once its list settled: it waited for it.
+        assert.equal(l.list.state, "empty", JSON.stringify(l));
+        assert.equal(l.list.settled, true);
+        assert.equal(l.list.scope, "list");
+        assert.ok(l.list.readings >= 2);
+        // Placeholders for 4.5 s, the first wait 2.5 s: it read on.
+        assert.ok(l.list.waited_ms >= 1_000, JSON.stringify(l));
+      }
+      // The browser started on the Inbox, shown at /mail/0/: the
+      // address bar already held the folder, so it was reloaded.
+      assert.equal(inbox[0]!.how, "reload");
+      const hit = looks.at(-1)!;
+      assert.equal(hit.folder, "spam");
+      assert.equal(hit.token_rows, 1);
+      assert.equal(hit.list.state, "rows");
+      assert.equal(hit.list.settled, true);
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+      assert.deepEqual(ol.messages, []);
+
+      // A Junk Email list that never stops loading: never "not there",
+      // and never waited on past the arrival budget, however long a list
+      // may take to settle (listLoadMs ten minutes here).
+      ol.neverLoads = ["spam"];
+      const lost = mime("lost");
+      const t0 = Date.now();
+      const again = await captureAll(
+        w.provider({
+          timings: { arrivalTimeoutMs: 20_000, listLoadMs: 600_000 },
+        }),
+        w,
+        [req("l", lost, "outlook-web")],
+        [message("l", lost)],
+        "t2",
+      );
+      const f = again[0]!;
+      assert.equal(f.status, "failed");
+      assert.match(
+        f.reason!,
+        /^delivery failure: .* was not found in Outlook\.com's Inbox or Junk Email within 20 s \(1 looks\); Junk Email never settled \(still loading, or read differently each time, for \d+ s after the folder showed\) in the last look: those lists were never read as "not there"/,
+      );
+      // The whole capture, browser start and cleanup included, well short
+      // of the ten minutes one look could otherwise wait.
+      assert.ok(Date.now() - t0 < 180_000, `${Date.now() - t0} ms`);
+      const junk = (prov(f).search as Record<string, any>[]).filter(
+        (l) => l.folder === "spam",
+      );
+      assert.ok(junk.length >= 1);
+      assert.deepEqual(
+        [junk.at(-1)!.list.state, junk.at(-1)!.list.settled],
+        ["loading", false],
+      );
+      assert.ok(junk.at(-1)!.list.waited_ms >= 1_000);
+      assert.ok(junk.at(-1)!.list.waited_ms <= 20_000);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Yahoo in Bulgarian: the session recognised by its structure, the message found in Spam by its folder link when the old URL sends elsewhere, deleted with its Bulgarian controls", async () => {
+    const w = await world("yahoo-bg", { only: ["yahoo"] });
+    try {
+      const y = w.webmails.yahoo;
+      y.lang = "bg";
+      y.addresses = { qa1: QA.yahoo[0]! };
+      y.oldFolderUrlsGone = true;
+      y.filing = () => "spam";
+      const m = mime("bulgarian");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "yahoo-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(prov(r).arrival.folder, "spam");
+      const looks = prov(r).arrival.looks as Record<string, any>[];
+      // The Spam URL left the address bar on the Inbox; its link opened it.
+      const away = looks.find((l) => l.folder === "spam" && l.how === "typed")!;
+      assert.equal(away.list.state, "elsewhere", JSON.stringify(looks));
+      const hit = looks.at(-1)!;
+      assert.equal(hit.how, "link");
+      assert.match(hit.url, /\(link Спам\)$/);
+      assert.equal(hit.token_rows, 1);
+      // Deleted with "Изтриване", then for good from Trash (its link
+      // too) with "Изтриване" and "Добре".
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+      assert.equal(y.destroyed.length, 1);
+      assert.deepEqual(y.messages, []);
+      // The account's address, in the title, is in no record.
+      assert.doesNotMatch(JSON.stringify(prov(r)), /@receiver\.invalid/);
+      assert.doesNotMatch(JSON.stringify(cleanup(w)), /@receiver\.invalid/);
     } finally {
       await w.stop();
     }

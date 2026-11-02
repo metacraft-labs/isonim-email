@@ -233,19 +233,28 @@ export class WebmailDesktop {
    * it ("typed-reload"): a page that swaps its content a moment after
    * its address changes (a webmail routed by its fragment) would
    * otherwise still show the previous content under the new address.
+   * The address bar holds `url` when it holds it or one of `aliases`
+   * (addresses the webmail rewrites it to: Outlook.com's bare /mail/0/
+   * for its Inbox).
    */
   async navigate(
     url: string,
     ready: (s: Snapshot) => boolean,
     timeoutMs: number,
-    opts: { reloadWhen?: (before: Snapshot) => boolean } = {},
+    opts: {
+      reloadWhen?: (before: Snapshot) => boolean;
+      aliases?: string[];
+    } = {},
   ): Promise<{
     snap: Snapshot;
     ok: boolean;
     how: "typed" | "reload" | "typed-reload";
   }> {
+    const here = (loc: string | null): boolean =>
+      sameLocation(loc, url) ||
+      (opts.aliases ?? []).some((a) => sameLocation(loc, a));
     const now = await this.snapshot();
-    const reload = sameLocation(now.location, url);
+    const reload = here(now.location);
     let how: "typed" | "reload" | "typed-reload" = reload ? "reload" : "typed";
     if (reload) await this.ga.key("F5");
     else {
@@ -264,10 +273,7 @@ export class WebmailDesktop {
       await this.ga.key("Delete");
       await this.ga.key("Return");
       if (opts.reloadWhen?.(now) === true) {
-        const at = await this.waitFor(
-          (s) => sameLocation(s.location, url),
-          timeoutMs,
-        );
+        const at = await this.waitFor((s) => here(s.location), timeoutMs);
         if (at.ok) {
           await this.ga.key("F5");
           how = "typed-reload";
@@ -275,7 +281,7 @@ export class WebmailDesktop {
       }
     }
     const r = await this.waitFor(
-      (s) => sameLocation(s.location, url) && ready(s),
+      (s) => here(s.location) && ready(s),
       timeoutMs,
     );
     return { ...r, how };

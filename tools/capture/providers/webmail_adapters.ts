@@ -3,7 +3,10 @@
 //
 // One adapter per webmail (Gmail, Yahoo Mail, Outlook.com): the folder
 // URLs the arrival search opens (Inbox, then Spam/Junk; Trash for the
-// removal; alternatives, tried in order), and accessibility locators
+// removal; alternatives, tried in order, and the addresses the webmail
+// rewrites them to), how a folder's list reads while it loads and when
+// it is empty, the notices it lays over its page, and accessibility
+// locators
 // (a11y_tree.ts) for a message row (alternatives too), the opened
 // message's subject and body, the delete controls, Outlook.com's tabs
 // and its optional reading-pane background toggle, where a delete may
@@ -22,7 +25,9 @@
 // - The opened message is the delivered one when a heading's name
 //   carries the token.
 // - The body is the node `opened.body` names, or, when the webmail gives
-//   the body no name (Gmail, Yahoo), the story region: the message
+//   the body no name (Gmail, Yahoo), the story's own article (the
+//   library's role="article" wrapper, named after the story; Chrome
+//   keeps it), else the story region: the message
 //   column from below the webmail's last element above the story's own
 //   text to above its first element after it (a11y_tree.ts
 //   `locateStoryRegion`; Chrome prunes the generic containers a body
@@ -87,11 +92,69 @@ export interface FolderSpec {
   urls: string[];
   // Tabs to look in as well, in order (Outlook.com's Focused/Other).
   tabs: WebmailLocator[];
+  // Other addresses the address bar shows for this folder (Outlook.com
+  // rewrites a typed /mail/0/inbox to /mail/0/): the address bar holds
+  // the folder when it holds one of its URLs or one of these.
+  aliases: string[];
+  // The folder's names in the webmail's languages (LOCALE_NAMES): when
+  // its URL leaves the address bar elsewhere, the folder is opened by
+  // its link of one of these names (a fallback; the URL comes first).
+  names: string[];
+}
+
+/**
+ * The names the adapters match, per language the QA accounts have been
+ * seen in: English, and Bulgarian (Yahoo shows its mail in the account's
+ * language whatever the browser asks; live, 2026-10-31: "Ново
+ * съобщение", "Търсете в пощата си", "Входяща поща", "Кошче", "Спам").
+ * Names are a fallback: folders are reached by their URLs and controls
+ * found by role first. [unverified-live: Yahoo's Bulgarian delete and
+ * confirmation names]
+ */
+export const LOCALE_NAMES = {
+  inbox: ["Inbox", "Входяща поща"],
+  spam: ["Spam", "Спам"],
+  trash: ["Trash", "Кошче"],
+  compose: ["Compose", "New mail", "Ново съобщение"],
+  search: ["Search", "Търсете в пощата си"],
+  delete: ["Delete", "Изтриване", "Изтрий"],
+  confirm: ["OK", "Добре", "ОК"],
+} as const;
+
+/** A name pattern matching exactly one of `names` (any case). */
+export function oneOf(names: readonly string[]): string {
+  return `^(?:${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`;
+}
+
+// How a folder's list reads while it loads and when it is empty
+// (hosted_webmail.ts `settleList`): a look counts as "not there" only
+// over a settled list.
+export interface ListSpec {
+  // Where the notices below are looked for (the page when null or not
+  // shown).
+  scope: WebmailLocator | null;
+  // Shown while the list loads (a progress bar).
+  loading: WebmailLocator[];
+  // Shown in an empty folder. When the adapter declares any, a list
+  // with neither a row nor one of these is still loading (a list drawn
+  // as placeholders, which are not in the tree); with none declared, it
+  // is quiet, settled by two equal readings alone.
+  empty: WebmailLocator[];
+}
+
+// A notice the webmail lays over its page (Gmail's "Enable desktop
+// notifications" toast), dismissed with its refusing control before a
+// row or a body is captured.
+export interface NoticeSpec {
+  text: WebmailLocator;
+  dismiss: WebmailLocator;
 }
 
 export interface AdapterUi {
   device: "desktop";
   folders: Record<FolderName, FolderSpec>;
+  list: ListSpec;
+  notices: NoticeSpec[];
   // One message in a folder or search list, as alternatives tried in
   // order; the arrival search keeps the row whose accessible text
   // carries the run token (a11y_tree.ts `tokenRows`).
@@ -107,12 +170,22 @@ export interface AdapterUi {
   remove: {
     // In the opened message: moves it to Trash / Deleted Items.
     del: WebmailLocator;
-    // In the opened message in Trash: deletes it for good.
-    deleteForever: WebmailLocator;
+    // In the opened message in Trash: deletes it for good. Alternatives,
+    // the first with exactly one showing match wins.
+    deleteForever: WebmailLocator[];
+    // What must hold before a click on `deleteForever` (null: nothing
+    // more than the opened message's identity): the address bar,
+    // percent-decoded, matching `location` (a regular expression), and
+    // `chip` shown. Gmail's "Delete" moves a message to Trash anywhere
+    // else, so it is clicked only where the page is shown to be Trash.
+    trashGuard: { location: string; chip: WebmailLocator | null } | null;
+    // In the opened message in a folder of `permanentIn`: its one-step
+    // permanent delete.
+    permanentDelete: WebmailLocator;
     // A confirmation the permanent delete asks for, if any.
     confirm: WebmailLocator | null;
     // The folders whose opened message offers only the permanent delete
-    // (`deleteForever`, no Trash step): Gmail's Spam, whose toolbar
+    // (`permanentDelete`, no Trash step): Gmail's Spam, whose toolbar
     // reads "Delete forever" and "Not spam" [unverified-live].
     permanentIn: FolderName[];
     // The folders from which the delete may itself be permanent: a
@@ -187,7 +260,12 @@ const folder = (
   label: string,
   urls: string[],
   tabs: WebmailLocator[] = [],
-): FolderSpec => ({ label, urls, tabs });
+  aliases: string[] = [],
+  names: readonly string[] = [],
+): FolderSpec => ({ label, urls, tabs, aliases, names: [...names] });
+
+// A list with no notices declared: settled by two equal readings alone.
+const QUIET_LIST: ListSpec = { scope: null, loading: [], empty: [] };
 
 // Gmail (consumer or Workspace; the same web UI). A Gmail search leaves
 // Spam and Trash out unless the query names them, so each folder is a
@@ -212,6 +290,16 @@ const GMAIL_DESKTOP: AdapterUi = {
       `${GMAIL}in%3Atrash+%22{token}%22`,
     ]),
   },
+  list: QUIET_LIST,
+  // Gmail's own toast (live capture, 2026-10-31: "Enable desktop
+  // notifications for Gmail." with links "OK" and "No thanks"); the
+  // profile blocks notifications, so it should not show at all.
+  notices: [
+    {
+      text: u({ namePattern: "^Enable desktop notifications" }),
+      dismiss: u({ role: "link", name: "No thanks" }),
+    },
+  ],
   // A grid row ("table row" in Chrome's tree); its accessible text holds
   // the subject whether Chrome names the row from its cells or not.
   rows: [u({ role: "row" })],
@@ -222,7 +310,22 @@ const GMAIL_DESKTOP: AdapterUi = {
   },
   remove: {
     del: u({ role: "button", name: "Delete" }),
-    deleteForever: u({ role: "button", name: "Delete forever" }),
+    // The open message in Trash (live cleanup frame, 2026-10-31): its
+    // toolbar has "Delete" (Gmail's permanent delete there) and no
+    // "Delete forever", which the Trash list's toolbar has once rows are
+    // selected.
+    deleteForever: [
+      u({ role: "button", name: "Delete" }),
+      u({ role: "button", name: "Delete forever" }),
+    ],
+    trashGuard: {
+      location: "#search/in:trash(?:[+ ]|$)|#trash(?:/|$)",
+      chip: u({
+        role: "button",
+        name: "Search for all messages with label Trash",
+      }),
+    },
+    permanentDelete: u({ role: "button", name: "Delete forever" }),
     confirm: null,
     permanentIn: ["spam"],
     mayBePermanentIn: [],
@@ -234,10 +337,31 @@ const GMAIL_DESKTOP: AdapterUi = {
 const YAHOO_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: {
-    inbox: folder("Inbox", ["https://mail.yahoo.com/d/folders/1"]),
-    spam: folder("Spam", ["https://mail.yahoo.com/d/folders/6"]),
-    trash: folder("Trash", ["https://mail.yahoo.com/d/folders/4"]),
+    // Its Inbox also shows at /n/folders/00_1 (live, 2026-10-31).
+    inbox: folder(
+      "Inbox",
+      ["https://mail.yahoo.com/d/folders/1"],
+      [],
+      ["https://mail.yahoo.com/n/folders/00_1"],
+      LOCALE_NAMES.inbox,
+    ),
+    spam: folder(
+      "Spam",
+      ["https://mail.yahoo.com/d/folders/6"],
+      [],
+      [],
+      LOCALE_NAMES.spam,
+    ),
+    trash: folder(
+      "Trash",
+      ["https://mail.yahoo.com/d/folders/4"],
+      [],
+      [],
+      LOCALE_NAMES.trash,
+    ),
   },
+  list: QUIET_LIST,
+  notices: [],
   // Each message of a folder is a link to it (or an option of a list).
   rows: [u({ role: "link" }), u({ role: "list-item" })],
   opened: {
@@ -245,10 +369,18 @@ const YAHOO_DESKTOP: AdapterUi = {
     body: null,
     masks: [],
   },
+  // Its controls in any of its languages (LOCALE_NAMES).
   remove: {
-    del: u({ role: "button", name: "Delete" }),
-    deleteForever: u({ role: "button", name: "Delete" }),
-    confirm: u({ role: "button", name: "OK" }),
+    del: u({ role: "button", namePattern: oneOf(LOCALE_NAMES.delete) }),
+    deleteForever: [
+      u({ role: "button", namePattern: oneOf(LOCALE_NAMES.delete) }),
+    ],
+    trashGuard: null,
+    permanentDelete: u({
+      role: "button",
+      namePattern: oneOf(LOCALE_NAMES.delete),
+    }),
+    confirm: u({ role: "button", namePattern: oneOf(LOCALE_NAMES.confirm) }),
     permanentIn: [],
     mayBePermanentIn: ["spam"],
   },
@@ -256,11 +388,14 @@ const YAHOO_DESKTOP: AdapterUi = {
   windowAllowance: 560,
 };
 
+// Outlook.com shows its Inbox at the bare /mail/0/ (live, 2026-10-31:
+// a typed /mail/0/inbox read back as outlook.live.com/mail/0/).
 const OUTLOOK_FOLDERS = (base: string): Record<FolderName, FolderSpec> => ({
   inbox: folder(
     "Inbox",
     [`${base}/inbox`],
     [u({ role: "tab", name: "Focused" }), u({ role: "tab", name: "Other" })],
+    [`${base}/`],
   ),
   spam: folder("Junk Email", [`${base}/junkemail`]),
   trash: folder("Deleted Items", [`${base}/deleteditems`]),
@@ -276,6 +411,23 @@ const OUTLOOK_FOLDERS = (base: string): Record<FolderName, FolderSpec> => ({
 const OUTLOOK_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: OUTLOOK_FOLDERS("https://outlook.live.com/mail/0"),
+  // The live failure frame (2026-10-31): a list still loading is drawn
+  // as placeholder rows, which are not in the tree; the landmark
+  // "Message list" is, with nothing in it. An empty folder says so.
+  list: {
+    scope: u({ nativeRole: "landmark", name: "Message list" }),
+    loading: [
+      u({ nativeRole: "progress bar" }),
+      u({ namePattern: "^loading\\b" }),
+    ],
+    empty: [
+      u({
+        namePattern:
+          "^(nothing in |this folder is empty|looks empty|all caught up|no items|no messages)",
+      }),
+    ],
+  },
+  notices: [],
   rows: [v({ role: "list-item" })],
   opened: {
     subject: v({ nativeRole: "heading" }),
@@ -284,7 +436,9 @@ const OUTLOOK_DESKTOP: AdapterUi = {
   },
   remove: {
     del: u({ role: "button", name: "Delete" }),
-    deleteForever: u({ role: "button", name: "Delete" }),
+    deleteForever: [u({ role: "button", name: "Delete" })],
+    trashGuard: null,
+    permanentDelete: u({ role: "button", name: "Delete" }),
     confirm: u({ role: "button", name: "OK" }),
     permanentIn: [],
     mayBePermanentIn: ["spam"],
@@ -416,8 +570,17 @@ export function adapterLocators(
   add("opened.body", ui.opened.body);
   ui.opened.masks.forEach((m, i) => add(`opened.mask${i}`, m));
   add("remove.delete", ui.remove.del);
-  add("remove.deleteForever", ui.remove.deleteForever);
+  ui.remove.deleteForever.forEach((l, i) => add(`remove.deleteForever${i}`, l));
+  add("remove.trashGuard.chip", ui.remove.trashGuard?.chip ?? null);
+  add("remove.permanentDelete", ui.remove.permanentDelete);
   add("remove.confirm", ui.remove.confirm);
+  add("list.scope", ui.list.scope);
+  ui.list.loading.forEach((l, i) => add(`list.loading${i}`, l));
+  ui.list.empty.forEach((l, i) => add(`list.empty${i}`, l));
+  ui.notices.forEach((n, i) => {
+    add(`notices${i}.text`, n.text);
+    add(`notices${i}.dismiss`, n.dismiss);
+  });
   add("dark.toggle", ui.dark?.toggle ?? null);
   for (const [name, f] of Object.entries(ui.folders))
     f.tabs.forEach((t, i) => add(`folders.${name}.tab${i}`, t));
@@ -438,6 +601,12 @@ export function rebaseAdapter(
     return to.replace(/\/$/, "") + url.slice(m[0].length);
   };
   const x = a.desktop;
+  const moveFolder = (f: FolderSpec): FolderSpec => ({
+    ...f,
+    urls: f.urls.map(move),
+    aliases: f.aliases.map(move),
+    names: f.names,
+  });
   return {
     ...a,
     signin: {
@@ -450,9 +619,9 @@ export function rebaseAdapter(
     desktop: {
       ...x,
       folders: {
-        inbox: { ...x.folders.inbox, urls: x.folders.inbox.urls.map(move) },
-        spam: { ...x.folders.spam, urls: x.folders.spam.urls.map(move) },
-        trash: { ...x.folders.trash, urls: x.folders.trash.urls.map(move) },
+        inbox: moveFolder(x.folders.inbox),
+        spam: moveFolder(x.folders.spam),
+        trash: moveFolder(x.folders.trash),
       },
     },
   };

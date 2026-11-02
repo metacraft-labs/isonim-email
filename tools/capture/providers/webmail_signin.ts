@@ -79,6 +79,7 @@ import {
   type Rect,
   type Secret,
 } from "./guiassert.ts";
+import { mailboxSignals } from "./a11y_tree.ts";
 import { AUTOMATION_SWITCHES, sessionSwitches } from "./webmail_browser.ts";
 import {
   type ChallengeKind,
@@ -86,6 +87,7 @@ import {
   CONSENT_CONTROLS,
   consentHinted,
   normalize,
+  onMailboxAddress,
   type ProviderSignin,
   type Screen,
   type SigninErrorKind,
@@ -397,6 +399,49 @@ async function locationFor(
   )
     return undefined;
   return readLocation(ga, browserPid);
+}
+
+/**
+ * Classifies a frame: by its OCR text first (`classifyScreen`); a frame
+ * that matches nothing is then looked at by its structure when the
+ * provider has mailbox addresses: the address bar read (unless it was
+ * already), and on a mailbox address the browser's accessibility tree
+ * read for the mailbox's structural signals (a11y_tree.ts
+ * `mailboxSignals`, `address` the account's, matched in the window's
+ * title and never logged), so a mailbox shown in another language is
+ * recognised. The location returned is the one the screen was read with
+ * (the settled-view rule compares it).
+ */
+async function classifyFrame(
+  p: ProviderSignin,
+  ga: GuiAssert,
+  browserPid: number | undefined,
+  text: string,
+  location: string | null | undefined,
+  address: string | null,
+): Promise<{ screen: Screen; location: string | null | undefined }> {
+  const screen = classifyScreen(p, text, location);
+  if (
+    screen.kind !== "unknown" ||
+    p.mailbox === undefined ||
+    browserPid === undefined
+  )
+    return { screen, location };
+  const loc =
+    location === undefined ? await readLocation(ga, browserPid) : location;
+  if (!onMailboxAddress(p, loc)) return { screen, location: loc };
+  const tree = await ga.tree(browserPid, 20_000);
+  return {
+    screen: classifyScreen(p, text, loc, mailboxSignals(tree.root, address)),
+    location: loc,
+  };
+}
+
+/** How a log line names the mailbox's evidence. */
+function mailboxEvidence(screen: Screen): string {
+  return screen.kind === "done" && screen.by === "structure"
+    ? ` (by its structure: ${(screen.signals ?? []).join(", ")})`
+    : "";
 }
 
 /**
@@ -1006,11 +1051,18 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
       await sleep(ctx.timings.pollMs);
       continue;
     }
-    const screen = classifyScreen(ctx.provider, text, location);
+    const reading = await classifyFrame(
+      ctx.provider,
+      ctx.ga,
+      ctx.browserPid,
+      text,
+      location,
+      ctx.address,
+    );
+    const screen = reading.screen;
     if (screen.kind !== "unknown") unknownSince = null;
     // Nothing is done on one frame alone: a reading acted on is the
     // previous round's too.
-    const reading = { screen, location };
     const holds = sameReading(previous, reading);
     previous = reading;
     if (!holds && screen.kind !== "unknown") {
@@ -1026,7 +1078,7 @@ export async function driveSignin(ctx: SigninContext): Promise<SigninResult> {
 
     switch (screen.kind) {
       case "done":
-        ctx.log("screen: the mailbox");
+        ctx.log(`screen: the mailbox${mailboxEvidence(screen)}`);
         return end({ result: "signed-in", typed: typedAnything }, false);
       case "challenge":
         ctx.log(
@@ -1219,6 +1271,8 @@ export interface VerifyContext extends ScreenReader {
    * mailbox; removed when it does. None kept when unset.
    */
   keepPath?: string;
+  /** The account's address, matched in the window's title (never logged). */
+  address?: string;
   /** How long the mailbox may take to show. */
   timeoutMs: number;
   /** How long a sign-in, challenge or error screen must stay to count. */
@@ -1228,7 +1282,11 @@ export interface VerifyContext extends ScreenReader {
 }
 
 export type VerifyOutcome =
-  | { signedIn: true }
+  | {
+      signedIn: true;
+      /** "structure": recognised by its structure, not its phrases. */
+      by?: "structure";
+    }
   | {
       signedIn: false;
       reason: string;
@@ -1279,7 +1337,8 @@ function notSignedInBecause(what: string): string {
  * inbox URL, without automation, so the check is invisible to the
  * provider (Playwright's would show it `navigator.webdriver` and
  * `--enable-automation`). It never types, clicks or presses a key.
- * - the mailbox screen: signed in;
+ * - the mailbox screen: signed in (by its structure, only when two
+ *   frames in a row read it so at the same address);
  * - a sign-in step (Google's password re-verification among them), a
  *   challenge, an error, an account-setup screen or a privacy-consent
  *   page (never answered here) that stays for `settleMs`: not signed in,
@@ -1310,6 +1369,11 @@ export async function verifySignedIn(
         ? await keepScreen({ ...ctx, keepPath: ctx.keepPath })
         : null,
   });
+  // The address of the previous frame when it was the mailbox by its
+  // structure: a structural reading counts only when two frames in a row
+  // gave it at the same address (the settled-view rule; a mailbox's
+  // phrases, which no other page has, count on one).
+  let structureAt: string | null | undefined = undefined;
   for (let n = 0; ; n++) {
     const text = await readScreen(ctx, n);
     if (text === null)
@@ -1318,16 +1382,28 @@ export async function verifySignedIn(
         "the password, legible",
         false,
       );
-    const screen = classifyScreen(
+    const { screen, location } = await classifyFrame(
       ctx.provider,
+      ctx.ga,
+      ctx.browserPid,
       text,
       await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
+      ctx.address ?? null,
     );
     const now = Date.now();
-    if (screen.kind === "done") {
-      ctx.log("check: the mailbox shows");
+    const byStructure = screen.kind === "done" && screen.by === "structure";
+    const held = byStructure && structureAt === location;
+    structureAt = byStructure ? location : undefined;
+    if (byStructure && !held && now < deadline) {
+      await sleep(ctx.pollMs);
+      continue;
+    }
+    if (screen.kind === "done" && (!byStructure || held)) {
+      ctx.log(`check: the mailbox shows${mailboxEvidence(screen)}`);
       if (ctx.keepPath !== undefined) rmSync(ctx.keepPath, { force: true });
-      return { signedIn: true };
+      return screen.by === "structure"
+        ? { signedIn: true, by: "structure" }
+        : { signedIn: true };
     }
     const what = checkScreenName(screen);
     // The same non-mailbox screen since when (a new one restarts it).

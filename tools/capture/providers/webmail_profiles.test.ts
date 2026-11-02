@@ -21,7 +21,8 @@
 // hosted-webmail captures do), sandboxed too; a browser without the
 // sandbox, or one that aborts for want of one, is refused, naming why.
 // The profile's preferences (the password manager and the sign-in
-// interception off, Chrome's own sign-in on, the pages' languages) are
+// interception off, Chrome's own sign-in on, the pages' languages,
+// page translation off, site notifications blocked) are
 // merged key by key into Default/Preferences, 0600, never replacing a
 // file that is not a JSON object; the saved passwords a profile holds
 // are counted (saved logins, not "never save" entries; password hashes
@@ -113,7 +114,7 @@ describe("hosted-webmail browser profiles", () => {
     }
   });
 
-  it("turns the password manager, the sign-in interception and page translation off, and Chrome's own sign-in back on, merging key by key", () => {
+  it("turns the password manager, the sign-in interception, page translation and site notifications off, and Chrome's own sign-in back on, merging key by key", () => {
     // The values themselves (capture spec): a change here is a change of
     // what Chrome is told, and must be deliberate.
     assert.deepEqual(WEBMAIL_PROFILE_PREFS, {
@@ -122,6 +123,7 @@ describe("hosted-webmail browser profiles", () => {
       profile: {
         password_manager_enabled: false,
         password_manager_leak_detection: false,
+        default_content_setting_values: { notifications: 2 },
       },
       signin: {
         interception_enabled: false,
@@ -141,7 +143,12 @@ describe("hosted-webmail browser profiles", () => {
       JSON.stringify({
         keep: { me: 1 },
         credentials_enable_service: true,
-        profile: { name: "Person 1", password_manager_enabled: true },
+        profile: {
+          name: "Person 1",
+          password_manager_enabled: true,
+          // A site allowed to notify, and notifications allowed by default.
+          default_content_setting_values: { notifications: 1, popups: 2 },
+        },
         signin: { allowed: false, allowed_on_next_startup: false, other: 2 },
         translate: { enabled: true, other: 3 },
       }),
@@ -156,6 +163,7 @@ describe("hosted-webmail browser profiles", () => {
         name: "Person 1",
         password_manager_enabled: false,
         password_manager_leak_detection: false,
+        default_content_setting_values: { notifications: 2, popups: 2 },
       },
       signin: {
         allowed: true,

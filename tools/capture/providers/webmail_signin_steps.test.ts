@@ -12,6 +12,11 @@
 // Google's sign-in-again page (2026-10-29), by its address and wording,
 // and the password page after it (2026-10-29 21:12Z, from the kept
 // screenshot).
+// A mailbox shown in another language (Yahoo's in Bulgarian, live
+// 2026-10-31) is recognised by its structure on one of the provider's
+// mailbox addresses, never off them: the same structure on a sign-in,
+// challenge or consent host is not the mailbox, and the English phrases
+// still count without it.
 // Pure functions: no browser, no GuiAssert, no network.
 // Run with:
 //   node --test tools/capture/providers/webmail_signin_steps.test.ts
@@ -26,6 +31,7 @@ import {
   CONSENT_CONTROLS,
   consentHinted,
   GMAIL_SIGNIN,
+  mailboxByStructure,
   normalize,
   OUTLOOK_SIGNIN,
   PROVIDER_SIGNIN,
@@ -1113,6 +1119,115 @@ describe("the start URLs ask for English", () => {
     assert.equal(
       new URL(YAHOO_SIGNIN.startUrl).searchParams.get("done"),
       "https://mail.yahoo.com/",
+    );
+  });
+});
+
+describe("the mailbox by its structure, in any language", () => {
+  // The live Bulgarian Yahoo Inbox of 2026-10-31, as OCR reads it: no
+  // English mailbox phrase.
+  const BG =
+    "yahoo!mail\nНово съобщение\nТърсете в пощата си\nВходяща поща\nНепрочетени\nСъс звезда\nИзпратени\nЧернови\nКошче\nСпам\nАрхив";
+  const ALL = ["message-list", "folder-navigation", "compose", "title-account"];
+
+  it("is the mailbox on a mailbox address with two signals, one of them the message list or the title", () => {
+    assert.deepEqual(
+      classifyScreen(YAHOO_SIGNIN, BG, "mail.yahoo.com/n/folders/00_1"),
+      {
+        kind: "unknown",
+      },
+    );
+    assert.deepEqual(
+      classifyScreen(YAHOO_SIGNIN, BG, "mail.yahoo.com/n/folders/00_1", ALL),
+      { kind: "done", by: "structure", signals: ALL },
+    );
+    assert.equal(
+      classifyScreen(YAHOO_SIGNIN, BG, "https://mail.yahoo.com/d/folders/1", [
+        "message-list",
+        "compose",
+      ]).kind,
+      "done",
+    );
+    assert.equal(
+      classifyScreen(YAHOO_SIGNIN, BG, "mail.yahoo.com/n/folders/00_1", [
+        "title-account",
+        "folder-navigation",
+      ]).kind,
+      "done",
+    );
+    // One signal, or two without the list or the title: not enough.
+    for (const sig of [["message-list"], ["folder-navigation", "compose"]])
+      assert.equal(
+        classifyScreen(YAHOO_SIGNIN, BG, "mail.yahoo.com/n/folders/00_1", sig)
+          .kind,
+        "unknown",
+        sig.join(","),
+      );
+    // Every provider declares its mailbox addresses.
+    assert.ok(
+      mailboxByStructure(GMAIL_SIGNIN, "mail.google.com/mail/u/0/#inbox", ALL),
+    );
+    assert.ok(
+      mailboxByStructure(OUTLOOK_SIGNIN, "outlook.live.com/mail/0/", ALL),
+    );
+    assert.ok(mailboxByStructure(AOL_SIGNIN, "mail.aol.com/d/folders/1", ALL));
+  });
+
+  it("is never the mailbox off its addresses: a sign-in, challenge or consent page keeps its reading", () => {
+    for (const loc of [
+      "login.yahoo.com/?.src=ym&done=https%3A%2F%2Fmail.yahoo.com%2Fd%2F",
+      "guce.yahoo.com/consent",
+      "consent.yahoo.com/v2/collectConsent?sessionId=3",
+      "mail.yahoo.com/",
+      "mail.yahoo.com.evil.example/n/folders/00_1",
+      // The mail host, a mailbox path only in its query or fragment.
+      "mail.yahoo.com/m/?.done=/n/folders/00_1",
+      "mail.yahoo.com/#/d/folders/1",
+      null,
+    ])
+      assert.equal(
+        classifyScreen(YAHOO_SIGNIN, BG, loc, ALL).kind === "done",
+        false,
+        String(loc),
+      );
+    // A consent page stays a consent page whatever its structure.
+    assert.equal(
+      classifyScreen(
+        YAHOO_SIGNIN,
+        BG,
+        "consent.yahoo.com/v2/collectConsent?sessionId=3",
+        ALL,
+      ).kind,
+      "consent",
+    );
+    // A challenge on a sign-in host stays a challenge.
+    const r = classifyScreen(
+      GMAIL_SIGNIN,
+      "Google\nVerify it's you\nTry another way",
+      "accounts.google.com/v3/signin/challenge/pwd",
+      ALL,
+    );
+    assert.equal(r.kind, "challenge");
+    // On a mailbox address too, a challenge, a sign-in step, an error or
+    // Google's re-verification phrase wins over the structure.
+    const INBOX = "mail.google.com/mail/u/0/#inbox";
+    for (const [text, kind] of [
+      ["Google\nVerify it's you\nTry another way", "challenge"],
+      ["Google\nTo continue, enter your password", "step"],
+      ["Google\nVerify it's you\nEnter your password", "step"],
+      ["Wrong password. Try again", "error"],
+      ["Enter the code we sent to your phone", "challenge"],
+    ] as const)
+      assert.equal(
+        classifyScreen(GMAIL_SIGNIN, text, INBOX, ALL).kind,
+        kind,
+        text,
+      );
+    // The English phrases still count with no structure read.
+    assert.equal(
+      classifyScreen(YAHOO_SIGNIN, "Yahoo Mail\nCompose\nInbox", undefined)
+        .kind,
+      "done",
     );
   });
 });

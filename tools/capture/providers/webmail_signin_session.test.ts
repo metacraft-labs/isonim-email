@@ -722,6 +722,11 @@ ${purpose("stats", "За създаване и споделяне на обоб�
     assert.equal(prefs.signin.allowed_on_next_startup, true);
     assert.equal(prefs.intl.accept_languages, "en-US,en");
     assert.equal(prefs.translate.enabled, false);
+    assert.deepEqual(
+      (prefs.profile.default_content_setting_values as Record<string, unknown>)
+        .notifications,
+      2,
+    );
     // The positive control: Chrome's defaults offer to save the password
     // on the same pages after the same steps (nobody answers it).
     const on = await passwordOffer("password-manager-control", false);

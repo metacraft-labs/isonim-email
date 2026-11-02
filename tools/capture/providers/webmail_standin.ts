@@ -25,7 +25,16 @@
 //   and, in dark only, its background toggle (unpressed: the body
 //   recoloured dark and marked data-ogsc; pressed: the body light);
 // - every page reports what it sees of the browser (`probes`:
-//   navigator.webdriver, prefers-color-scheme, the user agent);
+//   navigator.webdriver, prefers-color-scheme, the user agent, the
+//   notification permission);
+// - as the live webmails do: Gmail's "Enable desktop notifications"
+//   toast while the page's notification permission is undecided (its
+//   "OK" and "No thanks" reported as events), Gmail's open message in
+//   Trash offering "Delete" (its permanent delete there) under the
+//   "Trash" label chip, its Reply and Forward links below the body;
+//   Outlook.com's Inbox address rewritten to the bare /mail/0/, and its
+//   lists drawn as placeholders (not in the tree) for a while before
+//   their rows or an empty folder's notice;
 // - test switches: drift (the body is hidden from the accessibility tree,
 //   or loses the name the adapter finds it by), expire a session now or
 //   when a message is opened,
@@ -37,7 +46,12 @@
 //   look-alike carrying the token); Outlook.com without its toggle,
 //   ignoring the browser's dark scheme, or deleting Junk for good; a
 //   delete that answers but leaves the message in its folder; Gmail's
-//   views answering late (the previous list shown under the new address).
+//   views answering late (the previous list shown under the new address);
+//   Gmail's toast shown whatever the permission, its open message in
+//   Trash offering "Delete forever" instead, or without its Trash chip;
+//   Outlook.com's lists loading slowly, or one folder's never; Yahoo in
+//   Bulgarian (its controls and folders so named, the account's address
+//   in the title), and its old folder URLs sending to the Inbox.
 // The webmail browser, GuiAssert, the profiles, TLS and the provider are
 // real.
 
@@ -146,16 +160,23 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 // Every page reports what it sees of the browser once (`probes`).
-const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent));`;
+const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent) + "&notif=" + encodeURIComponent(typeof Notification === "undefined" ? "none" : Notification.permission));`;
 
-const page = (body: string, script = "", followsDark = true): string =>
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Mail</title><style>body{font:16px sans-serif;margin:0;background:#fff;color:#111}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee;padding:8px}.main{margin-left:220px;padding:8px;width:800px}${followsDark ? "@media (prefers-color-scheme: dark){body{background:#202020;color:#eee}.nav{background:#333}}" : ""}</style><script>${PROBE}</script></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
+const page = (
+  body: string,
+  script = "",
+  followsDark = true,
+  title = "Mail",
+): string =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font:16px sans-serif;margin:0;background:#fff;color:#111}.nav{position:fixed;left:0;top:0;bottom:0;width:200px;background:#eee;padding:8px}.main{margin-left:220px;padding:8px;width:800px}${followsDark ? "@media (prefers-color-scheme: dark){body{background:#202020;color:#eee}.nav{background:#333}}" : ""}</style><script>${PROBE}</script></head><body>${body}${script === "" ? "" : `<script>${script}</script>`}</body></html>`;
 
 export interface StandinProbe {
   webdriver: string;
   dark: boolean;
   page: string;
   ua: string;
+  // Notification.permission: "default", "denied" or "granted".
+  notif: string;
 }
 
 export class StandinWebmail {
@@ -206,8 +227,30 @@ export class StandinWebmail {
   // Gmail: how long a view takes to answer (the previous list stays on
   // the page meanwhile, under the new address).
   viewDelayMs = 0;
-  // What the pages reported doing (e.g. "toggle": a toggle click).
+  // What the pages reported doing (e.g. "toggle": a toggle click;
+  // "toast-ok", "toast-no": Gmail's notifications toast answered).
   events: string[] = [];
+  // Gmail: the notifications toast shown whatever the permission.
+  toastAlways = false;
+  // Gmail: the open message in Trash offers "Delete forever" (no
+  // "Delete").
+  trashForever = false;
+  // Gmail: no "Trash" label chip on an open message in Trash whose
+  // subject holds this.
+  noTrashChipFor: string | null = null;
+  // Outlook.com: how long a list is drawn as placeholders before its
+  // rows (or the empty folder's notice) show.
+  listLoadingMs = 0;
+  // Outlook.com: folders whose list never stops loading.
+  neverLoads: StandinFolder[] = [];
+  // Yahoo: its pages in this language ("en", or "bg": Bulgarian, as the
+  // live account showed, with a compose button, the folder list as
+  // links and the account's address in the title).
+  lang: "en" | "bg" = "en";
+  // Yahoo: each account's address (for the Bulgarian title).
+  addresses: Record<string, string> = {};
+  // Yahoo: the /d/folders/ URLs of Spam and Trash send to the Inbox.
+  oldFolderUrlsGone = false;
 
   constructor(skin: Skin) {
     this.skin = skin;
@@ -316,6 +359,7 @@ export class StandinWebmail {
         dark: url.searchParams.get("dark") === "true",
         page: url.searchParams.get("page") ?? "",
         ua: url.searchParams.get("ua") ?? "",
+        notif: url.searchParams.get("notif") ?? "",
       });
       return this.send(res, 204, "text/plain", "");
     }
@@ -426,7 +470,19 @@ export class StandinWebmail {
         });
       }
       window.addEventListener("hashchange", () => render(null));
-      render(null);`;
+      render(null);
+      if (${this.toastAlways} || (typeof Notification !== "undefined" && Notification.permission === "default")) {
+        const t = document.createElement("div");
+        t.setAttribute("style", "position:fixed;left:8px;bottom:8px;width:460px;background:#202124;color:#fff;padding:12px");
+        t.innerHTML = '<span>Enable desktop notifications for Gmail.</span> <a href="#" data-toast="ok" style="color:#8ab4f8">OK</a> <a href="#" data-toast="no" style="color:#8ab4f8">No thanks</a>';
+        document.body.append(t);
+        for (const a of t.querySelectorAll("[data-toast]")) a.addEventListener("click", (e) => {
+          e.preventDefault();
+          fetch("/event?what=toast-" + a.dataset.toast);
+          if (a.dataset.toast === "ok" && typeof Notification !== "undefined") Notification.requestPermission();
+          t.remove();
+        });
+      }`;
     this.send(
       res,
       200,
@@ -478,16 +534,36 @@ export class StandinWebmail {
       // Drift: the body hidden from the accessibility tree, so no node
       // carries the story's text.
       const hidden = this.drift ? ' aria-hidden="true"' : "";
+      const btn = (label: string, act = ""): string =>
+        `<div role="button" tabindex="0" aria-label="${label}"${act === "" ? "" : ` data-act="${act}" data-id="${m.id}"`}>${label}</div>`;
+      // As Gmail's (live, 2026-10-31): the open message in Trash offers
+      // "Delete", its permanent delete there, beside "Move to Inbox",
+      // under a banner, with the "Trash" label chip by the subject; in
+      // Spam "Delete forever"; elsewhere "Delete" moves it to Trash.
+      const trash = m.folder === "trash";
       const del =
-        m.folder === "trash" || m.folder === "spam"
-          ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
-          : `<div role="button" tabindex="0" aria-label="Delete" data-act="delete" data-id="${m.id}">Delete</div>`;
+        trash && !this.trashForever
+          ? `${btn("Back to Search Results")}${btn("Archive")}${btn("Report spam")}${btn("Delete", "destroy")}${btn("Mark as unread")}${btn("Move to Inbox")}${btn("More email options")}`
+          : trash || m.folder === "spam"
+            ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
+            : btn("Delete", "delete");
+      const chip =
+        trash &&
+        !(
+          this.noTrashChipFor !== null &&
+          m.subject.includes(this.noTrashChipFor)
+        )
+          ? ` <span>Trash</span><div role="button" tabindex="0" aria-label="Search for all messages with label Trash">x</div>`
+          : "";
+      const banner = trash
+        ? `<p>This message has been deleted. <a href="#">Restore message</a></p>`
+        : "";
       const shown = esc(this.openedSubject ?? m.subject);
       return this.send(
         res,
         200,
         "text/html",
-        `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP">${shown}</h2><div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div><div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div>`,
+        `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP">${shown}</h2>${chip}<div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div>${banner}<div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div><div class="actions" style="margin-top:16px"><a href="#" role="link">Reply</a> <a href="#" role="link">Forward</a></div>`,
       );
     }
     const rows = list
@@ -512,42 +588,85 @@ export class StandinWebmail {
   // --- Yahoo: server-rendered folders -------------------------------------
 
   private yahoo(url: URL, account: string, res: ServerResponse): void {
+    // /d/folders/N (the adapter's URLs) and, as Yahoo's newer pages,
+    // /n/folders/00_N.
     const folders: Record<string, StandinFolder> = {
       "1": "inbox",
       "6": "spam",
       "4": "trash",
+      "00_1": "inbox",
+      "00_6": "spam",
+      "00_4": "trash",
     };
-    const m1 = /^\/d\/folders\/(\d+)(?:\/messages\/([0-9a-f]+))?$/.exec(
+    const m1 = /^\/(d|n)\/folders\/(\w+)(?:\/messages\/([0-9a-f]+))?$/.exec(
       url.pathname,
     );
-    if (m1 === null)
+    if (m1 === null || folders[m1[2]!] === undefined)
       return this.send(res, 302, "text/plain", "", {
         location: "/d/folders/1",
       });
-    const folder = folders[m1[1]!] ?? "inbox";
-    const nav = `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
-    if (m1[2] !== undefined) {
-      const m = this.find(account, m1[2]);
+    // The old folder URLs gone: Spam's and Trash's lists sent to the
+    // Inbox (their links in the folder list still open them).
+    if (
+      this.oldFolderUrlsGone &&
+      m1[1] === "d" &&
+      m1[3] === undefined &&
+      m1[2] !== "1"
+    )
+      return this.send(res, 302, "text/plain", "", {
+        location: "/n/folders/00_1",
+      });
+    const base = `/${m1[1]}/folders/${m1[2]}`;
+    const folder = folders[m1[2]!]!;
+    const bg = this.lang === "bg";
+    const L = bg
+      ? {
+          compose: "Ново съобщение",
+          inbox: "Входяща поща",
+          spam: "Спам",
+          trash: "Кошче",
+          search: "Търсете в пощата си",
+          del: "Изтриване",
+          ok: "Добре",
+        }
+      : {
+          compose: "Compose",
+          inbox: "Inbox",
+          spam: "Spam",
+          trash: "Trash",
+          search: "Search",
+          del: "Delete",
+          ok: "OK",
+        };
+    // In Bulgarian (as the live Yahoo of 2026-10-31): a compose button
+    // and the folder list as links, the account's address in the title,
+    // and no English word the mailbox phrases look for.
+    const nav = bg
+      ? `<div class="nav" role="navigation"><button>${L.compose}</button><input type="search" name="p" aria-label="${L.search}"><ul><li><a href="/n/folders/00_1">${L.inbox}</a></li><li><a href="/n/folders/00_6">${L.spam}</a></li><li><a href="/n/folders/00_4">${L.trash}</a></li></ul></div>`
+      : `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
+    const title = bg
+      ? `(1 непрочетен) – ${this.addresses[account] ?? account}`
+      : "Mail";
+    if (m1[3] !== undefined) {
+      const m = this.find(account, m1[3]);
       if (m === undefined)
-        return this.send(res, 302, "text/plain", "", {
-          location: `/d/folders/${m1[1]}`,
-        });
+        return this.send(res, 302, "text/plain", "", { location: base });
       const trash = m.folder === "trash";
       const script = `
         const b = document.querySelector('[data-test-id="toolbar-delete"]');
         b.addEventListener("click", async () => {
           if (${trash}) {
             const d = document.createElement("div");
-            d.innerHTML = '<div role="dialog" aria-label="Delete forever?" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button data-test-id="primary-btn">OK</button></div>';
+            d.innerHTML = '<div role="dialog" aria-label="Delete forever?" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><button data-test-id="primary-btn">${L.ok}</button></div>';
             document.body.append(d);
             d.querySelector("button").addEventListener("click", async () => {
               await fetch("/api/destroy?id=${m.id}", { method: "POST" });
-              location.href = "/d/folders/4";
+              location.href = "${base}";
             });
             return;
           }
           await fetch("/api/delete?id=${m.id}", { method: "POST" });
-          location.href = "/d/folders/${m1[1]}";
+          location.href = "${base}";
         });`;
       // Drift: the body hidden from the accessibility tree.
       const hidden = this.drift ? ' aria-hidden="true"' : "";
@@ -556,25 +675,40 @@ export class StandinWebmail {
         200,
         "text/html",
         page(
-          `${nav}<div class="main"><div data-test-id="message-view"><button data-test-id="toolbar-delete">Delete</button><h2 data-test-id="message-group-subject-text">${esc(m.subject)}</h2><div data-test-id="message-view-body-content"${hidden}>${m.html}</div></div></div>`,
+          `${nav}<div class="main"><div data-test-id="message-view"><button data-test-id="toolbar-delete">${L.del}</button><h2 data-test-id="message-group-subject-text">${esc(m.subject)}</h2><div data-test-id="message-view-body-content"${hidden}>${m.html}</div></div></div>`,
           script,
+          true,
+          title,
         ),
       );
     }
-    const rows = this.mine(
+    const list = this.mine(
       account,
       folder === "inbox" ? ["inbox", "other"] : folder,
-    )
-      .map(
-        (m) =>
-          `<a data-test-id="message-list-item" href="/d/folders/${m1[1]}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a><br>`,
-      )
-      .join("");
+    );
+    const rows = bg
+      ? `<ul aria-label="">${list
+          .map(
+            (m) =>
+              `<li><input type="checkbox" aria-label=""> <a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span>${esc(m.fromName)}</span> <span>${esc(m.subject)}</span> <span>${esc(m.preview)}</span></a></li>`,
+          )
+          .join("")}</ul>`
+      : list
+          .map(
+            (m) =>
+              `<a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a><br>`,
+          )
+          .join("");
     this.send(
       res,
       200,
       "text/html",
-      page(`${nav}<div class="main" role="main">${rows}</div>`),
+      page(
+        `${nav}<div class="main" role="main">${rows}</div>`,
+        "",
+        true,
+        title,
+      ),
     );
   }
 
@@ -586,9 +720,11 @@ export class StandinWebmail {
       junkemail: "spam",
       deleteditems: "trash",
     };
+    // The bare /mail/0/ is the Inbox (the address Outlook.com shows it
+    // at).
     const m1 =
       /^\/mail\/0\/(inbox|junkemail|deleteditems)(?:\/id\/([0-9a-f]+))?$/.exec(
-        url.pathname,
+        url.pathname === "/mail/0/" ? "/mail/0/inbox" : url.pathname,
       );
     if (m1 === null)
       return this.send(res, 302, "text/plain", "", {
@@ -667,13 +803,26 @@ export class StandinWebmail {
           `<div role="option" onclick="location.href='/mail/0/${fname}/id/${m.id}'"><span title="sender@standin.invalid">${esc(m.fromName)}</span> <span data-testid="SubjectLine">${esc(m.subject)}</span> <span data-testid="PreviewText">${esc(m.preview)}</span></div>`,
       )
       .join("");
+    // Its list: placeholder rows first (hidden from the tree, as
+    // Outlook.com's are), then the rows, or the empty folder's notice.
+    const content =
+      rows === ""
+        ? `<div><div>Nothing in folder</div><div>Looks empty over here.</div></div>`
+        : `<div role="listbox">${rows}</div>`;
+    const loads = this.neverLoads.includes(folder) ? -1 : this.listLoadingMs;
+    const placeholders = `<div aria-hidden="true">${'<div style="height:40px;margin:8px 0;background:#e8e8e8"></div>'.repeat(6)}</div>`;
+    // The Inbox's address shown as the bare /mail/0/ (its tab kept).
+    const script = `${fname === "inbox" && url.pathname !== "/mail/0/" ? `history.replaceState(null, "", "/mail/0/" + location.search);` : ""}
+      const list = document.getElementById("list");
+      const show = () => { list.innerHTML = document.getElementById("rows").innerHTML; };
+      ${loads === 0 ? "show();" : loads > 0 ? `setTimeout(show, ${loads});` : ""}`;
     this.send(
       res,
       200,
       "text/html",
       page(
-        `${nav}<div class="main" role="main">${tabs}<div role="listbox">${rows}</div></div>`,
-        "",
+        `${nav}<div class="main" role="main">${tabs}<div role="region" aria-label="Message list"><div id="list">${placeholders}</div></div><template id="rows">${content}</template></div>`,
+        script,
         !this.ignoresDark,
       ),
     );

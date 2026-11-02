@@ -178,6 +178,124 @@ writeFileSync(
 const ADDRESS_FIELD: [number, number, number, number] = [100, 200, 400, 40];
 const PASSWORD_FIELD: [number, number, number, number] = [100, 260, 400, 40];
 
+// A mailbox page in Bulgarian as the live Yahoo showed it on 2026-10-31
+// (Inbox at mail.yahoo.com/n/folders/00_1; compose "Ново съобщение",
+// search "Търсете в пощата си", the folders "Входяща поща" … "Архив", a
+// message list with check boxes, the account's address in the window's
+// title): no English mailbox phrase on it. Its accessibility nodes are
+// the stand-in screen's `tree`.
+type TreeNode = {
+  path: string;
+  role: string;
+  nativeRole: string;
+  name: string;
+  bounds: [number, number, number, number];
+  states: string[];
+  children: TreeNode[];
+};
+let bgPaths = 0;
+const tn = (
+  role: string,
+  nativeRole: string,
+  name: string,
+  bounds: [number, number, number, number],
+  children: TreeNode[] = [],
+): TreeNode => ({
+  path: `/app[1]/bg[${bgPaths++}]`,
+  role,
+  nativeRole,
+  name,
+  bounds,
+  states: ["visible", "enabled"],
+  children,
+});
+function bulgarianMailbox(
+  location: string,
+  title: string,
+  opts: { rows?: number } = {},
+): StandinScenario["screens"][string] {
+  const folders = [
+    "Входяща поща",
+    "Непрочетени",
+    "Със звезда",
+    "Изпратени",
+    "Чернови",
+    "Кошче",
+    "Спам",
+    "Архив",
+  ];
+  const rows = Array.from({ length: opts.rows ?? 3 }, (_, i) =>
+    tn(
+      "list-item",
+      "list item",
+      "",
+      [300, 300 + i * 60, 900, 60],
+      [
+        tn("checkbox", "check box", "", [304, 310 + i * 60, 20, 20]),
+        tn("link", "link", `Изпращач ${i} Тема ${i}`, [
+          340,
+          300 + i * 60,
+          800,
+          60,
+        ]),
+      ],
+    ),
+  );
+  return {
+    text: `yahoo!mail\nНово съобщение\nТърсете в пощата си\n${folders.join("\n")}`,
+    location,
+    tree: [
+      tn(
+        "window",
+        "frame",
+        title,
+        [0, 0, 1440, 2400],
+        [
+          tn(
+            "group",
+            "document web",
+            title,
+            [0, 90, 1440, 2300],
+            [
+              tn("button", "push button", "Ново съобщение", [20, 120, 200, 40]),
+              tn(
+                "text-field",
+                "entry",
+                "Търсете в пощата си",
+                [300, 110, 600, 40],
+              ),
+              tn(
+                "group",
+                "landmark",
+                "",
+                [0, 180, 260, 1200],
+                [
+                  tn(
+                    "list",
+                    "list",
+                    "",
+                    [0, 180, 260, 400],
+                    folders.map((f, i) =>
+                      tn(
+                        "list-item",
+                        "list item",
+                        "",
+                        [0, 180 + i * 40, 260, 40],
+                        [tn("link", "link", f, [10, 180 + i * 40, 240, 40])],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              tn("list", "list", "", [300, 300, 900, 1200], rows),
+            ],
+          ),
+        ],
+      ),
+    ],
+  };
+}
+
 function gmailScenario(
   after: Record<string, StandinScenario["screens"][string]> = {},
   opts: {
@@ -1959,6 +2077,111 @@ describe("the automated sign-in procedure", () => {
     noInput(h2.log());
   });
 
+  it("recognises Yahoo's mailbox shown in Bulgarian by its structure on its address, in the attempt and the check, with no input; off its address it is not the mailbox", async () => {
+    const INBOX = "mail.yahoo.com/n/folders/00_1";
+    const title = `(1 непрочетен) – ${ADDRESS} - Google Chrome`;
+    const bg = (location: string, rows?: number): StandinScenario => ({
+      start: "inbox",
+      screens: {
+        inbox: bulgarianMailbox(
+          location,
+          title,
+          rows === undefined ? {} : { rows },
+        ),
+      },
+    });
+    // The attempt: the mailbox, by its structure.
+    const h = harness(bg(INBOX));
+    const logs: string[] = [];
+    const r = await driveSignin(
+      h.ctx(YAHOO_SIGNIN, { log: (l: string) => logs.push(l) }),
+    );
+    assert.deepEqual(r.outcome, { result: "signed-in", typed: false });
+    assert.ok(
+      logs.some((l) =>
+        /^screen: the mailbox \(by its structure: message-list, folder-navigation, compose, title-account\)$/.test(
+          l,
+        ),
+      ),
+      JSON.stringify(logs),
+    );
+    // The account's address is never logged.
+    assert.ok(!logs.some((l) => l.includes(ADDRESS)));
+    noInput(h.log());
+    // The check: the same, said so.
+    const h2 = harness(bg(INBOX));
+    assert.deepEqual(
+      await verifySignedIn(
+        verifyCtx(h2, {
+          provider: YAHOO_SIGNIN,
+          browserPid: 4242,
+          address: ADDRESS,
+        }),
+      ),
+      { signedIn: true, by: "structure" },
+    );
+    noInput(h2.log());
+    // An empty Inbox still has the title and the folders.
+    const h3 = harness(bg(INBOX, 0));
+    assert.deepEqual(
+      await verifySignedIn(
+        verifyCtx(h3, {
+          provider: YAHOO_SIGNIN,
+          browserPid: 4242,
+          address: ADDRESS,
+        }),
+      ),
+      { signedIn: true, by: "structure" },
+    );
+    // Off the mailbox's addresses (a sign-in host), the same structure is
+    // not the mailbox, and its tree is not even read.
+    const h4 = harness(
+      bg("login.yahoo.com/?.src=ym&done=https%3A%2F%2Fmail.yahoo.com%2Fn%2F"),
+    );
+    const r4 = await verifySignedIn(
+      verifyCtx(h4, {
+        provider: YAHOO_SIGNIN,
+        browserPid: 4242,
+        address: ADDRESS,
+        timeoutMs: 300,
+      }),
+    );
+    assert.ok(!r4.signedIn);
+    assert.equal(r4.seen, "unrecognised");
+    assert.ok(!h4.log().some((e) => e.verb === "tree"));
+    // The settled-view rule: a mailbox's structure read on one frame only
+    // (the page then moved on to a sign-in host) is not the mailbox.
+    const signin = bulgarianMailbox(
+      "login.yahoo.com/?.src=ym&done=https%3A%2F%2Fmail.yahoo.com%2Fn%2F",
+      title,
+    );
+    const h5 = harness({
+      start: "inbox",
+      screens: {
+        inbox: {
+          ...bulgarianMailbox(INBOX, title),
+          moveOn: { frames: 2, next: "signin" },
+        },
+        signin,
+      },
+    });
+    const r5 = await verifySignedIn(
+      verifyCtx(h5, {
+        provider: YAHOO_SIGNIN,
+        browserPid: 4242,
+        address: ADDRESS,
+        timeoutMs: 300,
+      }),
+    );
+    assert.ok(!r5.signedIn, JSON.stringify(r5));
+    assert.equal(
+      h5.log().filter((e) => e.verb === "tree").length,
+      1,
+      "the mailbox's structure was read on one frame",
+    );
+    noInput(h5.log());
+  });
+
   it("reports an account-setup screen on the inbox URL as not the mailbox, and dismisses nothing", async () => {
     const s = gmailScenario({
       homeaddress: {
@@ -2813,6 +3036,43 @@ describe("email-webmail-signin (the command line)", () => {
       readFileSync(join(profile().dir, "signin-screen.png"), "utf8"),
       /Before you continue/,
     );
+  });
+
+  it("--check-only on a mailbox shown in another language: recognised by its structure, recorded verified_by structure, nothing typed", () => {
+    rmSync(attemptPath(profile()), { force: true });
+    rmSync(profile().record, { force: true });
+    const c = cliEnv({
+      start: "inbox",
+      screens: {
+        inbox: bulgarianMailbox(
+          "mail.google.com/mail/u/0/#inbox",
+          `Входяща поща (2) - ${ADDRESS} - Gmail - Google Chrome`,
+        ),
+      },
+    });
+    resetDesktop(c.state);
+    const r = run(
+      c.env,
+      "--check-only",
+      "--unsafe-no-sandbox",
+      "--timeout",
+      "20",
+    );
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /check: the mailbox shows \(by its structure: /);
+    assert.match(
+      r.stdout,
+      /SIGNED IN: gmail-workspace\/qa1 on mail\.google\.com/,
+    );
+    assert.ok(!r.stdout.includes(ADDRESS) && !r.stderr.includes(ADDRESS));
+    const rec = readSigninRecord(profile());
+    assert.ok(rec !== null);
+    assert.equal(rec.verified_by, "structure");
+    assert.deepEqual(
+      readLog(c.state).filter((e) => ["type", "key", "click"].includes(e.verb)),
+      [],
+    );
+    assert.equal(readAttempt(profile()).kind, "none");
   });
 
   it("--check-only on Google's sign-in-again page: signed out (exit 1, not 5), its screen kept, no click, no attempt", () => {

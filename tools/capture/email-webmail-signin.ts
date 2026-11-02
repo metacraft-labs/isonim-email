@@ -799,6 +799,7 @@ async function signInAccountOnce(
         provider,
         ...(checker.pid === undefined ? {} : { browserPid: checker.pid }),
         keepPath: join(profile.dir, "check-screen.png"),
+        address: acct.address,
         password,
         framesDir,
         timeoutMs: o.timeoutS * 1000,
@@ -810,12 +811,16 @@ async function signInAccountOnce(
       await stopBrowser(checker);
     }
     const checked:
-      | { signedIn: true; host: string }
+      | { signedIn: true; host: string; by: "ocr" | "structure" }
       | {
           signedIn: false;
           reason: string;
         } = verified.signedIn
-      ? { signedIn: true, host: new URL(w.inboxUrl).host }
+      ? {
+          signedIn: true,
+          host: new URL(w.inboxUrl).host,
+          by: verified.by ?? "ocr",
+        }
       : verified;
 
     const prefix =
@@ -841,7 +846,7 @@ async function signInAccountOnce(
       signed_in_at: new Date().toISOString(),
       host: checked.host,
       browser: `${chrome.label} (${chrome.path})`,
-      verified_by: "ocr",
+      verified_by: checked.by,
     });
     say(
       `SIGNED IN: ${label} on ${checked.host}; recorded in ${profile.record}`,

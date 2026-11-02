@@ -233,7 +233,14 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
 
 - **0, `SIGNED IN`**: the inbox loaded signed in; `signin.json` is
   written. If it says the profile was still signed in, nothing was
-  typed and no attempt was counted.
+  typed and no attempt was counted. The mailbox is recognised by its
+  English wording ("Compose", "Inbox"; `verified_by: "ocr"`) or, shown
+  in another language, by its structure on the mailbox's own address
+  (`mail.yahoo.com/n/…` or `/d/…`, `mail.google.com/mail/…`,
+  `outlook.live.com/mail/0…`): a message list, a folder list, a compose
+  button at the top left, the account's address in the window title
+  (the log line says `the mailbox (by its structure: …)`, and the
+  record `verified_by: "structure"`).
 - **1, `FAILED (wrong-password)`**: the provider refused the password.
   The account file does not hold the account's password. Do not run the
   sign-in again until it is fixed: see
@@ -289,6 +296,33 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   run (it may write a hash back as it exits), whatever the sign-in's
   result. See
   [No saved password at rest](#no-saved-password-at-rest).
+
+## Yahoo Mail in English
+
+Yahoo shows its mail in the account's language, whatever the browser
+asks for (the QA account showed Bulgarian on 2026-10-31: "Ново
+съобщение", "Входяща поща", "Спам", "Кошче"). The sign-in, the check
+and the captures recognise it in Bulgarian too, but English keeps the
+screens and the kept screenshots readable and the names the captures
+fall back on few. Once per account, after it is signed in:
+
+1. Start a watched session that types nothing:
+   `just email-webmail-signin yahoo qa1 --manual --vnc`, and connect a
+   VNC viewer as it prints (`ssh -L 5901:<socket> you@capture-host`,
+   then `localhost:5901`).
+2. In Yahoo Mail, open Settings (the gear at the top right), "More
+   settings", then the language setting (in Bulgarian: "Настройки",
+   "Още настройки"), and choose English (United States). Save.
+3. Press Enter alone in the terminal (the inbox shows): the recipe
+   stops the browser and checks the profile. Never type `p` here: the
+   profile is already signed in.
+4. Confirm: `just email-webmail-signin yahoo qa1 --check-only` ends
+   `SIGNED IN` with `verified_by: "ocr"` in `signin.json` (the English
+   wording read), where before it said `"structure"`.
+
+The browser itself already asks for English: the launcher writes
+`intl.accept_languages = "en-US,en"` into the profile and starts Chrome
+with `--lang=en-US`.
 
 ## Checking the typing: `--typing-check`
 
@@ -456,6 +490,11 @@ same profiles the way the sign-in does, never under Playwright:
   on, and left alone when Outlook.com does not show one; a light capture
   never touches it. Every sign-in runs light, so a dark capture never
   leaves a profile dark;
+- the profile blocks site notifications (written with the other
+  preferences before every start), so Gmail does not offer its "Enable
+  desktop notifications" toast; if a toast shows anyway, the capture
+  clicks its "No thanks" (never "OK") before it reads the row or the
+  body, and the provenance says so (`notices_dismissed`);
 - a capture never reads an account's password and never types into a
   sign-in page. A profile found signed out is marked `needs-login`: sign
   it in again with this recipe (after the cool-down, if an attempt was
@@ -508,11 +547,13 @@ against the account's daily budget; the run deletes it afterwards
 
 Every PNG has a JSON file beside it. For a first capture, check:
 
-- `crop.locator`: `story region` (Gmail, Yahoo: the message column
-  between the webmail's elements above and below the story's own text)
-  or the body's own name (Outlook.com, `name="Message body"`);
-  `crop.foreign_inside` should be 0 (text inside the crop that is not
-  the story's: a banner the webmail put in the body);
+- `crop.locator`: `story article` (Gmail, Yahoo: the email's own
+  wrapper element, which the library names after the story, its box
+  exactly), `story region` (an email without that wrapper: the message
+  column between the webmail's elements above and below the story's own
+  text) or the body's own name (Outlook.com, `name="Message body"`);
+  for a story region `crop.foreign_inside` should be 0 (text inside the
+  crop that is not the story's: a banner the webmail put in the body);
 - `width_check`: the body's measured width against the requested 800.
   A delta other than 0 means the adapter's `windowAllowance` in
   `webmail_adapters.ts` needs calibrating;
@@ -528,7 +569,14 @@ Every PNG has a JSON file beside it. For a first capture, check:
   search, then the run token's), whether the address bar then held it
   (`location_matched`), the rows it saw, which row locator found the
   message (`row_locator`), and `token_nodes`, every element showing the
-  run token; `arrival.row_locator` is the one that found it;
+  run token; `arrival.row_locator` is the one that found it. A look's
+  `list` says how the folder's list read and how long the look waited
+  for it (`state`: `rows`, `empty`, `quiet`, `loading`, or `elsewhere`
+  when the address bar was not on the folder; `settled`, `waited_ms`,
+  `readings`): a look counts as "not there" only over a settled list,
+  so a list still drawn as grey placeholders is waited for (up to 20 s)
+  rather than taken for an empty one. Outlook.com shows its Inbox at
+  `outlook.live.com/mail/0/`, which counts as the Inbox's address;
 - `scheme_applied` (Outlook.com): `browser` (the colour mode),
   `theme_luminance` (the subject heading's: below 128 is dark),
   `toggle` (`untouched` in light; `unchecked`, `switched` or `absent` in
@@ -571,6 +619,16 @@ done with it.
 <account> --manual --vnc`), then capture again.
 - `the message body is … px tall …, past the window's visible part`:
   bodies taller than the window are not captured yet (never cut).
+- `the message body [x, y, w, h] touches the … edge of the visible page`
+  or `inside the message body …, a … node reaches […], past the body's
+box`: the body would be clipped (the webmail cuts or scrolls it), so
+  it is not captured. Widen the adapter's window (`windowAllowance` in
+  `webmail_adapters.ts`) and capture again.
+- `a notice (…) shows over the page, and its dismiss control … was not
+found` or `the notice … stayed`: a webmail notice the adapter knows
+  (Gmail's notifications toast) could not be dismissed with its "No
+  thanks"; the frame shows it. Check that the profile's notifications
+  are blocked (Chrome's Settings, Site settings, Notifications).
 - `delivery failure: … was not found …`: the message did not show in
   Inbox or Spam/Junk within 60 s, or the search did not recognise it.
   Read the provenance's `search`: `location_matched: false` means the
@@ -578,12 +636,19 @@ done with it.
   `location`); `rows` empty means no row locator matched the list (the
   frame and tree show what the list is made of); `token_nodes` naming an
   element means the message was on the screen but not in anything the
-  row locators recognise. Its cleanup record is `not-found`; the message
-  may still be in the mailbox.
+  row locators recognise; `list.settled: false` (and the reason saying a
+  folder "never settled") means that folder's list never finished
+  loading, so the message may well have been there. Its cleanup record
+  is `not-found`; the message may still be in the mailbox.
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
   mailbox; the line names the kept screen, and the cleanup record's
   `search` the looks that saw it. A removal's `via` says how it went:
-  `trash` (deleted, then deleted again from Trash / Deleted Items),
+  `trash` (deleted, then deleted again from Trash / Deleted Items; in
+  Gmail the second delete is the open message's "Delete" in Trash,
+  clicked only when the address bar is on an `in:trash` search or the
+  Trash view and the message shows its "Trash" label, otherwise the
+  cleanup fails with `the opened message is not shown in Trash (the
+Trash guard …)` and nothing is clicked),
   `delete-forever` (Gmail's Spam), or `permanent` (deleted from
   Outlook.com's Junk Email or Yahoo's Spam, and never seen in Trash:
   the delete there was for good). Sign nothing in: open the account's profile only through the
