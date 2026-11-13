@@ -44,19 +44,24 @@ import { readPng, writePng } from "../contact_sheet.ts";
 import {
   type A11yLocator,
   addressBarValue,
+  atAddress,
   carriesToken,
   clickTarget,
   clipText,
   findShowing,
   findStoryArticle,
   flatten,
+  folderControls,
+  controlNamed,
   insideRect,
+  loadingScreen,
   locateStoryRegion,
   locationHost,
   mailboxSignals,
   matches,
   MASK_RGB,
   meanLuminance,
+  messageList,
   clippedBy,
   overflowPast,
   paintMasks,
@@ -67,6 +72,7 @@ import {
   storyArticleLabel,
   storyTexts,
   structureFingerprint,
+  textCarriesToken,
   tokenNodes,
   tokenRows,
   touchedEdge,
@@ -1060,5 +1066,442 @@ describe("a mailbox's structure", () => {
     // The menu is a navigation, never a message list (no check boxes);
     // the only button is low and right.
     assert.deepEqual(mailboxSignals(signin, ADDR), ["folder-navigation"]);
+  });
+});
+
+describe("part 3d: the loading screen, the subject heading, folder controls", () => {
+  const page = (kids: GaNode[]) =>
+    n(
+      "window",
+      "frame",
+      "Outlook - Google Chrome",
+      [0, 0, 1280, 900],
+      [
+        n(
+          "text-field",
+          "entry",
+          "Address and search bar",
+          [160, 50, 900, 24],
+          [],
+          {
+            text: "outlook.live.com/mail/0/",
+          },
+        ),
+        n("group", "document web", "Outlook", [4, 87, 1271, 808], kids),
+      ],
+    );
+
+  it("tells the webmail's loading screen (unnamed sections and images only) from a page that is drawn", () => {
+    // Outlook.com's splash as the live tree showed it (2026-11-13);
+    // Chrome gives a container the text U+FFFC per embedded child.
+    const splash = page([
+      n(
+        "group",
+        "section",
+        null,
+        [4, 87, 1271, 808],
+        [
+          n(
+            "group",
+            "section",
+            null,
+            [439, 291, 401, 400],
+            [n("group", "section", null, [567, 372, 145, 219])],
+            { text: "\uFFFC" },
+          ),
+          n("image", "image", "Microsoft", [589, 837, 100, 22]),
+        ],
+      ),
+    ]);
+    assert.equal(loadingScreen(splash), true);
+    // A page not drawn yet.
+    assert.equal(loadingScreen(page([])), true);
+    // Anything else drawn is not: a heading, a link, a landmark, a named
+    // container, text.
+    for (const extra of [
+      n("label", "heading", "Inbox", [10, 100, 100, 20]),
+      n("link", "link", "Sign in", [10, 100, 100, 20]),
+      n("group", "landmark", "", [10, 100, 100, 20]),
+      n("group", "section", "Message list", [10, 100, 100, 20]),
+      text("Loading your mailbox", [10, 100, 200, 20]),
+      n("button", "push button", "New mail", [10, 100, 100, 20]),
+    ])
+      assert.equal(
+        loadingScreen(
+          page([n("group", "section", "", [4, 87, 1271, 808], [extra])]),
+        ),
+        false,
+        JSON.stringify(extra),
+      );
+    // No page at all is not a loading screen.
+    assert.equal(
+      loadingScreen(n("window", "frame", "x", [0, 0, 10, 10], [])),
+      false,
+    );
+  });
+
+  it("finds the run token in a heading's accessible text: its name, or its children when the search splits or another name hides it", () => {
+    const split = n(
+      "label",
+      "heading",
+      "",
+      [332, 219, 586, 27],
+      [
+        text("[", [332, 219, 7, 27]),
+        text("es:run1:abcd1234", [339, 219, 346, 27]),
+        text("] [shots] receiptTypical", [685, 219, 223, 27]),
+      ],
+    );
+    assert.equal(textCarriesToken(split, TOKEN), true);
+    const named = n(
+      "label",
+      "heading",
+      `${TOKEN} [shots] receiptTypical`,
+      [332, 219, 586, 27],
+    );
+    assert.equal(textCarriesToken(named, TOKEN), true);
+    const other = n(
+      "label",
+      "heading",
+      "Conversation",
+      [0, 0, 10, 10],
+      [text(`  ${TOKEN}\n[shots]`, [0, 0, 10, 10])],
+    );
+    assert.equal(textCarriesToken(other, TOKEN), true);
+    // Another run's token, or a part of it, is not this one.
+    assert.equal(
+      textCarriesToken(
+        n("label", "heading", "[es:run1:abcd12345] x", [0, 0, 1, 1]),
+        TOKEN,
+      ),
+      false,
+    );
+    assert.equal(
+      textCarriesToken(
+        n(
+          "label",
+          "heading",
+          "Labels",
+          [0, 0, 1, 1],
+          [text("es:run1", [0, 0, 1, 1])],
+        ),
+        TOKEN,
+      ),
+      false,
+    );
+  });
+
+  it("names a folder's control as it is, without a count, or after a state", () => {
+    const names = ["Spam", "Спам"];
+    assert.equal(controlNamed("Спам", names), true);
+    assert.equal(controlNamed("спам 3", names), true);
+    assert.equal(controlNamed("Избрано, Спам", names), true);
+    assert.equal(controlNamed("Selected, Spam", names), true);
+    assert.equal(controlNamed("Report spam", names), false);
+    assert.equal(controlNamed("Spam, Selected", names), false);
+    assert.equal(controlNamed("", names), false);
+  });
+
+  // The new Yahoo Mail as the live tree showed it (2026-11-13): its
+  // folders buttons in the navigation landmark's list items, the current
+  // one named after a state; the banner's and header's links; a
+  // toolbar's "Спам" over the message list; rows of a link holding a
+  // check box.
+  const yahoo = (rows: number) =>
+    n(
+      "window",
+      "frame",
+      "Yahoo Mail",
+      [0, 0, 1360, 2400],
+      [
+        n(
+          "group",
+          "document web",
+          "Yahoo Mail",
+          [4, 87, 1351, 2308],
+          [
+            n("link", "link", "Научете още", [511, 138, 106, 20]),
+            n(
+              "group",
+              "landmark",
+              "Заглавка",
+              [4, 183, 1351, 64],
+              [
+                n("link", "link", "Yahoo Mail", [36, 209, 124, 22]),
+                n("link", "link", "Абониране", [1060, 200, 133, 40]),
+              ],
+            ),
+            n(
+              "group",
+              "landmark",
+              "Навигация",
+              [4, 273, 260, 2107],
+              [
+                n(
+                  "button",
+                  "push button",
+                  "Ново съобщение",
+                  [33, 273, 196, 56],
+                ),
+                n(
+                  "list",
+                  "list",
+                  "",
+                  [33, 345, 196, 510],
+                  [
+                    n(
+                      "list-item",
+                      "list item",
+                      "",
+                      [33, 347, 196, 32],
+                      [
+                        n(
+                          "button",
+                          "push button",
+                          "Избрано, Входяща поща",
+                          [49, 351, 135, 24],
+                        ),
+                      ],
+                    ),
+                    n(
+                      "list-item",
+                      "list item",
+                      "",
+                      [33, 613, 196, 32],
+                      [n("button", "push button", "Кошче", [49, 617, 159, 24])],
+                    ),
+                    n(
+                      "list-item",
+                      "list item",
+                      "",
+                      [33, 647, 196, 32],
+                      [n("button", "push button", "Спам", [49, 651, 151, 24])],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            n(
+              "group",
+              "landmark",
+              "Съобщения",
+              [265, 270, 689, 2029],
+              [
+                n(
+                  "toolbar",
+                  "tool bar",
+                  "",
+                  [265, 270, 689, 40],
+                  [n("button", "push button", "Спам", [300, 275, 60, 30])],
+                ),
+                n(
+                  "list",
+                  "list",
+                  "Списък със съобщения",
+                  [265, 318, 689, 792],
+                  Array.from({ length: rows }, (_, i) =>
+                    n(
+                      "list-item",
+                      "list item",
+                      "",
+                      [265, 318 + i * 44, 689, 44],
+                      [
+                        n(
+                          "link",
+                          "link",
+                          `Изпращач ${i} Тема ${i}`,
+                          [265, 318 + i * 44, 689, 44],
+                          [
+                            n("checkbox", "check box", "", [
+                              289,
+                              327 + i * 44,
+                              24,
+                              25,
+                            ]),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+
+  it("finds a folder's control among the folder navigation's buttons, never a toolbar's or the header's", () => {
+    const flat = flatten(yahoo(3));
+    const pageF = flat.find((f) => f.node.nativeRole === "document web")!;
+    const one = (names: string[]) =>
+      folderControls(flat, pageF, names).map((f) => f.node.name);
+    assert.deepEqual(one(["Spam", "Спам"]), ["Спам"]);
+    assert.deepEqual(one(["Trash", "Кошче"]), ["Кошче"]);
+    assert.deepEqual(one(["Inbox", "Входяща поща"]), ["Избрано, Входяща поща"]);
+    // With no rows, the message list's landmark holds no check box: its
+    // toolbar's "Спам" is still not a folder's.
+    const empty = flatten(yahoo(0));
+    assert.deepEqual(
+      folderControls(
+        empty,
+        empty.find((f) => f.node.nativeRole === "document web")!,
+        ["Спам"],
+      ).map((f) => f.node.name),
+      ["Спам"],
+    );
+  });
+
+  it("never takes a toolbar's, a menu's or a dialog's control for a folder's, however it lays its buttons out", () => {
+    const buttons = (names: string[], y: number) =>
+      n(
+        "list",
+        "list",
+        "",
+        [300, y, 400, 30],
+        names.map((name, i) =>
+          n(
+            "list-item",
+            "list item",
+            "",
+            [300 + i * 100, y, 100, 30],
+            [n("button", "push button", name, [300 + i * 100, y, 90, 30])],
+          ),
+        ),
+      );
+    // An opened message (no message list, no check box): its toolbar a
+    // list of buttons inside the page's landmark; a "Move to" menu and
+    // a dialog listing the folders; the folder list's "Спам" not shown.
+    const tree = n(
+      "window",
+      "frame",
+      "Yahoo Mail",
+      [0, 0, 1360, 1000],
+      [
+        n(
+          "group",
+          "document web",
+          "Yahoo Mail",
+          [0, 0, 1360, 1000],
+          [
+            n(
+              "group",
+              "landmark",
+              "Съобщение",
+              [265, 200, 900, 800],
+              [
+                n(
+                  "toolbar",
+                  "tool bar",
+                  "",
+                  [265, 200, 900, 40],
+                  [buttons(["Архивиране", "Преместване", "Спам"], 205)],
+                ),
+                n(
+                  "menu",
+                  "menu",
+                  "",
+                  [400, 250, 200, 200],
+                  [buttons(["Входяща поща", "Кошче", "Спам"], 260)],
+                ),
+                n(
+                  "dialog",
+                  "dialog",
+                  "",
+                  [400, 500, 300, 200],
+                  [buttons(["Входяща поща", "Кошче", "Спам"], 510)],
+                ),
+                n("heading", "heading", "Тема", [300, 300, 400, 30]),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+    const flat = flatten(tree);
+    const pageF = flat.find((f) => f.node.nativeRole === "document web")!;
+    assert.deepEqual(folderControls(flat, pageF, ["Spam", "Спам"]), []);
+    assert.deepEqual(folderControls(flat, pageF, ["Кошче"]), []);
+    // A list of fewer than three items is no folder navigation either.
+    const two = flatten(
+      n(
+        "window",
+        "frame",
+        "",
+        [0, 0, 1000, 1000],
+        [
+          n(
+            "group",
+            "document web",
+            "",
+            [0, 0, 1000, 1000],
+            [
+              n(
+                "group",
+                "landmark",
+                "",
+                [0, 0, 1000, 100],
+                [buttons(["Отговор", "Спам"], 10)],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    assert.deepEqual(
+      folderControls(two, two[1]!, ["Спам"]).map((f) => f.node.name),
+      [],
+    );
+  });
+
+  it("finds the message list by its structure, so the page's other links are no rows", () => {
+    const flat = flatten(yahoo(3));
+    const pageF = flat.find((f) => f.node.nativeRole === "document web")!;
+    const list = messageList(flat, pageF);
+    assert.equal(list?.node.name, "Списък със съобщения");
+    const inList = tokenRows(flat, [{ role: "link" }], "", list).seen.map(
+      (f) => f.node.name,
+    );
+    assert.deepEqual(inList, [
+      "Изпращач 0 Тема 0",
+      "Изпращач 1 Тема 1",
+      "Изпращач 2 Тема 2",
+    ]);
+    // In the whole page the banner's and header's links are rows too.
+    assert.ok(
+      tokenRows(flat, [{ role: "link" }], "", pageF)
+        .seen.map((f) => f.node.name)
+        .includes("Научете още"),
+    );
+    // An empty folder has no message list.
+    const empty = flatten(yahoo(0));
+    assert.equal(
+      messageList(
+        empty,
+        empty.find((f) => f.node.nativeRole === "document web")!,
+      ),
+      null,
+    );
+  });
+
+  it("holds a folder at an alias whatever query the address bar adds; the URL itself whole", () => {
+    const inbox = "https://mail.yahoo.com/n/folders/00_1";
+    const aliases = [inbox, "https://mail.yahoo.com/d/folders/1"];
+    const at = "mail.yahoo.com/n/folders/00_1?.src=ym&reason=unexpected_ymv";
+    assert.equal(atAddress(at, inbox, aliases), true);
+    assert.equal(atAddress(at, inbox, []), false);
+    assert.equal(
+      atAddress(at, "https://mail.yahoo.com/d/folders/6", []),
+      false,
+    );
+    assert.equal(
+      atAddress("mail.yahoo.com/d/folders/1", "https://x.test/", aliases),
+      true,
+    );
+    // Another folder's address is no alias of this one, query or not.
+    assert.equal(
+      atAddress("mail.yahoo.com/n/folders/00_6?.src=ym", inbox, aliases),
+      false,
+    );
   });
 });

@@ -31,9 +31,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   ADDRESS_BAR,
   addressBarValue,
+  atAddress,
   type Flat,
   flatten,
-  sameLocation,
 } from "./a11y_tree.ts";
 import {
   type GaSession,
@@ -235,7 +235,8 @@ export class WebmailDesktop {
    * otherwise still show the previous content under the new address.
    * The address bar holds `url` when it holds it or one of `aliases`
    * (addresses the webmail rewrites it to: Outlook.com's bare /mail/0/
-   * for its Inbox).
+   * for its Inbox), an alias with whatever query the webmail adds
+   * (a11y_tree.ts `atAddress`).
    */
   async navigate(
     url: string,
@@ -251,8 +252,7 @@ export class WebmailDesktop {
     how: "typed" | "reload" | "typed-reload";
   }> {
     const here = (loc: string | null): boolean =>
-      sameLocation(loc, url) ||
-      (opts.aliases ?? []).some((a) => sameLocation(loc, a));
+      atAddress(loc, url, opts.aliases ?? []);
     const now = await this.snapshot();
     const reload = here(now.location);
     let how: "typed" | "reload" | "typed-reload" = reload ? "reload" : "typed";

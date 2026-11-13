@@ -22,8 +22,9 @@
 //   carries the run token (a11y_tree.ts `tokenRows`): Chrome names some
 //   rows from their content and folds pruned containers' text into the
 //   cells, so the token may be in either.
-// - The opened message is the delivered one when a heading's name
-//   carries the token.
+// - The opened message is the delivered one when a heading's
+//   accessible text (its name, or the text inside it) carries the token
+//   (a11y_tree.ts `textCarriesToken`).
 // - The body is the node `opened.body` names, or, when the webmail gives
 //   the body no name (Gmail, Yahoo), the story's own article (the
 //   library's role="article" wrapper, named after the story; Chrome
@@ -94,11 +95,13 @@ export interface FolderSpec {
   tabs: WebmailLocator[];
   // Other addresses the address bar shows for this folder (Outlook.com
   // rewrites a typed /mail/0/inbox to /mail/0/): the address bar holds
-  // the folder when it holds one of its URLs or one of these.
+  // the folder when it holds one of its URLs or one of these, an alias
+  // with whatever query the webmail adds (a11y_tree.ts `atAddress`).
   aliases: string[];
   // The folder's names in the webmail's languages (LOCALE_NAMES): when
   // its URL leaves the address bar elsewhere, the folder is opened by
-  // its link of one of these names (a fallback; the URL comes first).
+  // its control of one of these names (a fallback; the URL comes first;
+  // a11y_tree.ts `folderControls`).
   names: string[];
 }
 
@@ -159,8 +162,15 @@ export interface AdapterUi {
   // order; the arrival search keeps the row whose accessible text
   // carries the run token (a11y_tree.ts `tokenRows`).
   rows: WebmailLocator[];
+  // Where rows are matched: the page, or only its message list, found
+  // by structure (a11y_tree.ts `messageList`) for an adapter whose row
+  // locators also match the page's other links (Yahoo's banner and
+  // header links, live 2026-11-13). A page with no message list has
+  // no rows.
+  rowsIn: "page" | "message-list";
   opened: {
-    // The opened message's subject (its name must carry the run token).
+    // The opened message's subject (its accessible text must carry the
+    // run token).
     subject: WebmailLocator;
     // The message body, when the webmail names it; null: the story region.
     body: WebmailLocator | null;
@@ -205,8 +215,9 @@ export interface AdapterUi {
     // A confirmation the permanent delete asks for, if any.
     confirm: WebmailLocator | null;
     // The folders whose opened message offers only the permanent delete
-    // (`permanentDelete`, no Trash step): Gmail's Spam, whose toolbar
-    // reads "Delete forever" and "Not spam" [unverified-live].
+    // (`permanentDelete`, no Trash step). None so far: Gmail's open Spam
+    // message offers "Delete", not "Delete forever" (live tree,
+    // 2026-11-13).
     permanentIn: FolderName[];
     // The folders from which the delete may itself be permanent: a
     // message deleted there that never shows up in Trash / Deleted
@@ -323,6 +334,7 @@ const GMAIL_DESKTOP: AdapterUi = {
   // A grid row ("table row" in Chrome's tree); its accessible text holds
   // the subject whether Chrome names the row from its cells or not.
   rows: [u({ role: "row" })],
+  rowsIn: "page",
   opened: {
     subject: u({ nativeRole: "heading" }),
     body: null,
@@ -355,8 +367,15 @@ const GMAIL_DESKTOP: AdapterUi = {
     },
     permanentDelete: u({ role: "button", name: "Delete forever" }),
     confirm: null,
-    permanentIn: ["spam"],
-    mayBePermanentIn: [],
+    // The open message in Spam (live tree, 2026-11-13, run
+    // a1-20261113T020457Z): its toolbar reads Back to Search Results,
+    // Archive, Report spam, Delete, Mark as unread, Move to Inbox, More
+    // email options; no "Delete forever". Its "Delete" is the delete to
+    // Trash, then the Trash list's permanent delete; whether Spam's
+    // "Delete" is itself permanent is not measured, so both are
+    // accepted.
+    permanentIn: [],
+    mayBePermanentIn: ["spam"],
   },
   dark: null,
   windowAllowance: 440,
@@ -365,12 +384,21 @@ const GMAIL_DESKTOP: AdapterUi = {
 const YAHOO_DESKTOP: AdapterUi = {
   device: "desktop",
   folders: {
-    // Its Inbox also shows at /n/folders/00_1 (live, 2026-10-31).
+    // The new Yahoo Mail's Inbox is /n/folders/00_1 (live, 2026-10-31;
+    // on 2026-11-13 a typed /d/folders/1 and /d/folders/6 both led to
+    // /n/folders/00_1?.src=ym&reason=unexpected_ymv), the old
+    // /d/folders/1 an alias. Spam's and Trash's /n/ ids are not known
+    // (none is guessed): their old URLs are tried, and where those lead
+    // elsewhere the folder is opened by its control (the look records
+    // the address it led to).
     inbox: folder(
       "Inbox",
-      ["https://mail.yahoo.com/d/folders/1"],
-      [],
       ["https://mail.yahoo.com/n/folders/00_1"],
+      [],
+      [
+        "https://mail.yahoo.com/n/folders/00_1",
+        "https://mail.yahoo.com/d/folders/1",
+      ],
       LOCALE_NAMES.inbox,
     ),
     spam: folder(
@@ -390,8 +418,11 @@ const YAHOO_DESKTOP: AdapterUi = {
   },
   list: QUIET_LIST,
   notices: [],
-  // Each message of a folder is a link to it (or an option of a list).
+  // Each message of a folder is a link to it (or an option of a list),
+  // matched only in the message list (live, 2026-11-13: the page's
+  // banner and header links are links too).
   rows: [u({ role: "link" }), u({ role: "list-item" })],
+  rowsIn: "message-list",
   opened: {
     subject: u({ nativeRole: "heading" }),
     body: null,
@@ -459,6 +490,7 @@ const OUTLOOK_DESKTOP: AdapterUi = {
   },
   notices: [],
   rows: [v({ role: "list-item" })],
+  rowsIn: "page",
   opened: {
     subject: v({ nativeRole: "heading" }),
     body: u({ name: "Message body" }),

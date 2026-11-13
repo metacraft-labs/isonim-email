@@ -31,6 +31,7 @@ import {
   CONSENT_CONTROLS,
   consentHinted,
   GMAIL_SIGNIN,
+  LOADING_SCREEN,
   MailboxCheck,
   mailboxByStructure,
   normalize,
@@ -1235,6 +1236,7 @@ describe("the mailbox by its structure, in any language", () => {
 
 describe("the check's decision, shared by the sign-in and the captures (MailboxCheck)", () => {
   const AT = "mail.yahoo.com/n/folders/00_1";
+  const OUT = "outlook.live.com/mail/0/";
   const byStructure = {
     kind: "done" as const,
     by: "structure" as const,
@@ -1291,5 +1293,87 @@ describe("the check's decision, shared by the sign-in and the captures (MailboxC
       seen: "unrecognised",
       timedOut: true,
     });
+  });
+
+  // Outlook.com's splash on a loaded host (live, 2026-11-13): the check
+  // gave up at 45 s while it still showed.
+  it("never judges the webmail's loading screen: waits, does not count its time, ends at the loading bound", () => {
+    const c = new MailboxCheck({
+      start: 0,
+      timeoutMs: 10_000,
+      settleMs: 5_000,
+      loadingTimeoutMs: 30_000,
+    });
+    const unknown = { kind: "unknown" as const };
+    assert.deepEqual(c.read(unknown, OUT, 1_000, true), { kind: "wait" });
+    // Past the 10 s budget, still loading: waits.
+    assert.deepEqual(c.read(unknown, OUT, 12_000, true), { kind: "wait" });
+    assert.deepEqual(c.loading, { readings: 2, ms: 11_000 });
+    // Drawn now, but not the mailbox: 16 s from the start, 4 s of it not
+    // loading, so within the budget.
+    assert.deepEqual(c.read(unknown, OUT, 16_000), { kind: "wait" });
+    assert.deepEqual(c.loading, { readings: 2, ms: 15_000 });
+    assert.equal(c.deadline, 25_000);
+    // Then the mailbox: signed in.
+    assert.deepEqual(c.read({ kind: "done" }, OUT, 20_000), {
+      kind: "signed-in",
+      by: "ocr",
+      signals: [],
+    });
+    // A page that never draws more: the budget plus the loading time.
+    const d = new MailboxCheck({
+      start: 0,
+      timeoutMs: 10_000,
+      settleMs: 5_000,
+      loadingTimeoutMs: 30_000,
+    });
+    d.read(unknown, OUT, 2_000, true);
+    assert.deepEqual(d.read(unknown, OUT, 8_000), { kind: "wait" });
+    const v = d.read(unknown, OUT, 16_000);
+    assert.deepEqual(v, {
+      kind: "not-signed-in",
+      reason: `the mailbox did not show within 16 s (the screen: unrecognised; ${LOADING_SCREEN} showed for 6 s of it, not counted)`,
+      seen: "unrecognised",
+      timedOut: true,
+    });
+    // The loading screen for ever: not signed in at the loading bound,
+    // naming it; never before.
+    const e = new MailboxCheck({
+      start: 0,
+      timeoutMs: 10_000,
+      settleMs: 5_000,
+      loadingTimeoutMs: 30_000,
+    });
+    for (const t of [0, 5_000, 10_000, 20_000, 29_999])
+      assert.deepEqual(e.read(unknown, OUT, t, true), { kind: "wait" }, `${t}`);
+    assert.deepEqual(e.read(unknown, OUT, 30_000, true), {
+      kind: "not-signed-in",
+      reason: `the mailbox did not show within 30 s (the screen: ${LOADING_SCREEN}, shown for 30 s of it)`,
+      seen: LOADING_SCREEN,
+      timedOut: true,
+    });
+    // A named screen's settle restarts across the loading screen.
+    const f = check();
+    const step = { kind: "step" as const, step: "password" as const };
+    f.read(step, OUT, 0);
+    f.read(unknown, OUT, 3_000, true);
+    assert.deepEqual(f.read(step, OUT, 6_000), { kind: "wait" });
+    assert.equal(f.read(step, OUT, 11_000).kind, "not-signed-in");
+    // Its bound is never below the budget, and 120 s by default.
+    const g = new MailboxCheck({
+      start: 0,
+      timeoutMs: 200_000,
+      settleMs: 5_000,
+      loadingTimeoutMs: 1_000,
+    });
+    assert.deepEqual(g.read(unknown, OUT, 150_000, true), { kind: "wait" });
+    const h = check();
+    assert.deepEqual(h.read(unknown, OUT, 119_999, true), { kind: "wait" });
+    assert.equal(h.read(unknown, OUT, 120_000, true).kind, "not-signed-in");
+    // The mailbox by its phrases is never taken for the loading screen.
+    assert.equal(
+      check().read({ kind: "done" }, OUT, 0, true).kind,
+      "signed-in",
+    );
   });
 });

@@ -86,6 +86,7 @@ import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  atAddress,
   carriesToken,
   clickTarget,
   clipText,
@@ -94,25 +95,28 @@ import {
   type Flat,
   findShowing,
   findStoryArticle,
+  flatten,
+  folderControls,
   insideRect,
   isWithin,
+  loadingScreen,
   locateStoryRegion,
   locationHost,
   matches,
   type ListState,
   mailboxSignals,
   meanLuminance,
+  messageList,
   overflowPast,
   paintMasks,
   percentDecoded,
   readList,
   rowText,
-  sameLocation,
   sameRect,
-  showing,
   storyArticleLabel,
   storyTexts,
   structureFingerprint,
+  textCarriesToken,
   touchedEdge,
   tokenNodes,
   tokenRows,
@@ -177,6 +181,7 @@ import { SIGNIN_SCREEN } from "./webmail_signin.ts";
 import {
   checkScreenName,
   classifyScreen,
+  LOADING_SCREEN,
   MailboxCheck,
   normalize,
   onMailboxAddress,
@@ -247,6 +252,10 @@ export interface HostedWebmailTimings {
   leasePollMs: number;
   // The signed-in check at lease time.
   signinCheckMs: number;
+  // Its bound while the webmail's loading screen shows (that time is not
+  // counted against signinCheckMs; webmail_signin_steps.ts
+  // `MailboxCheck`).
+  signinLoadingMs: number;
   // How long a page off the mail hosts must stay to be a lost session.
   offHostMs: number;
   // The visual settle's bound (fonts and images: never a failure).
@@ -271,6 +280,7 @@ export const DEFAULT_TIMINGS: HostedWebmailTimings = {
   leaseWaitMs: 600_000,
   leasePollMs: 1_000,
   signinCheckMs: 45_000,
+  signinLoadingMs: 120_000,
   offHostMs: 3_000,
   imageTimeoutMs: 5_000,
   stableMs: 300,
@@ -469,8 +479,6 @@ export interface ListReading {
 interface Search {
   hit: { folder: FolderName; rows: Flat[] } | null;
   unsettled: FolderName[];
-  // The longest an unsettled look read its list (0 when none).
-  waitedMs: number;
 }
 
 /** A failure's kept evidence: the last frame and the tree summary. */
@@ -997,8 +1005,9 @@ export class HostedWebmailProvider implements CaptureProvider {
   // the same readings (webmail_signin_steps.ts `MailboxCheck`: the OCR
   // text classified with the mailbox phrases first and the page's
   // structure on a mailbox address last, a structural reading held over
-  // two frames at one address, a named screen that stays 5 s), while
-  // the address bar is on a mail host. Off the mail hosts for offHostMs
+  // two frames at one address, a named screen that stays 5 s, the
+  // webmail's loading screen never judged and its time not counted, up
+  // to signinLoadingMs), while the address bar is on a mail host. Off the mail hosts for offHostMs
   // is signed out; the browser's own error page is a load failure,
   // which judges nothing. Types, clicks and presses nothing. That
   // browser and session stop before the capture's window starts; a
@@ -1055,11 +1064,12 @@ export class HostedWebmailProvider implements CaptureProvider {
                 ),
               },
             };
-      const secs = Math.round(this.t.signinCheckMs / 1000);
+      const start = Date.now();
       const check = new MailboxCheck({
-        start: Date.now(),
+        start,
         timeoutMs: this.t.signinCheckMs,
         settleMs: CHECK_SETTLE_MS,
+        loadingTimeoutMs: this.t.signinLoadingMs,
       });
       let offSince: number | null = null;
       for (;;) {
@@ -1086,8 +1096,16 @@ export class HostedWebmailProvider implements CaptureProvider {
             : classifyScreen(rule, text, snap.location, signals);
         // The mailbox only on a mail host.
         if (screen.kind === "done" && !onMail) screen = { kind: "unknown" };
+        // The webmail's loading screen, read where the structure is: on
+        // a mailbox address of a mail host, the text naming nothing.
+        const loading =
+          onBox &&
+          onMail &&
+          screen.kind === "unknown" &&
+          snap.flat.length > 0 &&
+          loadingScreen(snap.flat[0]!.node);
         const now = Date.now();
-        const v = check.read(screen, snap.location, now);
+        const v = check.read(screen, snap.location, now, loading);
         if (v.kind === "signed-in")
           return {
             signedIn: true,
@@ -1100,6 +1118,7 @@ export class HostedWebmailProvider implements CaptureProvider {
               },
               readings: check.readings,
               ms: Math.round(performance.now() - t0),
+              loading: { ...check.loading },
             },
           };
         if (host !== null && !onMail) {
@@ -1117,14 +1136,23 @@ export class HostedWebmailProvider implements CaptureProvider {
             snap.location === null
               ? "unread"
               : clipText(snap.location, 200, w.redact);
-          const named = checkScreenName(screen) ?? "unrecognised";
+          const named = loading
+            ? LOADING_SCREEN
+            : (checkScreenName(screen) ?? "unrecognised");
           const structure = onBox
             ? `structure: ${(signals ?? []).join(", ") || "none"}; the mailbox needs two of them, one the message list or the address in the title`
             : "not a mailbox address, so its structure was not read";
+          // The limit it ended at: the loading screen's bound while that
+          // showed, else the budget plus the loading screen's time.
+          const secs = Math.round(
+            (loading
+              ? Math.max(this.t.signinCheckMs, this.t.signinLoadingMs)
+              : check.deadline - start) / 1000,
+          );
           return await failed(
             onMail,
             onMail
-              ? `the inbox loaded on ${host} but the mailbox did not show within ${secs} s (the last reading: the screen ${named}, the address bar ${at}, ${structure})`
+              ? `the inbox loaded on ${host} but the mailbox did not show within ${secs} s (the last reading: the screen ${named}, the address bar ${at}, ${structure}${check.loadingNote()})`
               : `the inbox did not load within ${secs} s (the address bar: ${host ?? "unread"})`,
           );
         }
@@ -1222,6 +1250,14 @@ export class HostedWebmailProvider implements CaptureProvider {
     return best;
   }
 
+  // Where the adapter's rows are matched: the page, or its message list
+  // (`rowsIn`; false: the page shows none, so it has no rows).
+  private rowScope(snap: Snapshot, ui: AdapterUi): Flat | null | false {
+    const page = this.page(snap);
+    if (ui.rowsIn === "page") return page;
+    return messageList(snap.flat, page) ?? false;
+  }
+
   // The rows of the current list that carry the token, by the first row
   // locator that finds any (a11y_tree.ts `tokenRows`).
   private rowsOf(
@@ -1229,17 +1265,20 @@ export class HostedWebmailProvider implements CaptureProvider {
     ui: AdapterUi,
     token: string,
   ): { rows: Flat[]; locator: number | null; seen: Flat[] } {
-    return tokenRows(snap.flat, ui.rows, token, this.page(snap));
+    const scope = this.rowScope(snap, ui);
+    if (scope === false) return { rows: [], locator: null, seen: [] };
+    return tokenRows(snap.flat, ui.rows, token, scope);
   }
 
   private tokenRows(snap: Snapshot, ui: AdapterUi, token: string): Flat[] {
     return this.rowsOf(snap, ui, token).rows;
   }
 
-  // The headings (the opened subject) that carry the token.
+  // The headings (the opened subject) that carry the token in their
+  // accessible text (a11y_tree.ts `textCarriesToken`).
   private tokenHeadings(snap: Snapshot, ui: AdapterUi, token: string): Flat[] {
     return findShowing(snap.flat, ui.opened.subject).filter((f) =>
-      (f.node.name ?? "").includes(token),
+      textCarriesToken(f.node, token),
     );
   }
 
@@ -1296,9 +1335,7 @@ export class HostedWebmailProvider implements CaptureProvider {
   ): boolean {
     const loc =
       tab && location !== null ? location.replace(/\?[^#]*/, "") : location;
-    return (
-      sameLocation(loc, url) || f.aliases.some((a) => sameLocation(loc, a))
-    );
+    return atAddress(loc, url, f.aliases);
   }
 
   // After a look found no row carrying the token: reads the list until
@@ -1338,6 +1375,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         };
       const r = readList(snap.flat, {
         page: this.page(snap),
+        rowsIn: this.rowScope(snap, ui),
         rows: ui.rows,
         scope: ui.list.scope,
         loading: ui.list.loading,
@@ -1388,7 +1426,6 @@ export class HostedWebmailProvider implements CaptureProvider {
     const has = (s: Snapshot): boolean =>
       this.tokenRows(s, ui, token).length > 0;
     const unsettled: FolderName[] = [];
-    const from = looks.length;
     // A typed URL changes the address at once, but a webmail routed by
     // its fragment (Gmail) swaps the list a moment later: when the page
     // already shows a row carrying the token, the typed URL is reloaded,
@@ -1418,7 +1455,6 @@ export class HostedWebmailProvider implements CaptureProvider {
           return {
             hit: { folder: name, rows: this.tokenRows(r.snap, ui, token) },
             unsettled,
-            waitedMs: 0,
           };
         }
         const s1 = await this.settleList(
@@ -1440,7 +1476,6 @@ export class HostedWebmailProvider implements CaptureProvider {
           return {
             hit: { folder: name, rows: this.tokenRows(s1.snap, ui, token) },
             unsettled,
-            waitedMs: 0,
           };
         for (const tab of f.tabs) {
           const t = findShowing(s1.snap.flat, tab);
@@ -1485,7 +1520,6 @@ export class HostedWebmailProvider implements CaptureProvider {
             return {
               hit: { folder: name, rows: this.tokenRows(s2.snap, ui, token) },
               unsettled,
-              waitedMs: 0,
             };
           // Every tab must settle for the folder to count as read.
           if (s2.list !== null && !s2.list.settled) settledHere = false;
@@ -1520,7 +1554,6 @@ export class HostedWebmailProvider implements CaptureProvider {
               return {
                 hit: { folder: name, rows: this.tokenRows(s3.snap, ui, token) },
                 unsettled,
-                waitedMs: 0,
               };
             if (!s3.list.settled) settledHere = false;
             continue;
@@ -1530,21 +1563,17 @@ export class HostedWebmailProvider implements CaptureProvider {
       }
       if (!settledHere) unsettled.push(name);
     }
-    const waitedMs = Math.max(
-      0,
-      ...looks
-        .slice(from)
-        .filter((l) => l.list !== undefined && !l.list.settled)
-        .map((l) => l.list!.waited_ms),
-    );
-    return { hit: null, unsettled, waitedMs };
+    return { hit: null, unsettled };
   }
 
-  // The folder opened by its link: the single showing link, tree item or
-  // list item of the page whose name is one of the folder's names
-  // (`FolderSpec.names`, ignoring a count after it: "Спам 3"), clicked,
-  // then its list read as any other (its address is not checked: the
-  // webmail named the folder). Null when no single such link shows.
+  // The folder opened by its control: the single showing link, tree item
+  // or list item of the page, or button of its folder navigation, whose
+  // name is one of the folder's names (`FolderSpec.names`, ignoring a
+  // count after it, "Спам 3", or a state before it, "Избрано, Входяща
+  // поща": a11y_tree.ts `folderControls`), clicked, then its list read
+  // as any other (its address is not checked: the webmail named the
+  // folder; the look records it). Null when no single such control
+  // shows.
   private async folderByName(
     desk: WebmailDesktop,
     ui: AdapterUi,
@@ -1559,21 +1588,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     list: ListReading;
     link: string;
   } | null> {
-    const page = this.page(snap);
-    const names = f.names.map((n) => n.toLowerCase());
-    const named = snap.flat.filter((x) => {
-      if (
-        !["link", "tree-item", "list-item"].includes(x.node.role) ||
-        !showing(x.node) ||
-        (page !== null && !isWithin(x, page))
-      )
-        return false;
-      const n = (x.node.name ?? "")
-        .replace(/\s+\d+$/, "")
-        .trim()
-        .toLowerCase();
-      return names.includes(n);
-    });
+    const named = folderControls(snap.flat, this.page(snap), f.names);
     if (named.length !== 1) return null;
     const link = named[0]!;
     await desk.click(link.node.bounds!);
@@ -1607,10 +1622,26 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   // Why a search whose lists did not all settle proves nothing, for a
-  // message: how long they were read (up to listLoadMs, never past the
+  // message: per folder that did not settle, what its looks over the
+  // whole search (`looks`, every poll's) showed: its address led
+  // elsewhere every time, or how long its list was read without settling
+  // (in all, and the longest look; each up to listLoadMs, never past the
   // caller's deadline).
-  private unsettledWhy(ui: AdapterUi, s: Search): string {
-    return `${s.unsettled.map((n) => ui.folders[n].label).join(" and ")} never settled (still loading, or read differently each time, for ${Math.round(s.waitedMs / 1000)} s after the folder showed)`;
+  private unsettledWhy(ui: AdapterUi, s: Search, looks: Look[]): string {
+    const secs = (ms: number): number => Math.round(ms / 1000);
+    return s.unsettled
+      .map((n) => {
+        const label = ui.folders[n].label;
+        const mine = looks.filter(
+          (l) => l.folder === n && l.list !== undefined,
+        );
+        if (mine.length > 0 && mine.every((l) => l.list!.state === "elsewhere"))
+          return `${label} was never shown: its address led elsewhere in all ${mine.length} looks (the address bar at the last: ${mine.at(-1)!.location ?? "unread"})`;
+        const open = mine.filter((l) => !l.list!.settled);
+        const ms = open.map((l) => l.list!.waited_ms);
+        return `${label} never settled in ${open.length} of ${mine.length} looks (still loading, or read differently each time: ${secs(ms.reduce((a, b) => a + b, 0))} s of reading in all, the longest ${secs(Math.max(0, ...ms))} s)`;
+      })
+      .join("; ");
   }
 
   private async findArrival(
@@ -1666,7 +1697,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         const where = looks.filter((l) => l.token_nodes.length > 0);
         const unsettled =
           search.unsettled.length > 0
-            ? `; ${this.unsettledWhy(ui, search)} in the last look: those lists were never read as "not there"`
+            ? `; ${this.unsettledWhy(ui, search, polls.flat())}: those lists were never read as "not there"`
             : "";
         throw new DeliveryTimeout(
           `delivery failure: ${d.messageId} (sent through the Gmail API as ${d.api.id}) was not found in ${adapter.label}'s ${ui.folders.inbox.label} or ${ui.folders.spam.label} within ${Math.round(this.t.arrivalTimeoutMs / 1000)} s (${polls.length} looks)${unsettled}${any === 0 ? `; the row locators (${ui.rows.map((r) => `${describeLocator(r)}, ${r.status}`).join("; ")}) matched no row at all in the last list looked at: if that folder is not empty, the adapter no longer matches the UI` : ""}${where.length > 0 ? `; the run token was on the page outside any row (${where[0]!.token_nodes[0]}): the row locators do not recognise the list` : ""}; the provenance's search record and failure frame show what was seen`,
@@ -2171,9 +2202,20 @@ export class HostedWebmailProvider implements CaptureProvider {
     return done;
   }
 
-  // Opens the row's message: a heading must then carry the token. With
-  // `needBody` its body must be found too (the removal checks only who
-  // the message is: its body need not be recognised to delete it).
+  // Opens the row's message: a heading must then carry the token in its
+  // accessible text (`tokenHeadings`). With `needBody` its body must be
+  // found too (the removal checks only who the message is: its body need
+  // not be recognised to delete it). The wait ends only on such a
+  // heading new since the click, or at stepTimeoutMs: a webmail draws
+  // its own headings at once and the subject later (Gmail's "Labels" and
+  // its unnamed banner heading, live 2026-11-13 on a loaded host), so no
+  // other heading ends it, and a heading the page already showed (a
+  // results heading echoing the search's query, which holds the token)
+  // proves nothing about the click. Then: a heading new since the click,
+  // without the token, is another message; no heading at all is UI
+  // drift; else the one heading carrying the token that showed before
+  // the click is the message already open (a reading pane), and only
+  // the headings the page showed before is a message that did not open.
   private async open(
     adapter: WebmailAdapter,
     desk: WebmailDesktop,
@@ -2183,17 +2225,30 @@ export class HostedWebmailProvider implements CaptureProvider {
     needBody = true,
   ): Promise<void> {
     const ui = adapter.desktop;
+    // The page's headings before the click (the row's own tree).
+    let top: Flat = row;
+    while (top.parent !== null) top = top.parent;
+    const headingText = (f: Flat): string =>
+      clipText(
+        (f.node.name ?? "").trim() !== "" ? f.node.name! : rowText(f.node),
+        120,
+      );
+    const before = new Set(
+      findShowing(flatten(top.node), ui.opened.subject).map(headingText),
+    );
     await desk.click(
       clickTarget(row.node as typeof row.node & { bounds: Rect }, token),
     );
+    const isNew = (f: Flat): boolean => {
+      const t = headingText(f);
+      return t !== "" && !before.has(t);
+    };
     const r = await desk.waitFor(
-      (s) =>
-        this.tokenHeadings(s, ui, token).length > 0 ||
-        (findShowing(s.flat, ui.opened.subject).length > 0 &&
-          this.tokenRows(s, ui, token).length === 0),
+      (s) => this.tokenHeadings(s, ui, token).some(isNew),
       this.t.stepTimeoutMs,
     );
-    const carrying = this.tokenHeadings(r.snap, ui, token);
+    const all = this.tokenHeadings(r.snap, ui, token);
+    const carrying = all.filter(isNew);
     if (carrying.length === 1) return;
     this.assertOnMailHost(adapter, r.snap, a);
     if (carrying.length > 1)
@@ -2204,15 +2259,26 @@ export class HostedWebmailProvider implements CaptureProvider {
         `matched ${carrying.length} headings carrying the run token, expected exactly one`,
       );
     const shown = findShowing(r.snap.flat, ui.opened.subject);
-    if (!r.ok || shown.length === 0)
+    const secs = this.t.stepTimeoutMs / 1000;
+    const list = (fs: Flat[]): string =>
+      fs.map((f) => `'${headingText(f)}'`).join(", ");
+    const fresh = shown.filter(isNew);
+    if (fresh.length > 0)
+      throw new StepError(
+        `${adapter.label}: the opened message is not the delivered one (no heading carries the run token ${token}; shown: ${list(fresh)})`,
+      );
+    if (shown.length === 0)
       throw this.drift(
         adapter,
         "opened.subject",
         ui.opened.subject,
-        `matched no showing element carrying the run token within ${this.t.stepTimeoutMs / 1000} s`,
+        `matched no showing element carrying the run token within ${secs} s`,
       );
+    // Nothing new: the message already open before the click, when one
+    // heading carrying the token showed then and still does.
+    if (all.length === 1) return;
     throw new StepError(
-      `${adapter.label}: the opened message is not the delivered one (no heading carries the run token ${token}; shown: ${shown.map((f) => `'${f.node.name ?? ""}'`).join(", ")})`,
+      `${adapter.label}: the message did not open: no heading carries the run token ${token} and none is new since the click within ${secs} s (shown: ${list(shown)})`,
     );
   }
 
@@ -2536,7 +2602,7 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   // Deletes the message in the UI (then from Trash; or for good at once
-  // in a folder of `remove.permanentIn`, Gmail's Spam; or, where the
+  // in a folder of `remove.permanentIn`, none so far; or, where the
   // adapter allows, a delete that was permanent itself), looks for it
   // again everywhere, and records the outcome.
   private async remove(
@@ -2580,7 +2646,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         if (where.hit === null)
           throw new StepError(
             where.unsettled.length > 0
-              ? `the message could not be looked for: ${this.unsettledWhy(ui, where)}`
+              ? `the message could not be looked for: ${this.unsettledWhy(ui, where, looks)}`
               : `the message is no longer in ${ui.folders[handle.folder].label}`,
           );
         await this.open(
@@ -2672,7 +2738,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         );
       if (left.unsettled.length > 0)
         throw new StepError(
-          `the removal could not be confirmed: ${this.unsettledWhy(ui, left)}`,
+          `the removal could not be confirmed: ${this.unsettledWhy(ui, left, looks)}`,
         );
       this.cleanupRecord({
         ...record,
@@ -2737,7 +2803,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         throw new StepError(
           still.hit !== null
             ? `the delete left the message in ${from} (still there after ${secs} s)`
-            : `the delete could not be confirmed: ${this.unsettledWhy(ui, still)}`,
+            : `the delete could not be confirmed: ${this.unsettledWhy(ui, still, looks)}`,
         );
       await sleep(this.t.pollMs);
     }
@@ -2753,7 +2819,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     if (inTrash.hit === null) {
       if (inTrash.unsettled.length > 0)
         throw new StepError(
-          `the deleted message left ${from}, but ${this.unsettledWhy(ui, inTrash)}`,
+          `the deleted message left ${from}, but ${this.unsettledWhy(ui, inTrash, looks)}`,
         );
       if (ui.remove.mayBePermanentIn.includes(handle.folder))
         return "permanent";

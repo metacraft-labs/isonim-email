@@ -240,7 +240,11 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   `outlook.live.com/mail/0…`): a message list, a folder list, a compose
   button at the top left, the account's address in the window title
   (the log line says `the mailbox (by its structure: …)`, and the
-  record `verified_by: "structure"`).
+  record `verified_by: "structure"`). A webmail still showing its
+  loading screen there (Outlook.com's logo and "Microsoft" on an
+  otherwise empty page, on a busy machine) is waited for, up to 120 s,
+  and that time is not counted against `--timeout`; the log then says
+  `check: waited N s on the webmail's loading screen`.
 - **1, `FAILED (wrong-password)`**: the provider refused the password.
   The account file does not hold the account's password. Do not run the
   sign-in again until it is fixed: see
@@ -566,6 +570,9 @@ Every PNG has a JSON file beside it. For a first capture, check:
   (its layout, in any language), `signals` says which structural signals
   held, and `screen` is the check's window: the same 1280 x 900 the
   sign-in's `--check-only` uses, not the capture's own window;
+  `loading` says how many readings showed the webmail's loading screen
+  and for how long (`ms`): that time is waited out (up to 120 s) and not
+  counted against the check's 45 s;
 - `settle.settled`: false means the body's pixels never held still
   within the bound (an animation, or images still loading);
 - `scheme_applied` (Outlook.com): the toggle's state and the crop's mean
@@ -585,7 +592,14 @@ Every PNG has a JSON file beside it. For a first capture, check:
   `readings`): a look counts as "not there" only over a settled list,
   so a list still drawn as grey placeholders is waited for (up to 20 s)
   rather than taken for an empty one. Outlook.com shows its Inbox at
-  `outlook.live.com/mail/0/`, which counts as the Inbox's address;
+  `outlook.live.com/mail/0/`, which counts as the Inbox's address, and
+  the new Yahoo Mail at `mail.yahoo.com/n/folders/00_1` with any query
+  after it. Yahoo's Spam and Trash URLs now lead to its Inbox: such a
+  folder is then opened by its entry in the folder list (`how: "link"`,
+  the `url` naming the entry) and `location` shows the address it led
+  to (worth noting: those `/n/` addresses are not known yet). Yahoo's
+  `rows` are read only in its message list, never the page's other
+  links;
 - `scheme_applied` (Outlook.com): `browser` (the colour mode),
   `theme_luminance` (the subject heading's: below 128 is dark),
   `toggle` (`untouched` in light; `unchecked`, `switched` or `absent` in
@@ -621,7 +635,10 @@ done with it.
   names. When the reason says `the inbox loaded on … but the mailbox did
 not show`, the line also names the kept `session-check` screen and
   ends with the last reading: what the screen was recognised as, the
-  address bar, and the structural signals found. If `--check-only`
+  address bar, and the structural signals found. `the screen the
+webmail's loading screen` means the webmail never got past its
+  loading screen within 120 s (the machine, or the webmail, too slow);
+  the reason says how long it showed. If `--check-only`
   passes on the same profile right after, the account is signed in and
   the check is what failed: keep the frame and tree and report them. Run
   `--check-only` once in any case, because the failed check marked the
@@ -660,8 +677,21 @@ found` or `the notice … stayed`: a webmail notice the adapter knows
   element means the message was on the screen but not in anything the
   row locators recognise; `list.settled: false` (and the reason saying a
   folder "never settled") means that folder's list never finished
-  loading, so the message may well have been there. Its cleanup record
-  is `not-found`; the message may still be in the mailbox.
+  loading, so the message may well have been there. The reason names
+  each such folder with what its looks showed over the whole search:
+  `<folder> was never shown: its address led elsewhere in all N looks`
+  (the webmail sent the folder's URL elsewhere and no folder-list entry
+  of its name was found: compare the last address it names), or
+  `<folder> never settled in N of M looks (… S s of reading in all, the
+longest L s)`. Its cleanup record is `not-found`; the message may still
+  be in the mailbox.
+- `the opened message is not the delivered one (… shown: …)`: a heading
+  new since the click, but none carries the run token: another message
+  opened. A heading the page showed before the click (one echoing the
+  search's query, say) never counts as the opened subject, whatever it
+  holds. `the message did not open: … none is new since the click`:
+  the click on the row showed only the page's own headings (a slow
+  page, or the click missed). Neither deletes anything.
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
   mailbox; the line names the kept screen, and the cleanup record's
   `search` the looks that saw it. A removal's `via` says how it went:
@@ -676,9 +706,11 @@ found` or `the notice … stayed`: a webmail notice the adapter knows
   `the row is not shown in Trash (the Trash guard …)`, `a selection was
 already made in the Trash list …` or `the selection changed before …`,
   and nothing more is clicked),
-  `delete-forever` (Gmail's Spam), or `permanent` (deleted from
-  Outlook.com's Junk Email or Yahoo's Spam, and never seen in Trash:
-  the delete there was for good). Every `removed` line says
+  or `permanent` (deleted from Outlook.com's Junk Email, Yahoo's Spam
+  or Gmail's Spam, and never seen in Trash: the delete there was for
+  good). Gmail's Spam is deleted like its Inbox: the open message's
+  "Delete", then from Trash (its open Spam message has no "Delete
+  forever"). Every `removed` line says
   `permanent: true`. Sign nothing in: open the account's profile only through the
   recipes (a check with `--check-only`, or a sign-in with `--manual` over
   VNC to delete it by hand), never by starting a browser on it yourself.

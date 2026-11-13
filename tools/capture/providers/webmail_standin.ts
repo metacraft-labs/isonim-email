@@ -20,8 +20,8 @@
 //   in:spam, in:trash; no Spam or Trash unless asked; the search field
 //   holding the query), Yahoo's and Outlook.com's folders, opening a
 //   message, delete (to Trash) and delete forever (with Yahoo's and
-//   Outlook's confirmation; Gmail's Spam, as Gmail's, offers only delete
-//   forever), Outlook.com's theme following the browser's colour scheme
+//   Outlook's confirmation; Gmail's open Spam message, as live, its
+//   "Delete" moving it to Trash), Outlook.com's theme following the browser's colour scheme
 //   and, in dark only, its background toggle (unpressed: the body
 //   recoloured dark and marked data-ogsc; pressed: the body light);
 // - every page reports what it sees of the browser (`probes`:
@@ -266,15 +266,19 @@ export class StandinWebmail {
   // 1200px)"): a pane between the webmail's columns that grows with the
   // window; null: 800 px.
   paneWidth: string | null = null;
-  // Yahoo: its /n/ Inbox laid out as a mailbox only in a viewport no
-  // wider and no taller than this (otherwise a page without its folder
-  // list or compose button, its title still the account's), and its bare
-  // address landing there; null: always, the bare address landing on
-  // /d/folders/1. A page laid out by the window's size, as the live one
-  // may be: its capture session check in a 1360 x 2400 window failed
-  // where --check-only's in 1280 x 900 passed (2026-11-02, cause not
-  // seen).
+  // Yahoo: its bare address landing on the /n/ Inbox, and the page it
+  // lands on laid out as a mailbox only in a viewport no wider and no
+  // taller than this (otherwise a page without its folder list or
+  // compose button, its title still the account's); null: always, the
+  // bare address landing on /d/folders/1. A landing laid out by the
+  // window's size, as the live one may be: its capture session check in
+  // a 1360 x 2400 window failed where --check-only's in 1280 x 900
+  // passed (2026-11-02, cause not seen). Only the landing: the /n/
+  // Inbox opened by its address was a mailbox in the capture's 1360 px
+  // window (live, 2026-11-13).
   mailboxOnlyIn: { width: number; height: number } | null = null;
+  // Yahoo: the next /n/ Inbox page is a landing from the bare address.
+  private landing = false;
   // Outlook.com: how long a list is drawn as placeholders before its
   // rows (or the empty folder's notice) show.
   listLoadingMs = 0;
@@ -288,6 +292,36 @@ export class StandinWebmail {
   addresses: Record<string, string> = {};
   // Yahoo: the /d/folders/ URLs of Spam and Trash send to the Inbox.
   oldFolderUrlsGone = false;
+  // Yahoo: the new Yahoo Mail (live, 2026-11-13): every /d/folders/
+  // list URL sends to /n/folders/00_1?.src=ym&reason=unexpected_ymv;
+  // the folder list is buttons in the navigation landmark's list items,
+  // the current folder's named after a state ("Избрано, …"); an
+  // advertising banner and a header with links above the page; a
+  // toolbar's "Спам" (report spam) over the message list; a query added
+  // to a folder's address (?.src=ym) when it has none. Its Spam and
+  // Trash are /n/folders/00_6 and /n/folders/00_4 here only: the live
+  // ids are not known.
+  newUi = false;
+  // Yahoo: folders whose control the new UI's folder list leaves out.
+  hiddenFolders: StandinFolder[] = [];
+  // Outlook.com: its loading screen (an image and "Microsoft" in an
+  // otherwise empty page, live 2026-11-13) on the next this-many folder
+  // pages, for splashMs (negative: for ever) before the page shows.
+  splashLoads = 0;
+  splashMs = 0;
+  // Gmail: a "Labels" heading in its folder pane and, in Spam, "Why is
+  // this message in spam?" above the body (as the live page's);
+  // the opened subject drawn this long after the rest of the message;
+  // the subject heading named "Conversation", its text (the search's
+  // highlight splitting the run token from the rest) in its children.
+  labelsHeading = false;
+  subjectLaterMs = 0;
+  subjectNamedOther = false;
+  // Gmail: a search list's heading echoing its query (which holds the
+  // run token), a heading that is no opened message's subject.
+  queryHeading = false;
+  // Gmail: how much longer an opened message's view takes than a list's.
+  openDelayMs = 0;
 
   constructor(skin: Skin) {
     this.skin = skin;
@@ -480,8 +514,9 @@ export class StandinWebmail {
       return this.send(res, 200, "application/json", "{}");
     }
     if (url.pathname === "/api/view") {
-      if (this.viewDelayMs > 0)
-        await new Promise((r) => setTimeout(r, this.viewDelayMs));
+      const delay =
+        this.viewDelayMs + (url.searchParams.get("id") ? this.openDelayMs : 0);
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
       return this.gmailView(url, account, res);
     }
     return this.send(res, 404, "application/json", "{}");
@@ -502,6 +537,8 @@ export class StandinWebmail {
         const r = await fetch("/api/view?hash=" + encodeURIComponent(h) + (id ? "&id=" + id : ""));
         if (r.status === 401) { location.href = ${JSON.stringify(this.signinUrl())}; return; }
         document.getElementById("main").innerHTML = await r.text();
+        // What a view draws later (the opened subject on a loaded host).
+        for (const el of document.querySelectorAll("[data-later]")) setTimeout(() => { el.hidden = false; }, Number(el.dataset.later));
         for (const row of document.querySelectorAll("[data-open]")) row.addEventListener("click", () => render(row.dataset.open));
         for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", async () => {
           await fetch("/api/" + b.dataset.act + "?id=" + b.dataset.id, { method: "POST" });
@@ -559,7 +596,7 @@ export class StandinWebmail {
       200,
       "text/html",
       page(
-        `<div class="nav" role="navigation"><p>Gmail</p><p>Compose</p><p>Inbox</p></div><div class="main"><form role="search"><input name="q" aria-label="Search mail"></form><div role="main" id="main"></div></div>`,
+        `<div class="nav" role="navigation"><p>Gmail</p><p>Compose</p><p>Inbox</p>${this.labelsHeading ? "<h2>Labels</h2>" : ""}</div><div class="main"><form role="search"><input name="q" aria-label="Search mail"></form><div role="main" id="main"></div></div>`,
         script,
       ),
     );
@@ -610,13 +647,13 @@ export class StandinWebmail {
       // As Gmail's (live, 2026-10-31): the open message in Trash offers
       // "Delete" beside "Move to Inbox", under a banner, with the "Trash"
       // label chip by the subject, and that "Delete" leaves it in Trash
-      // (live, 2026-11-02); in Spam "Delete forever"; elsewhere "Delete"
-      // moves it to Trash.
+      // (live, 2026-11-02); in Spam the same toolbar, its "Delete"
+      // moving it to Trash (live tree, 2026-11-13: no "Delete forever");
+      // elsewhere "Delete" moves it to Trash.
       const trash = m.folder === "trash";
-      const del = trash
-        ? `${btn("Back to Search Results")}${btn("Archive")}${btn("Report spam")}${btn("Delete", "delete")}${btn("Mark as unread")}${btn("Move to Inbox")}${btn("More email options")}`
-        : m.folder === "spam"
-          ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
+      const del =
+        trash || m.folder === "spam"
+          ? `${btn("Back to Search Results")}${btn("Archive")}${btn("Report spam")}${btn("Delete", "delete")}${btn("Mark as unread")}${btn("Move to Inbox")}${btn("More email options")}`
           : btn("Delete", "delete");
       const chip =
         trash &&
@@ -626,15 +663,31 @@ export class StandinWebmail {
         )
           ? ` <span>Trash</span><div role="button" tabindex="0" aria-label="Search for all messages with label Trash">x</div>`
           : "";
+      // In Spam, as the live page (with labelsHeading): a heading of its
+      // own above the body, drawn with the rest.
       const banner = trash
         ? `<p>This message has been deleted. <a href="#">Restore message</a></p>`
-        : "";
-      const shown = esc(this.openedSubject ?? m.subject);
+        : m.folder === "spam" && this.labelsHeading
+          ? `<div><h3>Why is this message in spam?</h3><p>This message is similar to messages that were identified as spam in the past.</p></div>`
+          : "";
+      const subject = this.openedSubject ?? m.subject;
+      // The search's highlight splitting the run token from the rest of
+      // the subject, under another name, when asked.
+      const tok = /\[(es:[^\]]+)\]/.exec(subject);
+      const shown =
+        this.subjectNamedOther && tok !== null
+          ? `${esc(subject.slice(0, tok.index))}[<mark>${esc(tok[1]!)}</mark>]${esc(subject.slice(tok.index + tok[0].length))}`
+          : esc(subject);
+      const named = this.subjectNamedOther ? ' aria-label="Conversation"' : "";
+      const later =
+        this.subjectLaterMs > 0
+          ? ` hidden data-later="${this.subjectLaterMs}"`
+          : "";
       return this.send(
         res,
         200,
         "text/html",
-        `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP">${shown}</h2>${chip}<div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div>${banner}<div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div><div class="actions" style="margin-top:16px"><a href="#" role="link">Reply</a> <a href="#" role="link">Forward</a></div>`,
+        `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP"${named}${later}>${shown}</h2>${chip}<div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div>${banner}<div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div><div class="actions" style="margin-top:16px"><a href="#" role="link">Reply</a> <a href="#" role="link">Forward</a></div>`,
       );
     }
     // As Gmail's (live Trash search list, 2026-11-02): a check box per
@@ -679,7 +732,7 @@ export class StandinWebmail {
       res,
       200,
       "text/html",
-      `${suggest}${toolbar}<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
+      `${suggest}${this.queryHeading && q !== "" ? `<h2>Search results for ${esc(q)}</h2>` : ""}${toolbar}<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
     );
   }
 
@@ -699,11 +752,13 @@ export class StandinWebmail {
     const m1 = /^\/(d|n)\/folders\/(\w+)(?:\/messages\/([0-9a-f]+))?$/.exec(
       url.pathname,
     );
-    if (m1 === null || folders[m1[2]!] === undefined)
+    if (m1 === null || folders[m1[2]!] === undefined) {
+      this.landing = this.mailboxOnlyIn !== null && url.pathname === "/";
       return this.send(res, 302, "text/plain", "", {
         location:
           this.mailboxOnlyIn === null ? "/d/folders/1" : "/n/folders/00_1",
       });
+    }
     // The old folder URLs gone: Spam's and Trash's lists sent to the
     // Inbox (their links in the folder list still open them).
     if (
@@ -714,6 +769,11 @@ export class StandinWebmail {
     )
       return this.send(res, 302, "text/plain", "", {
         location: "/n/folders/00_1",
+      });
+    // The new Yahoo Mail: every old list URL sends to its Inbox.
+    if (this.newUi && m1[1] === "d" && m1[3] === undefined)
+      return this.send(res, 302, "text/plain", "", {
+        location: "/n/folders/00_1?.src=ym&reason=unexpected_ymv",
       });
     const base = `/${m1[1]}/folders/${m1[2]}`;
     const folder = folders[m1[2]!]!;
@@ -727,6 +787,10 @@ export class StandinWebmail {
           search: "Търсете в пощата си",
           del: "Изтриване",
           ok: "Добре",
+          selected: "Избрано",
+          navigation: "Навигация",
+          learn: "Научете още",
+          subscribe: "Абониране",
         }
       : {
           compose: "Compose",
@@ -736,13 +800,25 @@ export class StandinWebmail {
           search: "Search",
           del: "Delete",
           ok: "OK",
+          selected: "Selected",
+          navigation: "Navigation",
+          learn: "Learn more",
+          subscribe: "Subscribe",
         };
     // In Bulgarian (as the live Yahoo of 2026-10-31): a compose button
     // and the folder list as links, the account's address in the title,
     // and no English word the mailbox phrases look for.
-    const nav = bg
-      ? `<div class="nav" role="navigation"><button>${L.compose}</button><input type="search" name="p" aria-label="${L.search}"><ul><li><a href="/n/folders/00_1">${L.inbox}</a></li><li><a href="/n/folders/00_6">${L.spam}</a></li><li><a href="/n/folders/00_4">${L.trash}</a></li></ul></div>`
-      : `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
+    // The new Yahoo Mail's folder list: buttons, the current folder's
+    // named after a state.
+    const folderButton = (f: StandinFolder, id: string, label: string) =>
+      this.hiddenFolders.includes(f)
+        ? ""
+        : `<li><button onclick="location.href='/n/folders/${id}'"${f === folder ? ` aria-label="${L.selected}, ${label}"` : ""}>${label}</button></li>`;
+    const nav = this.newUi
+      ? `<div class="nav"><nav aria-label="${L.navigation}"><button>${L.compose}</button><ul>${folderButton("inbox", "00_1", L.inbox)}${folderButton("trash", "00_4", L.trash)}${folderButton("spam", "00_6", L.spam)}</ul></nav><input type="search" name="p" aria-label="${L.search}"></div>`
+      : bg
+        ? `<div class="nav" role="navigation"><button>${L.compose}</button><input type="search" name="p" aria-label="${L.search}"><ul><li><a href="/n/folders/00_1">${L.inbox}</a></li><li><a href="/n/folders/00_6">${L.spam}</a></li><li><a href="/n/folders/00_4">${L.trash}</a></li></ul></div>`
+        : `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
     const title = bg
       ? `(1 непрочетен) – ${this.addresses[account] ?? account}`
       : "Mail";
@@ -781,37 +857,43 @@ export class StandinWebmail {
         ),
       );
     }
-    // The /n/ Inbox laid out as a mailbox only in a window no larger
-    // than `mailboxOnlyIn`; in a larger one a page without the folder
-    // list or the compose button (its title still the account's).
+    // The /n/ Inbox the bare address landed on laid out as a mailbox
+    // only in a window no larger than `mailboxOnlyIn`; in a larger one a
+    // page without the folder list or the compose button (its title
+    // still the account's).
+    const landed = this.landing && m1[1] === "n" && folder === "inbox";
+    if (m1[3] === undefined) this.landing = false;
     const sized =
-      this.mailboxOnlyIn !== null && m1[1] === "n" && folder === "inbox"
+      this.mailboxOnlyIn !== null && landed
         ? `<script>if (innerWidth > ${this.mailboxOnlyIn.width} || innerHeight > ${this.mailboxOnlyIn.height}) { document.body.innerHTML = '<div class="main" role="main"><p>${bg ? "Зареждане" : "Loading"}</p></div>'; }</script>`
         : "";
     const list = this.mine(
       account,
       folder === "inbox" ? ["inbox", "other"] : folder,
     );
-    const rows = bg
-      ? `<ul aria-label="">${list
-          .map(
-            (m) =>
-              `<li><input type="checkbox" aria-label=""> <a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span>${esc(m.fromName)}</span> <span>${esc(m.subject)}</span> <span>${esc(m.preview)}</span></a></li>`,
-          )
-          .join("")}</ul>`
-      : list
-          .map(
-            (m) =>
-              `<a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a><br>`,
-          )
-          .join("");
+    // Its message list: a list whose items hold a check box and the
+    // message's link (as the live one's, in either language).
+    const rows = `<ul aria-label="">${list
+      .map(
+        (m) =>
+          `<li><input type="checkbox" aria-label=""> <a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a></li>`,
+      )
+      .join("")}</ul>`;
+    // The new Yahoo Mail's banner and header links (never rows), and a
+    // toolbar's "Spam" that reports a message as spam (never a folder).
+    const chrome = this.newUi
+      ? `<div><p>Yahoo <a href="#">${L.learn}</a></p></div><header><a href="#">Yahoo Mail</a> <a href="#">${L.subscribe}</a></header><div role="toolbar"><button onclick="fetch('/event?what=report-spam')">${L.spam}</button></div>`
+      : "";
     this.send(
       res,
       200,
       "text/html",
       page(
-        `${nav}<div class="main" role="main">${rows}</div>${sized}`,
-        "",
+        `${nav}<div class="main" role="main">${chrome}${rows}</div>${sized}`,
+        // The new Yahoo Mail adds a query to a folder's address.
+        this.newUi
+          ? `if (location.search === "") history.replaceState(null, "", location.pathname + "?.src=ym");`
+          : "",
         true,
         title,
       ),
@@ -928,16 +1010,28 @@ export class StandinWebmail {
       const list = document.getElementById("list");
       const show = () => { list.innerHTML = document.getElementById("rows").innerHTML; };
       ${loads === 0 ? "show();" : loads > 0 ? `setTimeout(show, ${loads});` : ""}`;
-    this.send(
-      res,
-      200,
-      "text/html",
-      page(
-        `${nav}<div class="main" role="main">${tabs}<div role="region" aria-label="Message list"><div id="list">${placeholders}</div></div><template id="rows">${content}</template></div>`,
-        script,
-        !this.ignoresDark,
-      ),
-    );
+    const app = `${nav}<div class="main" role="main">${tabs}<div role="region" aria-label="Message list"><div id="list">${placeholders}</div></div><template id="rows">${content}</template></div>`;
+    // Its loading screen first (the app hidden, so not in the tree): a
+    // logo and "Microsoft" as images in an otherwise empty page.
+    if (this.splashLoads > 0) {
+      this.splashLoads--;
+      const end =
+        this.splashMs < 0
+          ? ""
+          : `setTimeout(() => { document.getElementById("splash").remove(); document.getElementById("app").hidden = false; }, ${this.splashMs});`;
+      return this.send(
+        res,
+        200,
+        "text/html",
+        page(
+          `<div id="splash"><div><div role="img" aria-label="" style="position:fixed;left:45%;top:40%;width:160px;height:160px;background:#4f6bed;border-radius:24px"></div></div><div role="img" aria-label="Microsoft" style="position:fixed;left:46%;bottom:40px;width:100px;height:22px;background:#737373"></div></div><div id="app" hidden>${app}</div>`,
+          `${script}\n${end}`,
+          !this.ignoresDark,
+          "Outlook",
+        ),
+      );
+    }
+    this.send(res, 200, "text/html", page(app, script, !this.ignoresDark));
   }
 }
 

@@ -629,10 +629,18 @@ export type CheckVerdict =
       timedOut: boolean;
     };
 
+/** How long the check waits while the webmail's loading screen shows. */
+export const LOADING_TIMEOUT_MS = 120_000;
+
+/** How the check names the webmail's loading screen. */
+export const LOADING_SCREEN =
+  "the webmail's loading screen (a page showing only its logo)";
+
 /**
  * The check's decision over its readings, one call per reading (the
- * screen classified by `classifyScreen`, and the address bar's value it
- * was read with). The sign-in's check (webmail_signin.ts
+ * screen classified by `classifyScreen`, the address bar's value it was
+ * read with, and whether the page was the webmail's loading screen,
+ * a11y_tree.ts `loadingScreen`). The sign-in's check (webmail_signin.ts
  * `verifySignedIn`) and the hosted captures' session check
  * (hosted_webmail.ts) both decide with it, so the two cannot disagree on
  * the same screens:
@@ -640,36 +648,89 @@ export type CheckVerdict =
  * - the mailbox by its structure: signed in only when two readings in a
  *   row gave it at the same address (the settled-view rule; a single
  *   frame of a page that moves on to a sign-in host is not the mailbox);
+ * - the webmail's loading screen: never judged; the check waits, a
+ *   named screen's settle restarts, and the time it showed is not
+ *   counted against `timeoutMs` (Outlook.com's splash on a loaded host,
+ *   live 2026-11-13), up to `loadingTimeoutMs` from `start` (default
+ *   LOADING_TIMEOUT_MS, never below `timeoutMs`);
  * - a screen the check names (a sign-in step, a challenge, an error, an
  *   account-setup screen, a consent page) that stays for `settleMs`: not
  *   signed in, naming it;
- * - neither by `timeoutMs` after `start`: not signed in, naming the last
- *   screen it named, or "unrecognised".
+ * - neither by `timeoutMs` after `start` (plus the loading screen's
+ *   time), or by `loadingTimeoutMs`: not signed in, naming the last
+ *   screen it named, the loading screen, or "unrecognised".
  */
 export class MailboxCheck {
   readings = 0;
+  /** The readings that were the loading screen, and how long it showed. */
+  loading = { readings: 0, ms: 0 };
   private seen: { what: string; since: number } | null = null;
   // The address of the previous reading when it was the mailbox by its
   // structure (undefined: it was not).
   private structureAt: string | null | undefined = undefined;
-  private readonly deadline: number;
-  private readonly o: { start: number; timeoutMs: number; settleMs: number };
+  // When the previous reading was the loading screen (null: it was not).
+  private loadingAt: number | null = null;
+  private readonly o: {
+    start: number;
+    timeoutMs: number;
+    settleMs: number;
+    loadingTimeoutMs: number;
+  };
 
-  constructor(o: { start: number; timeoutMs: number; settleMs: number }) {
-    this.o = o;
-    this.deadline = o.start + o.timeoutMs;
+  constructor(o: {
+    start: number;
+    timeoutMs: number;
+    settleMs: number;
+    loadingTimeoutMs?: number;
+  }) {
+    this.o = {
+      ...o,
+      loadingTimeoutMs: Math.max(
+        o.timeoutMs,
+        o.loadingTimeoutMs ?? LOADING_TIMEOUT_MS,
+      ),
+    };
+  }
+
+  /** When the check gives up now: its budget plus the loading screen's
+   * time, never past the loading bound. */
+  get deadline(): number {
+    return Math.min(
+      this.o.start + this.o.loadingTimeoutMs,
+      this.o.start + this.o.timeoutMs + this.loading.ms,
+    );
   }
 
   read(
     screen: Screen,
     location: string | null | undefined,
     now: number,
+    loading = false,
   ): CheckVerdict {
     this.readings++;
+    // The loading screen's time: from a reading of it to the next one.
+    if (this.loadingAt !== null) this.loading.ms += now - this.loadingAt;
+    this.loadingAt = null;
+    const isLoading = loading && screen.kind !== "done";
+    if (isLoading) {
+      this.loading.readings++;
+      this.loadingAt = now;
+      this.seen = null;
+      this.structureAt = undefined;
+      if (now >= this.o.start + this.o.loadingTimeoutMs)
+        return {
+          kind: "not-signed-in",
+          reason: `the mailbox did not show within ${Math.round(this.o.loadingTimeoutMs / 1000)} s (the screen: ${LOADING_SCREEN}, shown for ${Math.round(this.loading.ms / 1000)} s of it)`,
+          seen: LOADING_SCREEN,
+          timedOut: true,
+        };
+      return { kind: "wait" };
+    }
+    const deadline = this.deadline;
     const byStructure = screen.kind === "done" && screen.by === "structure";
     const held = byStructure && this.structureAt === location;
     this.structureAt = byStructure ? location : undefined;
-    if (byStructure && !held && now < this.deadline) return { kind: "wait" };
+    if (byStructure && !held && now < deadline) return { kind: "wait" };
     if (screen.kind === "done" && (!byStructure || held))
       return {
         kind: "signed-in",
@@ -692,16 +753,24 @@ export class MailboxCheck {
         seen: cur.what,
         timedOut: false,
       };
-    if (now >= this.deadline) {
+    if (now >= deadline) {
       const seen = cur === null ? "unrecognised" : cur.what;
       return {
         kind: "not-signed-in",
-        reason: `the mailbox did not show within ${Math.round(this.o.timeoutMs / 1000)} s (the screen: ${seen})`,
+        reason: `the mailbox did not show within ${Math.round((deadline - this.o.start) / 1000)} s (the screen: ${seen}${this.loadingNote()})`,
         seen,
         timedOut: true,
       };
     }
     return { kind: "wait" };
+  }
+
+  /** What the reason adds when the loading screen showed: its time, not
+   * counted. */
+  loadingNote(): string {
+    return this.loading.readings === 0
+      ? ""
+      : `; ${LOADING_SCREEN} showed for ${Math.round(this.loading.ms / 1000)} s of it, not counted`;
   }
 }
 
@@ -982,7 +1051,8 @@ export const YAHOO_SIGNIN: ProviderSignin = {
   consent: YAHOO_CONSENT,
   done: { all: ["compose", "inbox"] },
   // Measured 2026-10-31: a signed-in profile's Inbox at
-  // mail.yahoo.com/n/folders/00_1 (the capture adapter's are /d/folders/).
+  // mail.yahoo.com/n/folders/00_1 (the capture adapter's Inbox too, since
+  // 2026-11-13; its Spam and Trash URLs are still the old /d/folders/).
   mailbox: { hosts: ["mail.yahoo.com"], paths: ["/n/", "/d/"] },
   // Measured 2026-10-28: the address screen reads "Sign in to Yahoo
   // Mail", "Username, email or phone number", "Stay signed in", "Next"

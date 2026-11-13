@@ -86,6 +86,20 @@
 //   whose old URL sends elsewhere is opened by its link named in the
 //   locale table, and the delete and its confirmation are found by their
 //   Bulgarian names.
+// - Yahoo's new UI: its Inbox at /n/folders/00_1 with the query it adds
+//   is the Inbox; Spam and Trash, whose old URLs lead there, are opened
+//   by their folder-list buttons (one named after a state), never by
+//   the toolbar's "Spam"; rows are read only in the message list, never
+//   the banner's or header's links; a folder never shown is named so,
+//   with its looks counted over every poll of the search.
+// - Outlook.com's loading screen: the session check waits on it without
+//   counting its time and records the wait; shown for ever, the check
+//   fails at its loading bound naming it.
+// - Gmail's Spam as live: the token search in Spam finds the message,
+//   its subject drawn seconds after the page's own headings ("Labels",
+//   "Why is this message in spam?") and named otherwise, the token in its
+//   children, is recognised; it is captured, then deleted with the open
+//   message's "Delete" to Trash and for good from the Trash list.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails need a real account signed in and the Gmail API sends
@@ -857,10 +871,47 @@ describe("the hosted-webmail capture procedure", () => {
         .map((c) => c.state)
         .sort();
       assert.deepEqual(states, ["not-found", "removed"]);
-      // Gmail's Spam offers only the permanent delete: no Trash step.
+      // Gmail's open Spam message offers "Delete" (live tree,
+      // 2026-11-13): to Trash, then for good from the Trash list.
       const removed = cleanup(w).find((c) => c.state === "removed")!;
       assert.equal(removed.folder, "spam");
-      assert.equal(removed.via, "delete-forever");
+      assert.equal(removed.via, "trash");
+      assert.equal(removed.permanent, true);
+      assert.equal(gm.destroyed.length, 1);
+      assert.deepEqual(gm.messages, []);
+    } finally {
+      await w.stop();
+    }
+  });
+});
+
+describe("hosted-webmail: Gmail's Spam as live", () => {
+  it("Gmail's Spam as live (2026-11-13): found by the in:spam token search, its subject drawn after the page's own headings and named otherwise, the token in its children; captured, then deleted to Trash and for good from the Trash list", async () => {
+    const w = await world("gmail-spam-live", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.filing = () => "spam";
+      gm.rewriteMessageId = true;
+      gm.labelsHeading = true;
+      gm.subjectLaterMs = 4_000;
+      gm.subjectNamedOther = true;
+      const m = mimeArticle("spamlive");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "gmail-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(prov(r).arrival.folder, "spam");
+      const hit = (prov(r).arrival.looks as Record<string, any>[]).at(-1)!;
+      assert.match(hit.url, /in%3Aspam\+%22/);
+      assert.equal(hit.token_rows, 1);
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.folder, c.via, c.permanent]),
+        [["removed", "spam", "trash", true]],
+      );
       assert.equal(gm.destroyed.length, 1);
       assert.deepEqual(gm.messages, []);
     } finally {
@@ -994,6 +1045,40 @@ describe("hosted-webmail session loss and UI drift", () => {
         cleanup(w).map((c) => c.state),
         ["failed"],
       );
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("a heading the list already showed carrying the run token (its query echoed) never passes another message as the delivered one", async () => {
+    const w = await world("echo", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.queryHeading = true;
+      // Found by the run token's search, so the query holds the token.
+      gm.rewriteMessageId = true;
+      // The opened view comes 5 s after the click, the list's heading
+      // still showing meanwhile; the message opened is another.
+      gm.openDelayMs = 5_000;
+      gm.openedSubject = "Another message";
+      const m = mime("echo");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "gmail-web")],
+        [message("s", m)],
+      );
+      assert.equal(results[0]!.status, "failed");
+      assert.equal(results[0]!.png, undefined);
+      assert.match(
+        results[0]!.reason!,
+        /the opened message is not the delivered one \(no heading carries the run token \[es:t1:[0-9a-f]{8}\]; shown: 'Another message'\)/,
+      );
+      assert.deepEqual(
+        gm.messages.map((x) => x.folder),
+        ["inbox"],
+      );
+      assert.deepEqual(gm.destroyed, []);
     } finally {
       await w.stop();
     }
@@ -1761,8 +1846,12 @@ describe("hosted-webmail variants", () => {
       assert.equal(f.status, "failed");
       assert.match(
         f.reason!,
-        /^delivery failure: .* was not found in Outlook\.com's Inbox or Junk Email within 20 s \(1 looks\); Junk Email never settled \(still loading, or read differently each time, for \d+ s after the folder showed\) in the last look: those lists were never read as "not there"/,
+        /^delivery failure: .* was not found in Outlook\.com's Inbox or Junk Email within 20 s \(1 looks\); Junk Email never settled in 1 of 1 looks \(still loading, or read differently each time: \d+ s of reading in all, the longest \d+ s\): those lists were never read as "not there"/,
       );
+      // The time it was read, not the last look's remainder.
+      const [, all, longest] =
+        /(\d+) s of reading in all, the longest (\d+) s/.exec(f.reason!)!;
+      assert.ok(Number(all) >= 1 && Number(all) >= Number(longest), f.reason);
       // The whole capture, browser start and cleanup included, well short
       // of the ten minutes one look could otherwise wait.
       assert.ok(Date.now() - t0 < 180_000, `${Date.now() - t0} ms`);
@@ -1818,6 +1907,159 @@ describe("hosted-webmail variants", () => {
       // The account's address, in the title, is in no record.
       assert.doesNotMatch(JSON.stringify(prov(r)), /@receiver\.invalid/);
       assert.doesNotMatch(JSON.stringify(cleanup(w)), /@receiver\.invalid/);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Yahoo's new UI (live 2026-11-13): its Inbox at /n/folders/00_1 with any query, Spam and Trash opened by their folder buttons when their URLs lead to the Inbox, rows only in the message list; a folder never shown is said so over the whole search", async () => {
+    const w = await world("yahoo-new", { only: ["yahoo"] });
+    try {
+      const y = w.webmails.yahoo;
+      y.lang = "bg";
+      y.addresses = { qa1: QA.yahoo[0]! };
+      y.newUi = true;
+      y.filing = ({ subject }) =>
+        subject.includes("withheld") ? "withhold" : "spam";
+      const roomy = { timings: { arrivalTimeoutMs: 40_000 } };
+      const m = mime("newui");
+      const results = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("s", m, "yahoo-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(prov(r).arrival.folder, "spam");
+      const looks = prov(r).arrival.looks as Record<string, any>[];
+      // The Inbox: its /n/ address, with the query the new UI adds, is it.
+      const inbox = looks.filter((l) => l.folder === "inbox");
+      assert.ok(inbox.length >= 1, JSON.stringify(looks));
+      for (const l of inbox) {
+        assert.match(l.location, /\/n\/folders\/00_1\?\.src=ym/);
+        assert.equal(l.location_matched, true, JSON.stringify(l));
+        // Rows only in the message list: never the banner's or header's
+        // links.
+        for (const row of l.rows)
+          assert.doesNotMatch(
+            row,
+            /^(Научете още|Yahoo Mail|Абониране)$/,
+            JSON.stringify(l),
+          );
+      }
+      // Spam's old URL led to the Inbox; its folder button opened it.
+      const away = looks.find((l) => l.folder === "spam" && l.how === "typed")!;
+      assert.equal(away.list.state, "elsewhere", JSON.stringify(looks));
+      assert.match(away.location, /\/n\/folders\/00_1\?\.src=ym/);
+      const hit = looks.at(-1)!;
+      assert.equal(hit.how, "link");
+      assert.match(hit.url, /\(link Спам\)$/);
+      assert.equal(hit.token_rows, 1);
+      // The address the button led to is recorded.
+      assert.match(hit.location, /\/n\/folders\/00_6(\?\.src=ym)?$/);
+      // Deleted, then for good from Trash, opened by its button too; the
+      // toolbar's "Спам" never clicked.
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+      assert.equal(y.destroyed.length, 1);
+      assert.deepEqual(y.messages, []);
+      assert.ok(!y.events.includes("report-spam"), y.events.join(","));
+
+      // Spam's button missing too: Spam is never shown, and the failure
+      // says so with its looks over the whole search.
+      y.hiddenFolders = ["spam"];
+      const n = mime("withheld");
+      const failed = await captureAll(
+        w.provider({ timings: { arrivalTimeoutMs: 30_000 } }),
+        w,
+        [req("n", n, "yahoo-web")],
+        [message("n", n)],
+        "t2",
+      );
+      const f = failed[0]!;
+      assert.equal(f.status, "failed");
+      const spam = (prov(f).search as Record<string, any>[]).filter(
+        (l) => l.folder === "spam",
+      );
+      const polls = /within 30 s \((\d+) looks\)/.exec(f.reason!);
+      assert.ok(polls !== null, f.reason);
+      // More than one poll, so that the count tells all from the last.
+      assert.ok(Number(polls![1]) >= 2, f.reason);
+      assert.match(
+        f.reason!,
+        /; Spam was never shown: its address led elsewhere in all (\d+) looks \(the address bar at the last: 127\.0\.0\.1:\d+\/n\/folders\/00_1\?\.src=ym&reason=unexpected_ymv\): those lists were never read as "not there"/,
+      );
+      // Every poll's Spam look counted, not only the last poll's.
+      const counted = Number(
+        /Spam was never shown: its address led elsewhere in all (\d+) looks/.exec(
+          f.reason!,
+        )![1],
+      );
+      assert.equal(counted, Number(polls![1]), f.reason);
+      // The search record keeps the last two polls at most.
+      assert.ok(spam.length >= 1);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Outlook.com's loading screen: the session check waits on it, its time not counted, and records the wait; shown for ever, the check fails at the loading bound naming it", async () => {
+    const w = await world("outlook-splash", { only: ["outlook-com"] });
+    try {
+      const ol = w.webmails["outlook-com"];
+      // Longer than the check's budget: only its time not being counted
+      // lets the check pass.
+      ol.splashLoads = 1;
+      ol.splashMs = 15_000;
+      const m = mime("splash");
+      const results = await captureAll(
+        w.provider({
+          timings: { signinCheckMs: 8_000, signinLoadingMs: 60_000 },
+        }),
+        w,
+        [req("s", m, "outlook-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      const sc = prov(r).session_check;
+      assert.ok(sc.loading.readings >= 1, JSON.stringify(sc));
+      assert.ok(sc.loading.ms >= 5_000, JSON.stringify(sc));
+      assert.ok(sc.ms >= 15_000, JSON.stringify(sc));
+      assert.equal(ol.splashLoads, 0, "the check's page was the splash");
+
+      // For ever: the check ends at the loading bound, not the budget,
+      // naming the loading screen; the screen kept.
+      ol.splashLoads = 1;
+      ol.splashMs = -1;
+      const n = mime("splash-forever");
+      const t0 = Date.now();
+      const failed = await captureAll(
+        w.provider({
+          timings: { signinCheckMs: 4_000, signinLoadingMs: 20_000 },
+        }),
+        w,
+        [req("n", n, "outlook-web")],
+        [message("n", n)],
+        "t2",
+      );
+      const f = failed[0]!;
+      assert.equal(f.status, "failed");
+      assert.match(
+        f.reason!,
+        /session lost: outlook-com\/qa1 is not signed in any more \(the inbox loaded on 127\.0\.0\.1:\d+ but the mailbox did not show within 20 s \(the last reading: the screen the webmail's loading screen \(a page showing only its logo\), the address bar 127\.0\.0\.1:\d+\/mail\/0\/?, structure: none; the mailbox needs two of them, one the message list or the address in the title; the webmail's loading screen \(a page showing only its logo\) showed for \d+ s of it, not counted\)\)/,
+      );
+      assert.ok(Date.now() - t0 >= 20_000, `${Date.now() - t0} ms`);
+      const sum = evidence(w, prov(f).failure, 900);
+      assert.equal(sum.step, "session-check");
+      assert.equal(
+        w.api.sent.filter((x) => x.raw.includes("splash-forever")).length,
+        0,
+        "nothing delivered",
+      );
     } finally {
       await w.stop();
     }

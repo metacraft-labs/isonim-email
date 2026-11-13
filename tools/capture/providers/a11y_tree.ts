@@ -200,6 +200,21 @@ export function sameLocation(value: string | null, url: string): boolean {
   return strip(value) === strip(url);
 }
 
+/**
+ * Whether the address bar holds a folder at `url` or at one of its
+ * `aliases`: the URL compared whole (`sameLocation`), an alias whatever
+ * query the address bar adds to it (Yahoo's `?.src=ym&reason=…`).
+ */
+export function atAddress(
+  value: string | null,
+  url: string,
+  aliases: readonly string[],
+): boolean {
+  if (sameLocation(value, url)) return true;
+  const bare = value === null ? null : value.replace(/\?[^#]*/, "");
+  return aliases.some((a) => sameLocation(value, a) || sameLocation(bare, a));
+}
+
 // ---------------------------------------------------------------------------
 // The story's own text, and where it is in the tree
 // ---------------------------------------------------------------------------
@@ -512,6 +527,57 @@ const LIST_NATIVE = new Set(["list box", "table", "tree table", "grid"]);
 const ROW_ROLES = new Set(["list-item", "row", "tree-item"]);
 const NAV_ITEMS = new Set(["link", "tree-item", "list-item"]);
 
+/** The largest showing `document web` node: the page (null: none). */
+export function pageOf(flat: Flat[]): Flat | null {
+  let page: Flat | null = null;
+  let area = -1;
+  for (const f of findShowing(flat, { nativeRole: "document web" })) {
+    const b = f.node.bounds!;
+    if (b[2] * b[3] > area) {
+      area = b[2] * b[3];
+      page = f;
+    }
+  }
+  return page;
+}
+
+/** How many showing nodes inside `f` (not `f`) have one of `roles`. */
+function countIn(flat: Flat[], f: Flat, roles: Set<string>): number {
+  return subtree(flat, f).filter(
+    (x) => x !== f && roles.has(x.node.role) && showing(x.node),
+  ).length;
+}
+
+/**
+ * The page's message list, by its structure (whatever language the
+ * page is in): the first showing list box, table or grid holding a
+ * showing row, or plain list or tree whose showing items hold a check
+ * box (a mailbox's rows carry one to select them; a menu or a page's
+ * link list does not). `page` null: the whole tree. Null when there is
+ * none (an empty folder).
+ */
+export function messageList(flat: Flat[], page: Flat | null): Flat | null {
+  const inPage = page === null ? flat : subtree(flat, page);
+  const box = new Set(["checkbox"]);
+  const rowsWithBox = (f: Flat): number =>
+    subtree(flat, f).filter(
+      (x) =>
+        x !== f &&
+        ROW_ROLES.has(x.node.role) &&
+        showing(x.node) &&
+        countIn(flat, x, box) > 0,
+    ).length;
+  return (
+    inPage.find(
+      (f) =>
+        showing(f.node) &&
+        (LIST_NATIVE.has(f.node.nativeRole) || f.node.role === "table"
+          ? countIn(flat, f, ROW_ROLES) > 0
+          : LIST_ROLES.has(f.node.role) && rowsWithBox(f) > 0),
+    ) ?? null
+  );
+}
+
 /**
  * The structural signals of a mailbox in the tree a call returned, none
  * of them by an element's name, so they hold in any language:
@@ -535,37 +601,12 @@ export function mailboxSignals(
   address: string | null,
 ): MailboxSignal[] {
   const flat = flatten(root);
-  let page: Flat | null = null;
-  let area = -1;
-  for (const f of findShowing(flat, { nativeRole: "document web" })) {
-    const b = f.node.bounds!;
-    if (b[2] * b[3] > area) {
-      area = b[2] * b[3];
-      page = f;
-    }
-  }
+  const page = pageOf(flat);
   const inPage = page === null ? flat : subtree(flat, page);
   const out: MailboxSignal[] = [];
   const count = (f: Flat, roles: Set<string>): number =>
-    subtree(flat, f).filter(
-      (x) => x !== f && roles.has(x.node.role) && showing(x.node),
-    ).length;
-  const rowsWithBox = (f: Flat): number =>
-    subtree(flat, f).filter(
-      (x) =>
-        x !== f &&
-        ROW_ROLES.has(x.node.role) &&
-        showing(x.node) &&
-        count(x, new Set(["checkbox"])) > 0,
-    ).length;
-  const list =
-    inPage.find(
-      (f) =>
-        showing(f.node) &&
-        (LIST_NATIVE.has(f.node.nativeRole) || f.node.role === "table"
-          ? count(f, ROW_ROLES) > 0
-          : LIST_ROLES.has(f.node.role) && rowsWithBox(f) > 0),
-    ) ?? null;
+    countIn(flat, f, roles);
+  const list = messageList(flat, page);
   if (list !== null) out.push("message-list");
   const apart = (f: Flat): boolean =>
     list === null || (!isWithin(f, list) && !isWithin(list, f));
@@ -623,12 +664,15 @@ export type ListState = "rows" | "empty" | "quiet" | "loading";
  * placeholders, which are not in the tree) and `quiet` for one that
  * declares none. The scope is the `scope` locator's single showing match,
  * or the page. `key` is the reading's identity: two equal keys in a row
- * are a settled list.
+ * are a settled list. Rows are matched inside `rowsIn` when it is given
+ * (an adapter's message list; false: the page has none, so no rows),
+ * else inside the page.
  */
 export function readList(
   flat: Flat[],
   o: {
     page: Flat | null;
+    rowsIn?: Flat | null | false;
     rows: A11yLocator[];
     scope: A11yLocator | null;
     loading: A11yLocator[];
@@ -638,7 +682,11 @@ export function readList(
   const scoped = o.scope === null ? [] : findShowing(flat, o.scope, o.page);
   const scope = scoped.length === 1 ? scoped[0]! : o.page;
   const where = scoped.length === 1 ? "list" : "page";
-  const seen = tokenRows(flat, o.rows, "", o.page).seen;
+  const seen =
+    o.rowsIn === false
+      ? []
+      : tokenRows(flat, o.rows, "", o.rowsIn === undefined ? o.page : o.rowsIn)
+          .seen;
   const key = (state: ListState): string =>
     `${state}:${seen.map((f) => rowText(f.node)).join("\u0001")}`;
   const shows = (locs: A11yLocator[]): boolean =>
@@ -663,6 +711,139 @@ export function tokenNodes(flat: Flat[], token: string): Flat[] {
       !EDITABLE_ROLES.has(f.node.role) &&
       (carriesToken(f.node.name ?? "", token) ||
         carriesToken(f.node.text ?? "", token)),
+  );
+}
+
+/**
+ * Whether a heading (or any node) carries `token` in its accessible
+ * text: its own name, or the names and text of the nodes inside it
+ * (`rowText`), normalized (`carriesToken`). A search that highlights the
+ * token splits a subject's text over several children; a heading named
+ * otherwise still holds it in them.
+ */
+export function textCarriesToken(node: GaNode, token: string): boolean {
+  return (
+    carriesToken(node.name ?? "", token) || carriesToken(rowText(node), token)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The webmail's loading screen
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the page is a webmail's loading screen (Outlook.com's, live
+ * 2026-11-13: an envelope logo and "Microsoft", in a page of unnamed
+ * sections and one image): a page (the largest showing `document web`)
+ * whose showing nodes are all generic containers without a name or
+ * text (U+FFFC, Chrome's mark for an embedded child, is no text; never a
+ * landmark) or images, none of them at all being a page
+ * not yet drawn. No list, link, button, heading, field or text: a
+ * mailbox, a sign-in page or an error page always has one of those.
+ * False when there is no page.
+ */
+export function loadingScreen(root: GaNode): boolean {
+  const flat = flatten(root);
+  const page = pageOf(flat);
+  if (page === null) return false;
+  // A container's text holds U+FFFC for each embedded child: no text.
+  const blank = (t: string | null | undefined): boolean =>
+    (t ?? "").replace(/\uFFFC/g, "").trim() === "";
+  return subtree(flat, page).every(
+    (f) =>
+      f === page ||
+      !showing(f.node) ||
+      f.node.role === "image" ||
+      (f.node.role === "group" &&
+        f.node.nativeRole !== "landmark" &&
+        blank(f.node.name) &&
+        blank(f.node.text)),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A folder's control, by its name
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a control's accessible name is one of `names` (any case): as
+ * it is, without a trailing count ("Спам 3"), or as the part after its
+ * last ", " (a state named before it: Yahoo's "Избрано, Входяща поща",
+ * "Selected, Inbox").
+ */
+export function controlNamed(name: string, names: readonly string[]): boolean {
+  const want = names.map((n) => n.toLowerCase());
+  const n = name
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s+\d+$/, "")
+    .toLowerCase();
+  if (want.includes(n)) return true;
+  const i = n.lastIndexOf(", ");
+  return i >= 0 && want.includes(n.slice(i + 2).trim());
+}
+
+const FOLDER_ITEMS = new Set(["link", "tree-item", "list-item"]);
+
+// Containers whose buttons act on a message or offer a choice, never
+// open a folder: a toolbar's "Spam" reports the selected or open
+// message as spam, a "Move to" menu or dialog lists the folders' names.
+const ACTION_ROLES = new Set(["toolbar", "menu", "menu-bar", "dialog"]);
+const ACTION_NATIVE = new Set([
+  "tool bar",
+  "menu",
+  "menu bar",
+  "popup menu",
+  "dialog",
+  "alert",
+]);
+
+/**
+ * The page's showing controls named as a folder (`controlNamed`): a
+ * link, tree item or list item, or a button inside the folder
+ * navigation: a navigation landmark, list or tree of the page that holds
+ * no check box (a message list's rows carry one), neither holding nor
+ * inside the message list, with at least three showing links, tree
+ * items or list items (the `folder-navigation` signal's). Never a
+ * control with a toolbar, menu or dialog anywhere between it and the
+ * page, however the toolbar lays its buttons out (a list of them
+ * included): a toolbar's "Spam" reports a message as spam. The new
+ * Yahoo Mail's folders are such buttons (live, 2026-11-13).
+ */
+export function folderControls(
+  flat: Flat[],
+  page: Flat | null,
+  names: readonly string[],
+): Flat[] {
+  const inPage = page === null ? flat : subtree(flat, page);
+  const box = new Set(["checkbox"]);
+  const list = messageList(flat, page);
+  const acting = (f: Flat): boolean => {
+    for (let a = f.parent; a !== null && a !== page; a = a.parent)
+      if (ACTION_ROLES.has(a.node.role) || ACTION_NATIVE.has(a.node.nativeRole))
+        return true;
+    return false;
+  };
+  const inNavigation = (f: Flat): boolean => {
+    for (let a = f.parent; a !== null && a !== page; a = a.parent)
+      if (
+        (a.node.nativeRole === "landmark" ||
+          LIST_ROLES.has(a.node.role) ||
+          LIST_NATIVE.has(a.node.nativeRole)) &&
+        countIn(flat, a, box) === 0 &&
+        (list === null || (!isWithin(a, list) && !isWithin(list, a))) &&
+        countIn(flat, a, NAV_ITEMS) >= 3
+      )
+        return true;
+    return false;
+  };
+  return inPage.filter(
+    (f) =>
+      showing(f.node) &&
+      (FOLDER_ITEMS.has(f.node.role) ||
+        (f.node.role === "button" && inNavigation(f))) &&
+      !acting(f) &&
+      controlNamed(f.node.name ?? "", names),
   );
 }
 

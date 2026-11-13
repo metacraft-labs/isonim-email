@@ -79,7 +79,7 @@ import {
   type Rect,
   type Secret,
 } from "./guiassert.ts";
-import { mailboxSignals } from "./a11y_tree.ts";
+import { loadingScreen, mailboxSignals } from "./a11y_tree.ts";
 import { AUTOMATION_SWITCHES, sessionSwitches } from "./webmail_browser.ts";
 import {
   type ChallengeKind,
@@ -412,7 +412,9 @@ async function locationFor(
  * `mailboxSignals`, `address` the account's, matched in the window's
  * title and never logged), so a mailbox shown in another language is
  * recognised. The location returned is the one the screen was read with
- * (the settled-view rule compares it).
+ * (the settled-view rule compares it). `loading`: the same tree showed
+ * the webmail's loading screen (a11y_tree.ts `loadingScreen`; the check
+ * never judges it, webmail_signin_steps.ts `MailboxCheck`).
  */
 async function classifyFrame(
   p: ProviderSignin,
@@ -421,21 +423,28 @@ async function classifyFrame(
   text: string,
   location: string | null | undefined,
   address: string | null,
-): Promise<{ screen: Screen; location: string | null | undefined }> {
+): Promise<{
+  screen: Screen;
+  location: string | null | undefined;
+  loading: boolean;
+}> {
   const screen = classifyScreen(p, text, location);
   if (
     screen.kind !== "unknown" ||
     p.mailbox === undefined ||
     browserPid === undefined
   )
-    return { screen, location };
+    return { screen, location, loading: false };
   const loc =
     location === undefined ? await readLocation(ga, browserPid) : location;
-  if (!onMailboxAddress(p, loc)) return { screen, location: loc };
+  if (!onMailboxAddress(p, loc))
+    return { screen, location: loc, loading: false };
   const tree = await ga.tree(browserPid, 20_000);
+  const read = classifyScreen(p, text, loc, mailboxSignals(tree.root, address));
   return {
-    screen: classifyScreen(p, text, loc, mailboxSignals(tree.root, address)),
+    screen: read,
     location: loc,
+    loading: read.kind === "unknown" && loadingScreen(tree.root),
   };
 }
 
@@ -1277,6 +1286,12 @@ export interface VerifyContext extends ScreenReader {
   address?: string;
   /** How long the mailbox may take to show. */
   timeoutMs: number;
+  /**
+   * The bound while the webmail's loading screen shows (its time is not
+   * counted against `timeoutMs`); default LOADING_TIMEOUT_MS, never
+   * below `timeoutMs`.
+   */
+  loadingTimeoutMs?: number;
   /** How long a sign-in, challenge or error screen must stay to count. */
   settleMs: number;
   pollMs: number;
@@ -1311,8 +1326,11 @@ export type VerifyOutcome =
  *   challenge, an error, an account-setup screen or a privacy-consent
  *   page (never answered here) that stays for `settleMs`: not signed in,
  *   naming the screen;
+ * - the webmail's loading screen (a page showing only its logo, on a
+ *   mailbox address): never judged, waited on, its time not counted
+ *   against `timeoutMs`, up to `loadingTimeoutMs`;
  * - neither within `timeoutMs`: not signed in, naming the last screen
- *   it recognised, or "unrecognised";
+ *   it recognised, the loading screen, or "unrecognised";
  * - a frame showing the password: not signed in (it never should here).
  * Not signed in (but for the password), the screen is kept at `keepPath`
  * through the guard; signed in, an older one there is removed. The
@@ -1326,6 +1344,9 @@ export async function verifySignedIn(
     start: Date.now(),
     timeoutMs: ctx.timeoutMs,
     settleMs: ctx.settleMs,
+    ...(ctx.loadingTimeoutMs === undefined
+      ? {}
+      : { loadingTimeoutMs: ctx.loadingTimeoutMs }),
   });
   // Not signed in: the screen kept first (while the browser still shows it).
   const notSignedIn = async (
@@ -1349,7 +1370,7 @@ export async function verifySignedIn(
         "the password, legible",
         false,
       );
-    const { screen, location } = await classifyFrame(
+    const { screen, location, loading } = await classifyFrame(
       ctx.provider,
       ctx.ga,
       ctx.browserPid,
@@ -1357,8 +1378,12 @@ export async function verifySignedIn(
       await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
       ctx.address ?? null,
     );
-    const v = check.read(screen, location, Date.now());
+    const v = check.read(screen, location, Date.now(), loading);
     if (v.kind === "signed-in") {
+      if (check.loading.readings > 0)
+        ctx.log(
+          `check: waited ${Math.round(check.loading.ms / 1000)} s on the webmail's loading screen (${check.loading.readings} readings), not counted against the ${Math.round(ctx.timeoutMs / 1000)} s`,
+        );
       ctx.log(`check: the mailbox shows${mailboxEvidence(screen)}`);
       if (ctx.keepPath !== undefined) rmSync(ctx.keepPath, { force: true });
       return v.by === "structure"

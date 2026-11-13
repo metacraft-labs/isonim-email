@@ -2182,6 +2182,101 @@ describe("the automated sign-in procedure", () => {
     noInput(h5.log());
   });
 
+  // Outlook.com's loading screen as the live tree showed it (2026-11-13):
+  // a page of unnamed sections and the image "Microsoft".
+  const OUTLOOK_AT = "outlook.live.com/mail/0/";
+  const splash = (moveOn?: { frames: number; next: string }) => ({
+    text: "Microsoft",
+    location: OUTLOOK_AT,
+    tree: [
+      tn(
+        "window",
+        "frame",
+        "Outlook - Google Chrome",
+        [0, 0, 1280, 900],
+        [
+          tn(
+            "group",
+            "document web",
+            "Outlook",
+            [4, 87, 1271, 808],
+            [
+              tn(
+                "group",
+                "section",
+                "",
+                [439, 291, 401, 400],
+                [tn("group", "section", "", [567, 372, 145, 219])],
+              ),
+              tn("image", "image", "Microsoft", [589, 837, 100, 22]),
+            ],
+          ),
+        ],
+      ),
+    ],
+    ...(moveOn === undefined ? {} : { moveOn }),
+  });
+
+  it("waits on Outlook.com's loading screen in the check without counting its time, and names it when it never goes", async () => {
+    // Shown for 40 frames (each an OCR, an address read and a tree read),
+    // well past the 3 s budget; then the mailbox.
+    const h = harness({
+      start: "splash",
+      screens: {
+        splash: splash({ frames: 40, next: "inbox" }),
+        inbox: {
+          text: "Outlook\nNew mail\nInbox\nFocused\nOther",
+          location: OUTLOOK_AT,
+        },
+      },
+    });
+    const logs: string[] = [];
+    const t0 = Date.now();
+    assert.deepEqual(
+      await verifySignedIn(
+        verifyCtx(h, {
+          provider: OUTLOOK_SIGNIN,
+          browserPid: 4242,
+          timeoutMs: 3_000,
+          log: (l: string) => logs.push(l),
+        }),
+      ),
+      { signedIn: true },
+    );
+    assert.ok(Date.now() - t0 > 3_000, "it waited past the budget");
+    assert.ok(
+      logs.some((l) =>
+        /^check: waited \d+ s on the webmail's loading screen \(\d+ readings\), not counted against the 3 s$/.test(
+          l,
+        ),
+      ),
+      JSON.stringify(logs),
+    );
+    noInput(h.log());
+    // For ever: not signed in at the loading bound, naming it.
+    const h2 = harness({ start: "splash", screens: { splash: splash() } });
+    const t1 = Date.now();
+    const r = await verifySignedIn(
+      verifyCtx(h2, {
+        provider: OUTLOOK_SIGNIN,
+        browserPid: 4242,
+        timeoutMs: 300,
+        loadingTimeoutMs: 2_000,
+      }),
+    );
+    assert.ok(!r.signedIn);
+    assert.ok(Date.now() - t1 >= 2_000);
+    assert.match(
+      r.reason,
+      /^the mailbox did not show within 2 s \(the screen: the webmail's loading screen \(a page showing only its logo\), shown for \d+ s of it\)$/,
+    );
+    assert.equal(
+      r.seen,
+      "the webmail's loading screen (a page showing only its logo)",
+    );
+    noInput(h2.log());
+  });
+
   it("reports an account-setup screen on the inbox URL as not the mailbox, and dismisses nothing", async () => {
     const s = gmailScenario({
       homeaddress: {
