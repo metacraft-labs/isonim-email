@@ -591,7 +591,11 @@ const prov = (r: CaptureResult): Record<string, any> =>
 // A failure's kept evidence: the frame a PNG of the session's display
 // and the tree summary JSON, both 0600 in a 0700 directory under the
 // run directory; returns the summary.
-function evidence(w: World, f: Record<string, any> | undefined) {
+function evidence(
+  w: World,
+  f: Record<string, any> | undefined,
+  height = WINDOW_HEIGHT,
+) {
   assert.ok(f !== undefined && f !== null, "a failure's evidence is named");
   assert.equal(statSync(join(w.runDir, FAILURES_DIR)).mode & 0o777, 0o700);
   const frame = join(w.runDir, f.frame);
@@ -600,7 +604,7 @@ function evidence(w: World, f: Record<string, any> | undefined) {
     assert.equal(statSync(p).mode & 0o777, 0o600, p);
   const img = readPng(new Uint8Array(readFileSync(frame)));
   assert.ok(
-    img.width >= 800 && img.height === WINDOW_HEIGHT,
+    img.width >= 800 && img.height === height,
     `${img.width}x${img.height}`,
   );
   const summary = JSON.parse(readFileSync(tree, "utf8"));
@@ -726,7 +730,26 @@ describe("the hosted-webmail capture procedure", () => {
         requested: 800,
         measured: 800,
         delta: 0,
+        min: 800,
+        ok: true,
       });
+      assert.deepEqual(prov(body).window, {
+        width: 1240,
+        height: WINDOW_HEIGHT,
+        widened: null,
+      });
+      // The session check: the sign-in's, in a window of the sign-in's
+      // size, before the capture's own window.
+      assert.equal(prov(body).session_check.by, "ocr");
+      assert.deepEqual(prov(body).session_check.screen, {
+        width: 1280,
+        height: 900,
+      });
+      assert.ok(w.argvs[0]!.includes("--window-size=1280,900"));
+      assert.ok(
+        w.argvs[1]!.includes(`--window-size=1240,${WINDOW_HEIGHT}`),
+        w.argvs[1]!.join(" "),
+      );
       assert.equal(img.width, 800);
       assert.equal(prov(body).settle.settled, true);
       assert.match(prov(body).ui_fingerprint.value, /^[0-9a-f]{12}$/);
@@ -753,12 +776,21 @@ describe("the hosted-webmail capture procedure", () => {
           prov(row).list_row.ocr,
         );
       assert.ok(readPng(row.png!).height < img.height);
-      // Removed: nothing left in any folder, and the record says so.
+      // Removed: nothing left in any folder, and the record says so;
+      // the permanent delete made from the Trash list (the open Trash
+      // message's "Delete" leaves it there, as Gmail's does).
       assert.deepEqual(w.webmails["gmail-workspace"].messages, []);
       assert.deepEqual(
-        cleanup(w).map((c) => [c.state, c.folder, c.account, c.via]),
-        [["removed", "inbox", "qa1", "trash"]],
+        cleanup(w).map((c) => [
+          c.state,
+          c.folder,
+          c.account,
+          c.via,
+          c.permanent,
+        ]),
+        [["removed", "inbox", "qa1", "trash", true]],
       );
+      assert.deepEqual(w.webmails["gmail-workspace"].events, ["bulk-destroy"]);
       // Named by file, never by address; the lease is released.
       for (const r of results)
         assert.doesNotMatch(JSON.stringify(r.provenance), /@receiver\.invalid/);
@@ -967,7 +999,83 @@ describe("hosted-webmail session loss and UI drift", () => {
     }
   });
 
-  it("a removal that leaves the message in a folder is a failed cleanup, said on the log", async () => {
+  it("Gmail's permanent delete from the Trash list: nothing is clicked while a selection is already made, nothing more when the selection grows past the row; another message's row is never deleted", async () => {
+    const w = await world("selection", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      // Every Trash list also shows another message's row.
+      gm.trashDecoy = true;
+      const run = async (name: string, tag: string) => {
+        const m = mime(name);
+        const r = await captureAll(
+          w.provider(),
+          w,
+          [req(name, m, "gmail-web")],
+          [message(name, m)],
+          tag,
+        );
+        assert.equal(r[0]!.status, "done", r[0]!.reason);
+        return cleanup(w).at(-1)! as Record<string, any>;
+      };
+      const inTrash = (name: string) =>
+        gm.messages.some(
+          (x) => x.subject.includes(name) && x.folder === "trash",
+        );
+      const untouched = (rec: Record<string, any>, name: string) => {
+        assert.equal(rec.state, "failed");
+        assert.equal(rec.failure.step, "cleanup-delete-forever");
+        assert.deepEqual(gm.destroyed, [], "nothing deleted for good");
+        assert.ok(!gm.events.includes("bulk-destroy"), gm.events.join());
+        assert.ok(inTrash(name));
+      };
+
+      // The other row already selected: its check box and the toolbar's.
+      gm.preselect = "decoy";
+      const a = await run("pre-row", "t1");
+      assert.match(
+        String(a.reason),
+        /^Gmail: a selection was already made in the Trash list \(check boxes checked: 1, of them in its rows: 1\): nothing is clicked$/,
+      );
+      untouched(a, "pre-row");
+
+      // Only the toolbar's select-all checked (every row of the page
+      // selected, the rows here scrolled out of view).
+      gm.preselect = "toolbar";
+      const b = await run("pre-all", "t2");
+      assert.match(
+        String(b.reason),
+        /^Gmail: a selection was already made in the Trash list \(check boxes checked: 1, of them in its rows: 0\): nothing is clicked$/,
+      );
+      untouched(b, "pre-all");
+
+      // The selection grows to every row before "Delete forever" shows:
+      // the button is not clicked.
+      gm.preselect = null;
+      gm.selectAllAfterMs = 5_000;
+      const c = await run("grows", "t3");
+      assert.match(
+        String(c.reason),
+        /^Gmail: the selection changed before role=button name="Delete forever" was clicked \(2 rows of the Trash list selected, 1 carrying the run token\): nothing more is clicked$/,
+      );
+      untouched(c, "grows");
+
+      // The control: no selection before, none that grows: only the run's
+      // row deleted for good, the other row left.
+      gm.selectAllAfterMs = null;
+      const d = await run("control", "t4");
+      assert.deepEqual(
+        [d.state, d.via, d.permanent],
+        ["removed", "trash", true],
+      );
+      assert.equal(gm.destroyed.length, 1);
+      assert.notEqual(gm.destroyed[0]!.id, "decoy");
+      assert.ok(!inTrash("control"));
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("a removal that leaves the message in a folder is a failed cleanup, said on the log; left only in Gmail's Trash it is in-trash, never removed", async () => {
     const w = await world("kept", { only: ["gmail-workspace"] });
     try {
       const gm = w.webmails["gmail-workspace"];
@@ -982,15 +1090,31 @@ describe("hosted-webmail session loss and UI drift", () => {
         [req("s", m, "gmail-web")],
         [message("s", m)],
       );
-      // The capture stands; the cleanup does not.
+      // The capture stands; the cleanup is what it is: in Trash, where
+      // Gmail empties it after 30 days, not deleted for good.
       assert.equal(results[0]!.status, "done", results[0]!.reason);
       assert.equal(gm.destroyed.length, 1);
       const rec = cleanup(w);
       assert.deepEqual(
-        rec.map((c) => c.state),
-        ["failed"],
+        rec.map((c) => [c.state, c.via, c.permanent]),
+        [["in-trash", "trash", false]],
       );
-      assert.match(String(rec[0]!.reason), /still in Trash after the delete/);
+      assert.equal(
+        rec[0]!.note,
+        "not deleted for good: Gmail empties Trash after 30 days",
+      );
+      assert.match(
+        String(rec[0]!.reason),
+        /^the row stayed in the Trash list after role=button name="Delete forever" \(15 s\)$/,
+      );
+      assert.ok(
+        w.logs.some((l) =>
+          /cleanup left <.*> in Trash in gmail-workspace\/qa1 \(not deleted for good: Gmail empties Trash after 30 days\): the row stayed .* \(the screen kept at .*\.png\)$/.test(
+            l,
+          ),
+        ),
+        w.logs.join("\n"),
+      );
       // The screen and the looks that saw it still there.
       evidence(w, rec[0]!.failure as Record<string, any>);
       assert.equal((rec[0]!.failure as any).step, "cleanup-check");
@@ -1036,9 +1160,38 @@ describe("hosted-webmail session loss and UI drift", () => {
       );
       assert.ok(
         w.logs.some((l) =>
-          /cleanup FAILED for <.*> in gmail-workspace\/qa1: still in Trash/.test(
+          /cleanup FAILED for <.*> in gmail-workspace\/qa1: the delete left the message in Inbox/.test(
             l,
           ),
+        ),
+      );
+
+      // A Trash list without "Delete forever": the selected row is left
+      // in Trash, recorded in-trash with why.
+      gm.deleteIgnored = false;
+      gm.noListForever = true;
+      const mKept3 = mime("kept-3");
+      const third = await captureAll(
+        w.provider(),
+        w,
+        [req("s3", mKept3, "gmail-web")],
+        [message("s3", mKept3)],
+        "t3",
+      );
+      assert.equal(third[0]!.status, "done", third[0]!.reason);
+      const rec3 = cleanup(w).at(-1)!;
+      assert.deepEqual(
+        [rec3.state, rec3.via, rec3.permanent],
+        ["in-trash", "trash", false],
+      );
+      assert.match(
+        String(rec3.reason),
+        /^no role=button name="Delete forever" showed once the row was selected/,
+      );
+      assert.equal(gm.destroyed.length, 1, "nothing more destroyed");
+      assert.ok(
+        gm.messages.some(
+          (x) => x.subject.includes("kept-3") && x.folder === "trash",
         ),
       );
     } finally {
@@ -1399,9 +1552,6 @@ describe("hosted-webmail variants", () => {
       gm.rewriteMessageId = true;
       gm.rowNamedBySender = true;
       gm.suggestions = true;
-      // The open message in Trash offering "Delete forever" (the
-      // permanent delete's second alternative).
-      gm.trashForever = true;
       const m = mime("search");
       const results = await captureAll(
         w.provider(),
@@ -1446,6 +1596,7 @@ describe("hosted-webmail variants", () => {
       const gm = w.webmails["gmail-workspace"];
       gm.toastAlways = true;
       gm.noTrashChipFor = "nochip";
+      gm.confirmForever = true;
       const a = mimeArticle("article");
       const b = mimeArticle("wide", true);
       const c = mimeArticle("nochip");
@@ -1475,6 +1626,8 @@ describe("hosted-webmail variants", () => {
         requested: 800,
         measured: 800,
         delta: 0,
+        min: 800,
+        ok: true,
       });
       const px = (x: number, y: number) =>
         Array.from(
@@ -1505,8 +1658,9 @@ describe("hosted-webmail variants", () => {
           ),
         ),
       );
-      // The permanent delete in Trash: the open message's "Delete"
-      // behind the guard; without the Trash chip nothing is clicked.
+      // The permanent delete in Trash: from the Trash list, the row's
+      // check box and "Delete forever" (its confirmation answered), behind
+      // the guard; a row without its Trash label: nothing is clicked.
       const recs = cleanup(w);
       const byMid = (r: CaptureResult) =>
         recs.find((x) => x.message_id === prov(r).delivery.message_id)!;
@@ -1517,10 +1671,16 @@ describe("hosted-webmail variants", () => {
       assert.equal(failed.state, "failed");
       assert.match(
         String(failed.reason),
-        /^Gmail: the opened message is not shown in Trash \(the Trash guard: .*role=button name="Search for all messages with label Trash" shown/,
+        /^Gmail: the row is not shown in Trash \(the Trash guard: the address bar matching .* and the row's own label name~\/\^Trash\\b\/i; .*the row's label not shown\), so nothing is clicked$/,
       );
       assert.equal((failed.failure as any).step, "cleanup-delete-forever");
       assert.equal(gm.destroyed.length, 2);
+      assert.equal(
+        gm.events.filter((e) => e === "bulk-destroy").length,
+        2,
+        JSON.stringify(gm.events),
+      );
+      assert.equal(gm.events.filter((e) => e === "confirm-ok").length, 2);
       assert.deepEqual(
         gm.messages.map((m) => [m.folder, m.subject.includes("nochip")]),
         [["trash", true]],
@@ -1581,6 +1741,11 @@ describe("hosted-webmail variants", () => {
       // and never waited on past the arrival budget, however long a list
       // may take to settle (listLoadMs ten minutes here).
       ol.neverLoads = ["spam"];
+      // The Inbox drawn at once: its placeholders were waited for above
+      // with a budget that leaves room for them; here 4.5 s of them on a
+      // loaded host could take the 20 s budget before Junk Email was
+      // looked in at all, which is not what this half tests.
+      ol.listLoadingMs = 0;
       const lost = mime("lost");
       const t0 = Date.now();
       const again = await captureAll(
@@ -1653,6 +1818,188 @@ describe("hosted-webmail variants", () => {
       // The account's address, in the title, is in no record.
       assert.doesNotMatch(JSON.stringify(prov(r)), /@receiver\.invalid/);
       assert.doesNotMatch(JSON.stringify(cleanup(w)), /@receiver\.invalid/);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("the session check is the sign-in's, in the sign-in's window: a mailbox laid out as one only at that size is recognised; a check that fails keeps its screen and names its last reading; a message left in Yahoo's Trash is a failed cleanup", async () => {
+    const w = await world("yahoo-check", { only: ["yahoo"] });
+    try {
+      const y = w.webmails.yahoo;
+      y.lang = "bg";
+      y.addresses = { qa1: QA.yahoo[0]! };
+      // The /n/ Inbox a mailbox only in a viewport of the sign-in's
+      // window (1280 x 900); the capture's window (1360 x 1000) shows
+      // it without its folder list or compose button.
+      y.mailboxOnlyIn = { width: 1300, height: 860 };
+      // Not a test of the arrival's bound: room for a loaded host.
+      const roomy = { timings: { arrivalTimeoutMs: 30_000 } };
+      const m = mime("sized");
+      const results = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("s", m, "yahoo-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      const sc = prov(r).session_check;
+      assert.equal(sc.by, "structure");
+      assert.deepEqual(sc.screen, { width: 1280, height: 900 });
+      assert.ok(sc.readings >= 2, "a structural reading held over two");
+      for (const sig of ["folder-navigation", "compose", "title-account"])
+        assert.ok(sc.signals.includes(sig), JSON.stringify(sc.signals));
+      // The check's browser at the sign-in's size, then the capture's.
+      assert.ok(w.argvs[0]!.includes("--window-size=1280,900"));
+      assert.ok(
+        w.argvs[1]!.includes(`--window-size=1360,${WINDOW_HEIGHT}`),
+        w.argvs[1]!.join(" "),
+      );
+      const inbox = y.probes.filter((p) => p.page === "/n/folders/00_1");
+      assert.ok(
+        inbox.length > 0 && inbox[0]!.vw <= 1280,
+        JSON.stringify(y.probes),
+      );
+      assert.ok(
+        y.probes.some((p) => p.vw > 1300),
+        "the capture's window",
+      );
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via, c.permanent]),
+        [["removed", "trash", true]],
+      );
+
+      // Yahoo declares no Trash that empties itself: a message its
+      // permanent delete left in Trash is a failed cleanup.
+      y.keepDestroyed = true;
+      const k = mime("yahoo-kept");
+      const kept = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("k", k, "yahoo-web")],
+        [message("k", k)],
+        "t2",
+      );
+      assert.equal(kept[0]!.status, "done", kept[0]!.reason);
+      const rec = cleanup(w).at(-1)!;
+      assert.equal(rec.state, "failed");
+      assert.match(String(rec.reason), /^still in Trash after the delete$/);
+      y.keepDestroyed = false;
+
+      // A mailbox shown at no size: the check fails at its deadline, on
+      // the mail host, naming its last reading, and keeps its screen.
+      y.mailboxOnlyIn = { width: 100, height: 100 };
+      const n = mime("never-mailbox");
+      const failed = await captureAll(
+        w.provider({ timings: { signinCheckMs: 6_000 } }),
+        w,
+        [req("n", n, "yahoo-web")],
+        [message("n", n)],
+        "t3",
+      );
+      const f = failed[0]!;
+      assert.equal(f.status, "failed");
+      assert.match(
+        f.reason!,
+        /session lost: yahoo\/qa1 is not signed in any more \(the inbox loaded on 127\.0\.0\.1:\d+ but the mailbox did not show within 6 s \(the last reading: the screen unrecognised, the address bar 127\.0\.0\.1:\d+\/n\/folders\/00_1, structure: title-account; the mailbox needs two of them, one the message list or the address in the title\)\)/,
+      );
+      const sum = evidence(w, prov(f).failure, 900);
+      assert.equal(prov(f).failure.step, "session-check");
+      assert.match(sum.location, /\/n\/folders\/00_1$/);
+      // The address, in the window's title, replaced in the kept tree.
+      assert.ok(
+        sum.showing.some((x: any) => /<account address>/.test(x.name)),
+        "the title kept, its address replaced",
+      );
+      assert.ok(
+        w.logs.some((l) =>
+          /session lost: yahoo\/qa1 .* \(the screen kept at .*session-check-\d+\.png\)$/.test(
+            l,
+          ),
+        ),
+        w.logs.join("\n"),
+      );
+      assert.ok(
+        existsSync(join(w.profiles, "yahoo", "qa1", "needs-login.json")),
+      );
+      assert.equal(
+        w.api.sent.filter((x) => x.raw.includes("never-mailbox")).length,
+        0,
+        "nothing delivered",
+      );
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("Outlook.com: a body narrower than the request restarts the browser once in a window widened by the shortfall; a pane that does not grow as much fails naming both widths", async () => {
+    const w = await world("outlook-width", { only: ["outlook-com"] });
+    try {
+      const ol = w.webmails["outlook-com"];
+      // The reading pane the window's width less 1300 px: 460 px in the
+      // adapter's 1760 px window.
+      ol.paneWidth = "calc(100vw - 1300px)";
+      const m = mime("narrow");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "outlook-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      const wc = prov(r).width_check;
+      assert.equal(wc.ok, true);
+      assert.equal(wc.min, 800);
+      assert.ok(wc.measured >= 800, JSON.stringify(wc));
+      const win = prov(r).window;
+      assert.equal(win.widened.from, 1760);
+      assert.ok(win.widened.measured < 500, JSON.stringify(win));
+      assert.equal(
+        win.widened.to,
+        1760 + (800 - win.widened.measured) + 16,
+        JSON.stringify(win),
+      );
+      assert.equal(win.width, win.widened.to);
+      assert.equal(prov(r).crop.window.width, win.widened.to);
+      assert.ok(prov(r).widen.looks.length > 0);
+      assert.ok(
+        w.argvs.some((a) =>
+          a.includes(`--window-size=${win.widened.to},${WINDOW_HEIGHT}`),
+        ),
+      );
+      assert.equal(readPng(r.png!).width, wc.measured);
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+
+      // Half as wide as the window, less 420 px: widening by the
+      // shortfall gives it only half; not captured.
+      ol.paneWidth = "calc(50vw - 420px)";
+      const n = mime("still-narrow");
+      const second = await captureAll(
+        w.provider(),
+        w,
+        [req("n", n, "outlook-web")],
+        [message("n", n)],
+        "t2",
+      );
+      const f = second[0]!;
+      assert.equal(f.status, "failed");
+      assert.equal(f.png, undefined);
+      assert.match(
+        f.reason!,
+        /^Outlook\.com: the message body is \d+ px wide, narrower than the requested 800 px \(the window \d+ px wide\), in a window already widened from 1760 to \d+ px: not captured/,
+      );
+      assert.equal(prov(f).width_check.ok, false);
+      assert.ok(prov(f).width_check.measured < 800);
+      evidence(w, prov(f).failure);
+      assert.deepEqual(
+        cleanup(w).map((c) => c.state),
+        ["removed", "removed"],
+      );
     } finally {
       await w.stop();
     }

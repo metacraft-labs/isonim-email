@@ -83,6 +83,8 @@ import { mailboxSignals } from "./a11y_tree.ts";
 import { AUTOMATION_SWITCHES, sessionSwitches } from "./webmail_browser.ts";
 import {
   type ChallengeKind,
+  MailboxCheck,
+  checkScreenName,
   classifyScreen,
   CONSENT_CONTROLS,
   consentHinted,
@@ -1296,40 +1298,6 @@ export type VerifyOutcome =
       screen?: string | null;
     };
 
-/** How the check names a screen that is not the mailbox; null for none it names. */
-function checkScreenName(screen: Screen): string | null {
-  switch (screen.kind) {
-    case "step":
-      return screen.step === "reauth-password"
-        ? `Google's password re-verification of the session ("verify it's you" with only a password field)`
-        : screen.step === "sign-in-again"
-          ? `Google's sign-in-again page ("please sign in again", the account and only "Next")`
-          : `the ${screen.step} screen of the sign-in`;
-    case "challenge":
-      return `a challenge (${screen.challenge}: "${screen.phrase}")`;
-    case "error":
-      return `an error (${screen.error}: "${screen.phrase}")`;
-    case "interstitial":
-      return `an account-setup screen (${screen.interstitial}: "${screen.phrase}")`;
-    case "consent":
-      return `a privacy-consent page (${screen.consent})`;
-    default:
-      return null;
-  }
-}
-
-function notSignedInBecause(what: string): string {
-  if (what.startsWith("an account-setup screen"))
-    return `the inbox URL showed ${what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`;
-  if (what.startsWith("a privacy-consent page"))
-    return `the inbox URL showed ${what}, not the mailbox: the provider asks for the privacy choices first, and the check answers nothing (the sign-in does, rejecting every optional use)`;
-  if (what.startsWith("Google's sign-in-again page"))
-    return `signed out: Google asks to sign in again (the inbox URL showed ${what}); the check never clicks, an automated attempt answers it ("Next", then the password, typed once)`;
-  if (what.startsWith("Google's password re-verification"))
-    return `the inbox URL showed ${what}, not the mailbox: the session must confirm its password; an automated attempt answers it once, the check never types`;
-  return `the inbox URL showed ${what}, not the mailbox: the profile is not signed in`;
-}
-
 /**
  * Whether the browser on the session's display shows the provider's
  * mailbox, read by OCR only (every frame through the password guard):
@@ -1347,14 +1315,18 @@ function notSignedInBecause(what: string): string {
  *   it recognised, or "unrecognised";
  * - a frame showing the password: not signed in (it never should here).
  * Not signed in (but for the password), the screen is kept at `keepPath`
- * through the guard; signed in, an older one there is removed.
+ * through the guard; signed in, an older one there is removed. The
+ * decision is webmail_signin_steps.ts `MailboxCheck`, which the hosted
+ * captures' session check makes too (hosted_webmail.ts).
  */
 export async function verifySignedIn(
   ctx: VerifyContext,
 ): Promise<VerifyOutcome> {
-  const deadline = Date.now() + ctx.timeoutMs;
-  type Seen = { what: string; since: number };
-  let seen = null as Seen | null;
+  const check = new MailboxCheck({
+    start: Date.now(),
+    timeoutMs: ctx.timeoutMs,
+    settleMs: ctx.settleMs,
+  });
   // Not signed in: the screen kept first (while the browser still shows it).
   const notSignedIn = async (
     reason: string,
@@ -1369,11 +1341,6 @@ export async function verifySignedIn(
         ? await keepScreen({ ...ctx, keepPath: ctx.keepPath })
         : null,
   });
-  // The address of the previous frame when it was the mailbox by its
-  // structure: a structural reading counts only when two frames in a row
-  // gave it at the same address (the settled-view rule; a mailbox's
-  // phrases, which no other page has, count on one).
-  let structureAt: string | null | undefined = undefined;
   for (let n = 0; ; n++) {
     const text = await readScreen(ctx, n);
     if (text === null)
@@ -1390,34 +1357,15 @@ export async function verifySignedIn(
       await locationFor(ctx.provider, ctx.ga, ctx.browserPid, text),
       ctx.address ?? null,
     );
-    const now = Date.now();
-    const byStructure = screen.kind === "done" && screen.by === "structure";
-    const held = byStructure && structureAt === location;
-    structureAt = byStructure ? location : undefined;
-    if (byStructure && !held && now < deadline) {
-      await sleep(ctx.pollMs);
-      continue;
-    }
-    if (screen.kind === "done" && (!byStructure || held)) {
+    const v = check.read(screen, location, Date.now());
+    if (v.kind === "signed-in") {
       ctx.log(`check: the mailbox shows${mailboxEvidence(screen)}`);
       if (ctx.keepPath !== undefined) rmSync(ctx.keepPath, { force: true });
-      return screen.by === "structure"
+      return v.by === "structure"
         ? { signedIn: true, by: "structure" }
         : { signedIn: true };
     }
-    const what = checkScreenName(screen);
-    // The same non-mailbox screen since when (a new one restarts it).
-    const cur: Seen | null =
-      what === null ? null : seen?.what === what ? seen : { what, since: now };
-    seen = cur;
-    if (cur !== null && now - cur.since >= ctx.settleMs)
-      return notSignedIn(notSignedInBecause(cur.what), cur.what, true);
-    if (now >= deadline)
-      return notSignedIn(
-        `the mailbox did not show within ${Math.round(ctx.timeoutMs / 1000)} s (the screen: ${cur === null ? "unrecognised" : cur.what})`,
-        cur === null ? "unrecognised" : cur.what,
-        true,
-      );
+    if (v.kind === "not-signed-in") return notSignedIn(v.reason, v.seen, true);
     await sleep(ctx.pollMs);
   }
 }

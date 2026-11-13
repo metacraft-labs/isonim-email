@@ -578,6 +578,134 @@ export function classifyScreen(
 }
 
 // ---------------------------------------------------------------------------
+// The check: whether a browser started on the inbox URL shows the mailbox
+// ---------------------------------------------------------------------------
+
+/** How the check names a screen that is not the mailbox; null for none it names. */
+export function checkScreenName(screen: Screen): string | null {
+  switch (screen.kind) {
+    case "step":
+      return screen.step === "reauth-password"
+        ? `Google's password re-verification of the session ("verify it's you" with only a password field)`
+        : screen.step === "sign-in-again"
+          ? `Google's sign-in-again page ("please sign in again", the account and only "Next")`
+          : `the ${screen.step} screen of the sign-in`;
+    case "challenge":
+      return `a challenge (${screen.challenge}: "${screen.phrase}")`;
+    case "error":
+      return `an error (${screen.error}: "${screen.phrase}")`;
+    case "interstitial":
+      return `an account-setup screen (${screen.interstitial}: "${screen.phrase}")`;
+    case "consent":
+      return `a privacy-consent page (${screen.consent})`;
+    default:
+      return null;
+  }
+}
+
+/** Why the check says "not signed in" for a named screen that stayed. */
+export function notSignedInBecause(what: string): string {
+  if (what.startsWith("an account-setup screen"))
+    return `the inbox URL showed ${what}, not the mailbox: the provider asks for it before the mailbox, and the check dismisses nothing (the sign-in does, through its skip control)`;
+  if (what.startsWith("a privacy-consent page"))
+    return `the inbox URL showed ${what}, not the mailbox: the provider asks for the privacy choices first, and the check answers nothing (the sign-in does, rejecting every optional use)`;
+  if (what.startsWith("Google's sign-in-again page"))
+    return `signed out: Google asks to sign in again (the inbox URL showed ${what}); the check never clicks, an automated attempt answers it ("Next", then the password, typed once)`;
+  if (what.startsWith("Google's password re-verification"))
+    return `the inbox URL showed ${what}, not the mailbox: the session must confirm its password; an automated attempt answers it once, the check never types`;
+  return `the inbox URL showed ${what}, not the mailbox: the profile is not signed in`;
+}
+
+/** What one reading of the check decided (`MailboxCheck.read`). */
+export type CheckVerdict =
+  | { kind: "signed-in"; by: "ocr" | "structure"; signals: string[] }
+  | { kind: "wait" }
+  | {
+      kind: "not-signed-in";
+      reason: string;
+      /** The screen it saw, classified ("unrecognised" when nothing matched). */
+      seen: string;
+      /** It ended at the deadline (not on a named screen that stayed). */
+      timedOut: boolean;
+    };
+
+/**
+ * The check's decision over its readings, one call per reading (the
+ * screen classified by `classifyScreen`, and the address bar's value it
+ * was read with). The sign-in's check (webmail_signin.ts
+ * `verifySignedIn`) and the hosted captures' session check
+ * (hosted_webmail.ts) both decide with it, so the two cannot disagree on
+ * the same screens:
+ * - the mailbox by its phrases: signed in at once;
+ * - the mailbox by its structure: signed in only when two readings in a
+ *   row gave it at the same address (the settled-view rule; a single
+ *   frame of a page that moves on to a sign-in host is not the mailbox);
+ * - a screen the check names (a sign-in step, a challenge, an error, an
+ *   account-setup screen, a consent page) that stays for `settleMs`: not
+ *   signed in, naming it;
+ * - neither by `timeoutMs` after `start`: not signed in, naming the last
+ *   screen it named, or "unrecognised".
+ */
+export class MailboxCheck {
+  readings = 0;
+  private seen: { what: string; since: number } | null = null;
+  // The address of the previous reading when it was the mailbox by its
+  // structure (undefined: it was not).
+  private structureAt: string | null | undefined = undefined;
+  private readonly deadline: number;
+  private readonly o: { start: number; timeoutMs: number; settleMs: number };
+
+  constructor(o: { start: number; timeoutMs: number; settleMs: number }) {
+    this.o = o;
+    this.deadline = o.start + o.timeoutMs;
+  }
+
+  read(
+    screen: Screen,
+    location: string | null | undefined,
+    now: number,
+  ): CheckVerdict {
+    this.readings++;
+    const byStructure = screen.kind === "done" && screen.by === "structure";
+    const held = byStructure && this.structureAt === location;
+    this.structureAt = byStructure ? location : undefined;
+    if (byStructure && !held && now < this.deadline) return { kind: "wait" };
+    if (screen.kind === "done" && (!byStructure || held))
+      return {
+        kind: "signed-in",
+        by: byStructure ? "structure" : "ocr",
+        signals: [...(screen.signals ?? [])],
+      };
+    const what = checkScreenName(screen);
+    // The same named screen since when (a new one restarts it).
+    const cur =
+      what === null
+        ? null
+        : this.seen?.what === what
+          ? this.seen
+          : { what, since: now };
+    this.seen = cur;
+    if (cur !== null && now - cur.since >= this.o.settleMs)
+      return {
+        kind: "not-signed-in",
+        reason: notSignedInBecause(cur.what),
+        seen: cur.what,
+        timedOut: false,
+      };
+    if (now >= this.deadline) {
+      const seen = cur === null ? "unrecognised" : cur.what;
+      return {
+        kind: "not-signed-in",
+        reason: `the mailbox did not show within ${Math.round(this.o.timeoutMs / 1000)} s (the screen: ${seen})`,
+        seen,
+        timedOut: true,
+      };
+    }
+    return { kind: "wait" };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The challenges every provider shares, worded as Google, Yahoo and
 // Microsoft word them. Provider tables add their own in front.
 // ---------------------------------------------------------------------------

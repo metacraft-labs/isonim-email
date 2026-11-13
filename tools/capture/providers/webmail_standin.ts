@@ -26,12 +26,15 @@
 //   recoloured dark and marked data-ogsc; pressed: the body light);
 // - every page reports what it sees of the browser (`probes`:
 //   navigator.webdriver, prefers-color-scheme, the user agent, the
-//   notification permission);
+//   notification permission, the viewport's size);
 // - as the live webmails do: Gmail's "Enable desktop notifications"
 //   toast while the page's notification permission is undecided (its
 //   "OK" and "No thanks" reported as events), Gmail's open message in
-//   Trash offering "Delete" (its permanent delete there) under the
-//   "Trash" label chip, its Reply and Forward links below the body;
+//   Trash offering a "Delete" that leaves it in Trash (live 2026-11-02),
+//   its lists' rows with a check box each and the "Trash" label in a
+//   Trash row's subject cell, the toolbar's "Delete forever" (in a
+//   Trash search) or "Delete" shown once a row is selected, its Reply and
+//   Forward links below the body;
 //   Outlook.com's Inbox address rewritten to the bare /mail/0/, and its
 //   lists drawn as placeholders (not in the tree) for a while before
 //   their rows or an empty folder's notice;
@@ -47,11 +50,15 @@
 //   ignoring the browser's dark scheme, or deleting Junk for good; a
 //   delete that answers but leaves the message in its folder; Gmail's
 //   views answering late (the previous list shown under the new address);
-//   Gmail's toast shown whatever the permission, its open message in
-//   Trash offering "Delete forever" instead, or without its Trash chip;
-//   Outlook.com's lists loading slowly, or one folder's never; Yahoo in
-//   Bulgarian (its controls and folders so named, the account's address
-//   in the title), and its old folder URLs sending to the Inbox.
+//   Gmail's toast shown whatever the permission, a Trash row without its
+//   Trash label, or a confirmation dialog after "Delete forever"; another
+//   message's row in its Trash lists, a selection already made there, or
+//   one that grows to every row after a row's check box is clicked;
+//   Outlook.com's lists loading slowly, or one folder's never, and its
+//   reading pane's width a function of the window's; Yahoo in Bulgarian
+//   (its controls and folders so named, the account's address in the
+//   title), its old folder URLs sending to the Inbox, and its /n/ Inbox
+//   laid out as a mailbox only in a window no larger than a size.
 // The webmail browser, GuiAssert, the profiles, TLS and the provider are
 // real.
 
@@ -160,7 +167,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 // Every page reports what it sees of the browser once (`probes`).
-const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent) + "&notif=" + encodeURIComponent(typeof Notification === "undefined" ? "none" : Notification.permission));`;
+const PROBE = `fetch("/probe?webdriver=" + String(navigator.webdriver) + "&dark=" + String(matchMedia("(prefers-color-scheme: dark)").matches) + "&page=" + encodeURIComponent(location.pathname + location.hash) + "&ua=" + encodeURIComponent(navigator.userAgent) + "&notif=" + encodeURIComponent(typeof Notification === "undefined" ? "none" : Notification.permission) + "&vw=" + innerWidth + "&vh=" + innerHeight);`;
 
 const page = (
   body: string,
@@ -177,6 +184,9 @@ export interface StandinProbe {
   ua: string;
   // Notification.permission: "default", "denied" or "granted".
   notif: string;
+  // The viewport's size (innerWidth, innerHeight).
+  vw: number;
+  vh: number;
 }
 
 export class StandinWebmail {
@@ -232,12 +242,39 @@ export class StandinWebmail {
   events: string[] = [];
   // Gmail: the notifications toast shown whatever the permission.
   toastAlways = false;
-  // Gmail: the open message in Trash offers "Delete forever" (no
-  // "Delete").
-  trashForever = false;
-  // Gmail: no "Trash" label chip on an open message in Trash whose
-  // subject holds this.
+  // Gmail: no "Trash" label in the Trash row (and no chip on the open
+  // message) of a message whose subject holds this.
   noTrashChipFor: string | null = null;
+  // Gmail: the toolbar's "Delete forever" asks to confirm in a dialog.
+  confirmForever = false;
+  // Gmail: the toolbar never shows "Delete forever" (a Trash list that
+  // offers no permanent delete).
+  noListForever = false;
+  // Gmail: every Trash list also shows another message's row (id
+  // "decoy", without the run token), as a looser search would.
+  trashDecoy = false;
+  // Gmail: a selection already made when a Trash list is drawn: the
+  // decoy row's check box checked, the toolbar's select-all partly
+  // ("decoy"), or only the select-all checked ("toolbar": every row of
+  // the page selected, those shown here scrolled out of view).
+  preselect: "decoy" | "toolbar" | null = null;
+  // Gmail: after a click on a row's check box, every row's check box
+  // checked this many ms later (a selection that does not stay the
+  // row's), the toolbar's action shown only then.
+  selectAllAfterMs: number | null = null;
+  // Outlook.com: the reading pane's width as CSS (e.g. "calc(100vw -
+  // 1200px)"): a pane between the webmail's columns that grows with the
+  // window; null: 800 px.
+  paneWidth: string | null = null;
+  // Yahoo: its /n/ Inbox laid out as a mailbox only in a viewport no
+  // wider and no taller than this (otherwise a page without its folder
+  // list or compose button, its title still the account's), and its bare
+  // address landing there; null: always, the bare address landing on
+  // /d/folders/1. A page laid out by the window's size, as the live one
+  // may be: its capture session check in a 1360 x 2400 window failed
+  // where --check-only's in 1280 x 900 passed (2026-11-02, cause not
+  // seen).
+  mailboxOnlyIn: { width: number; height: number } | null = null;
   // Outlook.com: how long a list is drawn as placeholders before its
   // rows (or the empty folder's notice) show.
   listLoadingMs = 0;
@@ -360,6 +397,8 @@ export class StandinWebmail {
         page: url.searchParams.get("page") ?? "",
         ua: url.searchParams.get("ua") ?? "",
         notif: url.searchParams.get("notif") ?? "",
+        vw: Number(url.searchParams.get("vw") ?? "0"),
+        vh: Number(url.searchParams.get("vh") ?? "0"),
       });
       return this.send(res, 204, "text/plain", "");
     }
@@ -468,6 +507,38 @@ export class StandinWebmail {
           await fetch("/api/" + b.dataset.act + "?id=" + b.dataset.id, { method: "POST" });
           render(null);
         });
+        // A row's check box selects it (never opens it); the toolbar's
+        // action shows once a row is selected.
+        const boxes = () => [...document.querySelectorAll("[data-sel]")];
+        for (const box of boxes()) box.addEventListener("click", (e) => {
+          e.stopPropagation();
+          box.setAttribute("aria-checked", box.getAttribute("aria-checked") === "true" ? "false" : "true");
+          const any = boxes().some((x) => x.getAttribute("aria-checked") === "true");
+          if (${this.selectAllAfterMs} !== null) {
+            setTimeout(() => {
+              for (const x of boxes()) x.setAttribute("aria-checked", "true");
+              for (const b of document.querySelectorAll("[data-bulk]")) b.hidden = false;
+            }, ${this.selectAllAfterMs ?? 0});
+            return;
+          }
+          for (const b of document.querySelectorAll("[data-bulk]")) b.hidden = !any;
+        });
+        for (const b of document.querySelectorAll("[data-bulk]")) b.addEventListener("click", () => {
+          const ids = boxes().filter((x) => x.getAttribute("aria-checked") === "true").map((x) => x.dataset.sel);
+          fetch("/event?what=bulk-" + b.dataset.bulk);
+          const go = async () => {
+            for (const id of ids) await fetch("/api/" + b.dataset.bulk + "?id=" + id, { method: "POST" });
+            render(null);
+          };
+          if (${this.confirmForever} && b.dataset.bulk === "destroy") {
+            const d = document.createElement("div");
+            d.innerHTML = '<div role="dialog" aria-label="Delete forever" style="position:fixed;top:40%;left:40%;z-index:10;background:#fff;padding:20px;border:1px solid #888"><span>This action will affect the selected conversation.</span> <div role="button" tabindex="0" aria-label="OK">OK</div></div>';
+            document.body.append(d);
+            d.querySelector('[role="button"]').addEventListener("click", () => { fetch("/event?what=confirm-ok"); d.remove(); go(); });
+            return;
+          }
+          go();
+        });
       }
       window.addEventListener("hashchange", () => render(null));
       render(null);
@@ -537,16 +608,16 @@ export class StandinWebmail {
       const btn = (label: string, act = ""): string =>
         `<div role="button" tabindex="0" aria-label="${label}"${act === "" ? "" : ` data-act="${act}" data-id="${m.id}"`}>${label}</div>`;
       // As Gmail's (live, 2026-10-31): the open message in Trash offers
-      // "Delete", its permanent delete there, beside "Move to Inbox",
-      // under a banner, with the "Trash" label chip by the subject; in
-      // Spam "Delete forever"; elsewhere "Delete" moves it to Trash.
+      // "Delete" beside "Move to Inbox", under a banner, with the "Trash"
+      // label chip by the subject, and that "Delete" leaves it in Trash
+      // (live, 2026-11-02); in Spam "Delete forever"; elsewhere "Delete"
+      // moves it to Trash.
       const trash = m.folder === "trash";
-      const del =
-        trash && !this.trashForever
-          ? `${btn("Back to Search Results")}${btn("Archive")}${btn("Report spam")}${btn("Delete", "destroy")}${btn("Mark as unread")}${btn("Move to Inbox")}${btn("More email options")}`
-          : trash || m.folder === "spam"
-            ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
-            : btn("Delete", "delete");
+      const del = trash
+        ? `${btn("Back to Search Results")}${btn("Archive")}${btn("Report spam")}${btn("Delete", "delete")}${btn("Mark as unread")}${btn("Move to Inbox")}${btn("More email options")}`
+        : m.folder === "spam"
+          ? `<div role="button" tabindex="0" data-act="destroy" data-id="${m.id}">Delete forever</div>`
+          : btn("Delete", "delete");
       const chip =
         trash &&
         !(
@@ -566,12 +637,39 @@ export class StandinWebmail {
         `<div class="toolbar" role="toolbar">${del}</div><h2 class="hP">${shown}</h2>${chip}<div class="sender"><span>${esc(m.fromName)}</span> <div role="button" tabindex="0">Reply</div></div>${banner}<div class="ii gt"><div class="a3s aiL"${hidden}>${m.html}</div></div><div class="actions" style="margin-top:16px"><a href="#" role="link">Reply</a> <a href="#" role="link">Forward</a></div>`,
       );
     }
-    const rows = list
+    // As Gmail's (live Trash search list, 2026-11-02): a check box per
+    // row named after the row, and a Trash row's subject cell led by its
+    // "Trash" label.
+    const label = (m: StandinMessage): string =>
+      m.folder === "trash" &&
+      !(this.noTrashChipFor !== null && m.subject.includes(this.noTrashChipFor))
+        ? `<span class="ar">Trash</span> `
+        : "";
+    const decoy: StandinMessage = {
+      id: "decoy",
+      account,
+      folder: "trash",
+      fromName: "Someone else",
+      subject: "An older message",
+      preview: "not the run's",
+      html: "",
+      messageId: "<decoy@mail.invalid>",
+      deliveredAt: 0,
+    };
+    const shown = inTrash && this.trashDecoy ? [...list, decoy] : list;
+    const rows = shown
       .map(
         (m) =>
-          `<tr class="zA zE" role="row" data-open="${m.id}"${this.rowNamedBySender ? ` aria-labelledby="from-${m.id}"` : ""}><td role="gridcell"><span class="yP" id="from-${m.id}" email="sender@standin.invalid">${esc(m.fromName)}</span></td><td role="gridcell"><span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
+          `<tr class="zA zE" role="row" data-open="${m.id}"${this.rowNamedBySender ? ` aria-labelledby="from-${m.id}"` : ""}><td role="gridcell"><div role="checkbox" tabindex="0" aria-checked="${inTrash && this.preselect === "decoy" && m.id === "decoy"}" aria-label="${esc(m.fromName)}" data-sel="${m.id}" style="display:inline-block;width:14px;height:14px;margin-right:16px"></div></td><td role="gridcell" style="white-space:nowrap"><span class="yP" id="from-${m.id}" email="sender@standin.invalid">${esc(m.fromName)}</span></td><td role="gridcell">${label(m)}<span class="bog">${esc(m.subject)}</span><span class="y2"> - ${esc(m.preview)}</span></td></tr>`,
       )
       .join("");
+    // The toolbar over the list: "Select", and the selection's action
+    // (hidden until a row is selected).
+    const bulk =
+      inTrash && this.noListForever
+        ? ""
+        : `<div role="button" tabindex="0" aria-label="${inTrash ? "Delete forever" : "Delete"}" data-bulk="${inTrash ? "destroy" : "delete"}"${inTrash && this.preselect !== null ? "" : " hidden"}>${inTrash ? "Delete forever" : "Delete"}</div>`;
+    const toolbar = `<div role="toolbar" aria-label="List actions"><div role="checkbox" tabindex="0" aria-checked="${inTrash && this.preselect === "toolbar" ? "true" : inTrash && this.preselect === "decoy" ? "mixed" : "false"}" aria-label="Select" style="display:inline-block;width:14px;height:14px"></div> ${bulk}</div>`;
     // The look-alike: the query echoed as a suggestion (an option).
     const suggest =
       this.suggestions && q !== ""
@@ -581,7 +679,7 @@ export class StandinWebmail {
       res,
       200,
       "text/html",
-      `${suggest}<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
+      `${suggest}${toolbar}<table role="grid" style="width:100%"><tbody>${rows}</tbody></table>`,
     );
   }
 
@@ -603,7 +701,8 @@ export class StandinWebmail {
     );
     if (m1 === null || folders[m1[2]!] === undefined)
       return this.send(res, 302, "text/plain", "", {
-        location: "/d/folders/1",
+        location:
+          this.mailboxOnlyIn === null ? "/d/folders/1" : "/n/folders/00_1",
       });
     // The old folder URLs gone: Spam's and Trash's lists sent to the
     // Inbox (their links in the folder list still open them).
@@ -682,6 +781,13 @@ export class StandinWebmail {
         ),
       );
     }
+    // The /n/ Inbox laid out as a mailbox only in a window no larger
+    // than `mailboxOnlyIn`; in a larger one a page without the folder
+    // list or the compose button (its title still the account's).
+    const sized =
+      this.mailboxOnlyIn !== null && m1[1] === "n" && folder === "inbox"
+        ? `<script>if (innerWidth > ${this.mailboxOnlyIn.width} || innerHeight > ${this.mailboxOnlyIn.height}) { document.body.innerHTML = '<div class="main" role="main"><p>${bg ? "Зареждане" : "Loading"}</p></div>'; }</script>`
+        : "";
     const list = this.mine(
       account,
       folder === "inbox" ? ["inbox", "other"] : folder,
@@ -704,7 +810,7 @@ export class StandinWebmail {
       200,
       "text/html",
       page(
-        `${nav}<div class="main" role="main">${rows}</div>`,
+        `${nav}<div class="main" role="main">${rows}</div>${sized}`,
         "",
         true,
         title,
@@ -731,7 +837,13 @@ export class StandinWebmail {
         location: "/mail/0/inbox",
       });
     const fname = m1[1]!;
-    const nav = `<div class="nav" role="navigation"><p>New mail</p><p>Inbox</p><input id="topSearchInput" type="search" aria-label="Search"></div>`;
+    // The reading pane's width, when the test sets one (a pane between
+    // the webmail's columns, growing with the window).
+    const pane =
+      this.paneWidth === null
+        ? ""
+        : `<style>.main{width:${this.paneWidth}}</style>`;
+    const nav = `${pane}<div class="nav" role="navigation"><p>New mail</p><p>Inbox</p><input id="topSearchInput" type="search" aria-label="Search"></div>`;
     if (m1[2] !== undefined) {
       const m = this.find(account, m1[2]);
       if (m === undefined)

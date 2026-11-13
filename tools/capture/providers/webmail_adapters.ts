@@ -171,8 +171,28 @@ export interface AdapterUi {
     // In the opened message: moves it to Trash / Deleted Items.
     del: WebmailLocator;
     // In the opened message in Trash: deletes it for good. Alternatives,
-    // the first with exactly one showing match wins.
+    // the first with exactly one showing match wins (unused when
+    // `trashList` is set).
     deleteForever: WebmailLocator[];
+    // The permanent delete made from the Trash list instead of the opened
+    // message (Gmail: in an open Trash conversation its "Delete" is not
+    // the permanent delete, live 2026-11-02): the row's check box
+    // (`select`, inside the row), the toolbar's permanent delete
+    // (`button`, shown once a row is selected), the row's own Trash
+    // label (`rowLabel`, inside the row: the Trash guard's chip for a
+    // row), and a confirmation a dialog may ask (`confirm`, clicked only
+    // inside a dialog, when one shows).
+    trashList: {
+      select: WebmailLocator;
+      button: WebmailLocator;
+      rowLabel: WebmailLocator;
+      confirm: WebmailLocator | null;
+    } | null;
+    // When Trash empties itself after this many days (Gmail: 30), a
+    // message the permanent delete could not be shown to remove, left in
+    // Trash and in no other folder, is recorded `in-trash` (`permanent:
+    // false`, never "removed"); null: it is a failed cleanup.
+    trashPurgeDays: number | null;
     // What must hold before a click on `deleteForever` (null: nothing
     // more than the opened message's identity): the address bar,
     // percent-decoded, matching `location` (a regular expression), and
@@ -311,19 +331,27 @@ const GMAIL_DESKTOP: AdapterUi = {
   remove: {
     del: u({ role: "button", name: "Delete" }),
     // The open message in Trash (live cleanup frame, 2026-10-31): its
-    // toolbar has "Delete" (Gmail's permanent delete there) and no
-    // "Delete forever", which the Trash list's toolbar has once rows are
-    // selected.
-    deleteForever: [
-      u({ role: "button", name: "Delete" }),
-      u({ role: "button", name: "Delete forever" }),
-    ],
+    // toolbar has "Delete" and no "Delete forever"; that "Delete" left
+    // the message in Trash (live cleanup, 2026-11-02), so the permanent
+    // delete is made from the Trash search list (`trashList`).
+    deleteForever: [],
+    // The live Trash search list (2026-11-02): each row a table row with
+    // a check box named after the row, its subject cell and link named
+    // "Trash [es:…] …" (the label first); "Delete forever" is the
+    // toolbar's once a row is selected [unverified-live].
+    trashList: {
+      select: u({ role: "checkbox" }),
+      button: u({ role: "button", name: "Delete forever" }),
+      rowLabel: u({ namePattern: "^Trash\\b" }),
+      confirm: u({ role: "button", name: "OK" }),
+    },
+    trashPurgeDays: 30,
+    // The address bar on Trash; the chip for a row is `trashList.rowLabel`
+    // (the open message's "Search for all messages with label Trash"
+    // chip is not used: nothing is deleted from the open message).
     trashGuard: {
       location: "#search/in:trash(?:[+ ]|$)|#trash(?:/|$)",
-      chip: u({
-        role: "button",
-        name: "Search for all messages with label Trash",
-      }),
+      chip: null,
     },
     permanentDelete: u({ role: "button", name: "Delete forever" }),
     confirm: null,
@@ -375,6 +403,8 @@ const YAHOO_DESKTOP: AdapterUi = {
     deleteForever: [
       u({ role: "button", namePattern: oneOf(LOCALE_NAMES.delete) }),
     ],
+    trashList: null,
+    trashPurgeDays: null,
     trashGuard: null,
     permanentDelete: u({
       role: "button",
@@ -437,6 +467,8 @@ const OUTLOOK_DESKTOP: AdapterUi = {
   remove: {
     del: u({ role: "button", name: "Delete" }),
     deleteForever: [u({ role: "button", name: "Delete" })],
+    trashList: null,
+    trashPurgeDays: null,
     trashGuard: null,
     permanentDelete: u({ role: "button", name: "Delete" }),
     confirm: u({ role: "button", name: "OK" }),
@@ -444,7 +476,12 @@ const OUTLOOK_DESKTOP: AdapterUi = {
     mayBePermanentIn: ["spam"],
   },
   dark: { toggle: u({ role: "button", namePattern: "background" }) },
-  windowAllowance: 640,
+  // Live, 2026-11-02 (run a1-20261102T013834Z): at 640 the body
+  // ("Message body") measured 513 px in the 1440 px window, the reading
+  // pane between the folder pane and the list on its left and a column
+  // on its right; 960 asks for the 287 px it lacked and a margin
+  // [measure: whether the pane grows one pixel per pixel of window].
+  windowAllowance: 960,
 };
 
 export const WEBMAIL_ADAPTERS: WebmailAdapter[] = [
@@ -572,6 +609,13 @@ export function adapterLocators(
   add("remove.delete", ui.remove.del);
   ui.remove.deleteForever.forEach((l, i) => add(`remove.deleteForever${i}`, l));
   add("remove.trashGuard.chip", ui.remove.trashGuard?.chip ?? null);
+  const tl = ui.remove.trashList;
+  if (tl !== null) {
+    add("remove.trashList.select", tl.select);
+    add("remove.trashList.button", tl.button);
+    add("remove.trashList.rowLabel", tl.rowLabel);
+    add("remove.trashList.confirm", tl.confirm);
+  }
   add("remove.permanentDelete", ui.remove.permanentDelete);
   add("remove.confirm", ui.remove.confirm);
   add("list.scope", ui.list.scope);

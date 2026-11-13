@@ -227,12 +227,15 @@ test-ts: example-page-build email-shots-build
 
 # The hosted-webmail provider end to end: Google Chrome in GuiAssert
 # sessions against the stand-in webmails, a browser start per account
-# and test (~15-20 min at load ~100-120; a recipe of its own so it can
-# be run alone, and so that its browsers do not run inside test-ts's
-# per-file timeout window beside the capture-ci suite). Needs the story
-# driver (`just email-shots-build`) for its command-line test.
+# and test, and one more per worker for the session check (~25-30 min at
+# load ~60-100; a recipe of its own so it can be run alone, and so that
+# its browsers do not run inside test-ts's per-file timeout window
+# beside the capture-ci suite). Its own per-file limit, an hour: on
+# 2026-11-12 the file reached the shared 25 min limit with 20 of its 24
+# tests done. Needs the story driver (`just email-shots-build`) for its
+# command-line test.
 test-hosted: email-shots-build
-    {{node-test}} tools/capture/providers/hosted_webmail.test.ts
+    node --test --test-reporter=spec --test-timeout=3600000 tools/capture/providers/hosted_webmail.test.ts
 
 # The self-hosted webmail provider end to end: real Roundcube and
 # SnappyMail on php-fpm and caddy, Dovecot and Chromium (~3 min on a

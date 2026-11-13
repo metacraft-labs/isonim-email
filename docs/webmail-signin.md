@@ -554,9 +554,18 @@ Every PNG has a JSON file beside it. For a first capture, check:
   text) or the body's own name (Outlook.com, `name="Message body"`);
   for a story region `crop.foreign_inside` should be 0 (text inside the
   crop that is not the story's: a banner the webmail put in the body);
-- `width_check`: the body's measured width against the requested 800.
-  A delta other than 0 means the adapter's `windowAllowance` in
-  `webmail_adapters.ts` needs calibrating;
+- `width_check`: the body's measured width against the requested 800
+  (`min`), and `ok`. A body narrower than that is never kept. The
+  capture restarts the browser once in a window widened by the
+  shortfall, finds and opens the message again, and records it in
+  `window.widened` (`from`, `to`, the width it `measured` first). A
+  capture that needed widening means the adapter's `windowAllowance` in
+  `webmail_adapters.ts` should grow by `to - from`;
+- `session_check`: how the account's session was confirmed before the
+  capture. `by` is `ocr` (the mailbox's English words) or `structure`
+  (its layout, in any language), `signals` says which structural signals
+  held, and `screen` is the check's window: the same 1280 x 900 the
+  sign-in's `--check-only` uses, not the capture's own window;
 - `settle.settled`: false means the body's pixels never held still
   within the bound (an animation, or images still loading);
 - `scheme_applied` (Outlook.com): the toggle's state and the crop's mean
@@ -596,8 +605,10 @@ screen and what the browser told a screen reader, in
   `<account address>`.
 
 The failed request's provenance names both (`failure.frame`,
-`failure.tree`, and the `step`: `arrival`, `list-row`, `restart-dark`,
-`open`, `body-light`, `body-dark`, or a `cleanup-…` step), and a
+`failure.tree`, and the `step`: `session-check`, `arrival`, `list-row`,
+`restart-dark`, `widen-light`, `open`, `body-light`, `body-dark`, or a
+`cleanup-…` step). A `session-check` frame is the check's 1280 x 900
+screen, not the capture's window. A
 delivery failure's provenance carries the last two rounds of looks
 (`search`); a failed cleanup's line in `hosted-webmail-cleanup.jsonl`
 carries the same. The screen may show the QA mailbox; keep these files
@@ -607,7 +618,18 @@ done with it.
 ### When a capture fails
 
 - `session lost: …`: the profile is signed out; run the sign-in it
-  names.
+  names. When the reason says `the inbox loaded on … but the mailbox did
+not show`, the line also names the kept `session-check` screen and
+  ends with the last reading: what the screen was recognised as, the
+  address bar, and the structural signals found. If `--check-only`
+  passes on the same profile right after, the account is signed in and
+  the check is what failed: keep the frame and tree and report them. Run
+  `--check-only` once in any case, because the failed check marked the
+  account `needs-login` and only a passing check clears that.
+- `the message body is N px wide, narrower than the requested 800 px
+…, in a window already widened from A to B px`: the reading pane did
+  not grow as much as the window did. Raise the adapter's
+  `windowAllowance` (try `B - A` more) and capture again.
 - `UI drift: <webmail> adapter locator '<name>' (…)`: the webmail no
   longer shows what the adapter's locator names; the adapter is down for
   the rest of the run. Open the failure's frame and tree (above): find
@@ -643,17 +665,32 @@ found` or `the notice … stayed`: a webmail notice the adapter knows
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
   mailbox; the line names the kept screen, and the cleanup record's
   `search` the looks that saw it. A removal's `via` says how it went:
-  `trash` (deleted, then deleted again from Trash / Deleted Items; in
-  Gmail the second delete is the open message's "Delete" in Trash,
-  clicked only when the address bar is on an `in:trash` search or the
-  Trash view and the message shows its "Trash" label, otherwise the
-  cleanup fails with `the opened message is not shown in Trash (the
-Trash guard …)` and nothing is clicked),
+  `trash` (deleted, then deleted again from Trash / Deleted Items. In
+  Gmail the second delete is made from the `in:trash` search list: the
+  message's row check box, then the toolbar's "Delete forever". It is
+  done only when the address bar is on an `in:trash` search or the Trash
+  view, the row shows its "Trash" label, and nothing in the list is
+  selected yet (no row's check box, nor the list's select-all). After
+  the row's check box, exactly that row must be selected, on the frame
+  "Delete forever" is clicked from too. Otherwise the cleanup fails with
+  `the row is not shown in Trash (the Trash guard …)`, `a selection was
+already made in the Trash list …` or `the selection changed before …`,
+  and nothing more is clicked),
   `delete-forever` (Gmail's Spam), or `permanent` (deleted from
   Outlook.com's Junk Email or Yahoo's Spam, and never seen in Trash:
-  the delete there was for good). Sign nothing in: open the account's profile only through the
+  the delete there was for good). Every `removed` line says
+  `permanent: true`. Sign nothing in: open the account's profile only through the
   recipes (a check with `--check-only`, or a sign-in with `--manual` over
   VNC to delete it by hand), never by starting a browser on it yourself.
+- `cleanup left <Message-ID> in Trash … (not deleted for good: Gmail
+empties Trash after 30 days)`: Gmail's "Delete forever" could not be
+  confirmed. Either it never showed once the row was selected, or the
+  row was still in Trash after it. The message is in Gmail's Trash and in
+  no other folder. Its cleanup line says `state: "in-trash"`,
+  `permanent: false`, and names the kept screen. Gmail deletes it by
+  itself within 30 days; to remove it sooner, empty Trash by hand in a
+  `--manual --vnc` sign-in session. Report the frame, because it shows
+  what Gmail's Trash list offers.
 - `the capture browser cannot run: …`: no GuiAssert session or no
   sandbox, as for the sign-in (Prerequisites).
 - `delivery failed: token: cannot reach oauth2.googleapis.com: … (after

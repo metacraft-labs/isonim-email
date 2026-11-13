@@ -31,6 +31,7 @@ import {
   CONSENT_CONTROLS,
   consentHinted,
   GMAIL_SIGNIN,
+  MailboxCheck,
   mailboxByStructure,
   normalize,
   OUTLOOK_SIGNIN,
@@ -1229,5 +1230,66 @@ describe("the mailbox by its structure, in any language", () => {
         .kind,
       "done",
     );
+  });
+});
+
+describe("the check's decision, shared by the sign-in and the captures (MailboxCheck)", () => {
+  const AT = "mail.yahoo.com/n/folders/00_1";
+  const byStructure = {
+    kind: "done" as const,
+    by: "structure" as const,
+    signals: ["folder-navigation", "compose"],
+  };
+  const check = () =>
+    new MailboxCheck({ start: 0, timeoutMs: 10_000, settleMs: 5_000 });
+
+  it("takes the mailbox's phrases on one reading, its structure only over two at one address", () => {
+    assert.deepEqual(check().read({ kind: "done" }, AT, 0), {
+      kind: "signed-in",
+      by: "ocr",
+      signals: [],
+    });
+    const c = check();
+    assert.deepEqual(c.read(byStructure, AT, 0), { kind: "wait" });
+    assert.deepEqual(c.read(byStructure, AT, 500), {
+      kind: "signed-in",
+      by: "structure",
+      signals: ["folder-navigation", "compose"],
+    });
+    assert.equal(c.readings, 2);
+    // Two structural readings at different addresses are not held.
+    const moved = check();
+    moved.read(byStructure, AT, 0);
+    assert.deepEqual(moved.read(byStructure, `${AT}/x`, 500), {
+      kind: "wait",
+    });
+    // A reading in between that is not the mailbox restarts it.
+    const broken = check();
+    broken.read(byStructure, AT, 0);
+    broken.read({ kind: "unknown" }, AT, 500);
+    assert.deepEqual(broken.read(byStructure, AT, 1_000), { kind: "wait" });
+  });
+
+  it("names a screen that stayed for the settle time, and an unrecognised one at the deadline", () => {
+    const c = check();
+    const consent = { kind: "consent" as const, consent: "yahoo-consent" };
+    assert.deepEqual(c.read(consent, AT, 0), { kind: "wait" });
+    assert.deepEqual(c.read(consent, AT, 4_999), { kind: "wait" });
+    const v = c.read(consent, AT, 5_000);
+    assert.equal(v.kind, "not-signed-in");
+    assert.match(
+      (v as { reason: string }).reason,
+      /^the inbox URL showed a privacy-consent page \(yahoo-consent\), not the mailbox/,
+    );
+    assert.equal((v as { timedOut: boolean }).timedOut, false);
+    const late = check();
+    assert.deepEqual(late.read({ kind: "unknown" }, AT, 0), { kind: "wait" });
+    // A structural reading not yet held at the deadline is no mailbox.
+    assert.deepEqual(late.read(byStructure, AT, 10_000), {
+      kind: "not-signed-in",
+      reason: "the mailbox did not show within 10 s (the screen: unrecognised)",
+      seen: "unrecognised",
+      timedOut: true,
+    });
   });
 });
