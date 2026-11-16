@@ -110,19 +110,74 @@ export function closest(f: Flat, loc: A11yLocator): Flat | null {
   return null;
 }
 
+// Controls inside a row: a click on one acts (selects the row, moves,
+// stars or deletes the message) instead of opening it.
+const CONTROL_ROLES = new Set([
+  "checkbox",
+  "radio",
+  "switch",
+  "toggle-button",
+  "button",
+  "menu-item",
+  "check-menu-item",
+  "radio-menu-item",
+  "tab",
+  "combo-box",
+  "text-field",
+  "slider",
+  "spin-button",
+]);
+const CONTROL_NATIVE = new Set([
+  "check box",
+  "radio button",
+  "toggle button",
+  "push button",
+  "menu item",
+  "switch",
+]);
+
+/** Whether a node is a control, a toolbar or a menu (never a row's text). */
+export function isControl(n: GaNode): boolean {
+  return (
+    CONTROL_ROLES.has(n.role) ||
+    CONTROL_NATIVE.has(n.nativeRole) ||
+    ACTION_ROLES.has(n.role) ||
+    ACTION_NATIVE.has(n.nativeRole)
+  );
+}
+
 /**
- * Where to click a node: the centre of its deepest showing descendant
- * whose name or text carries `text` (a row's subject), else the node's own
- * bounds. An inline element that wraps (a link over two lines) has a
- * bounding box whose centre may lie between its fragments, on nothing.
+ * Where to click a row to open it: the centre of its deepest showing
+ * descendant whose name or text carries `text` (a row's subject) and
+ * that is no control (a check box, a button, a toolbar's or menu's
+ * anything: Yahoo's row names its check box and hover actions after the
+ * message, live 2026-11-13, and a click on the check box selected the
+ * row); a link inside the row may be clicked. Else, across the row, the
+ * widest stretch no showing control inside it covers: the leftmost
+ * showing node of text inside the row (no control) whose centre lies in
+ * it (a sender's name), else the stretch's left end, at most
+ * ROW_CLICK_BAND wide; the row's box when controls cover it all. Never
+ * the stretch's middle: the actions a row draws under the pointer are
+ * not in the tree before it hovers, and they sit at its right end (Yahoo
+ * draws 240 px of them over the right of a 689 px row, live 2026-11-13),
+ * so the middle of a narrow row is on one of them (delete, move). An
+ * inline element that wraps (a link over two lines) has a bounding box
+ * whose centre may lie between its fragments, on nothing.
  */
 export function clickTarget(
   node: GaNode & { bounds: Rect },
   text: string,
 ): Rect {
   let best: { b: Rect; depth: number } | null = null;
+  const covered: [number, number][] = [];
+  const texts: Rect[] = [];
   const walk = (n: GaNode, depth: number): void => {
     for (const c of n.children ?? []) {
+      if (isControl(c)) {
+        if (showing(c)) covered.push([c.bounds[0], c.bounds[0] + c.bounds[2]]);
+        continue;
+      }
+      if (showing(c) && (c.text ?? "").trim() !== "") texts.push(c.bounds);
       if (
         showing(c) &&
         ((c.name ?? "").includes(text) || (c.text ?? "").includes(text))
@@ -133,8 +188,34 @@ export function clickTarget(
     }
   };
   walk(node, 0);
-  return best === null ? node.bounds : (best as { b: Rect }).b;
+  if (best !== null) return (best as { b: Rect }).b;
+  const [x, y, w, h] = node.bounds;
+  let free: [number, number] | null = null;
+  let at = x;
+  const stretch = (to: number): void => {
+    if (to > at && (free === null || to - at > free[1] - free[0]))
+      free = [at, to];
+  };
+  for (const [a, b] of covered.sort((p, q) => p[0] - q[0])) {
+    stretch(Math.min(a, x + w));
+    at = Math.max(at, b);
+  }
+  stretch(x + w);
+  if (free === null) return node.bounds;
+  const [a, b] = free as [number, number];
+  const inside = texts
+    .filter((t) => {
+      const cx = t[0] + t[2] / 2;
+      return cx > a && cx < b && t[0] + t[2] <= b;
+    })
+    .sort((p, q) => p[0] - q[0]);
+  if (inside.length > 0) return inside[0]!;
+  return [a, y, Math.min(b - a, ROW_CLICK_BAND), h];
 }
+
+/** How wide a row's click band is, from the left of its widest stretch
+ * no control covers (`clickTarget`, a row with no text in the tree). */
+export const ROW_CLICK_BAND = 48;
 
 /** Every node of `f`'s subtree, `f` included. */
 export function subtree(flat: Flat[], f: Flat): Flat[] {
@@ -439,19 +520,30 @@ export function nodeText(n: GaNode): string {
 /** Roles whose content is typed: never a row's text. */
 const EDITABLE_ROLES = new Set(["text-field", "text-area", "combo-box"]);
 
+/** Whether an editable field is inside `n` (not `n` itself). */
+function holdsField(n: GaNode): boolean {
+  return (n.children ?? []).some(
+    (c) => EDITABLE_ROLES.has(c.role) || holdsField(c),
+  );
+}
+
 /**
  * A row's accessible text: its own name and the names and text of every
  * node inside it, in order, white space collapsed. Editable fields and
  * what is inside them are left out: a search field holding a token
- * query does not make its row the message's. Chrome folds the text of
- * the generic containers it prunes into the nearest kept node, so a row
- * named after its sender alone still carries the subject in its cells.
+ * query does not make its row the message's. So is the own name and
+ * text of a node holding an editable field: Chrome names such a wrapper
+ * after the field's value (Gmail's search box, inside its banner
+ * heading, named `in:spam "[es:…]"`, live 2026-11-13); its other
+ * children still count. Chrome folds the text of the generic containers
+ * it prunes into the nearest kept node, so a row named after its sender
+ * alone still carries the subject in its cells.
  */
 export function rowText(row: GaNode): string {
   const parts: string[] = [];
   const walk = (n: GaNode): void => {
     if (EDITABLE_ROLES.has(n.role)) return;
-    for (const t of [n.name, n.text]) if (t) parts.push(t);
+    if (!holdsField(n)) for (const t of [n.name, n.text]) if (t) parts.push(t);
     for (const c of n.children ?? []) walk(c);
   };
   walk(row);
@@ -723,8 +815,45 @@ export function tokenNodes(flat: Flat[], token: string): Flat[] {
  */
 export function textCarriesToken(node: GaNode, token: string): boolean {
   return (
-    carriesToken(node.name ?? "", token) || carriesToken(rowText(node), token)
+    (!holdsField(node) && carriesToken(node.name ?? "", token)) ||
+    carriesToken(rowText(node), token)
   );
+}
+
+/**
+ * `found` with every node inside another of them, by the tree, left
+ * out: a match nested in a match is one (the search's highlight inside
+ * a subject heading, a heading in a heading). Only the tree decides:
+ * two nodes that are not nested stay two however their bounds overlap
+ * (a results heading drawn over the subject is a second match, never
+ * the subject's).
+ */
+export function outermost(found: Flat[]): Flat[] {
+  return found.filter((f) => !found.some((g) => g !== f && isWithin(f, g)));
+}
+
+/**
+ * How many messages a row's conversation holds: N from a node inside
+ * the row, not a control, whose name is a number and a word ("2
+ * съобщения", "2 messages") and whose text, or a child's, is that number
+ * (Yahoo's row "IsoNim 2", live 2026-11-13); 1 when none shows one.
+ */
+export function conversationCount(row: GaNode): number {
+  let most = 1;
+  const walk = (n: GaNode): void => {
+    for (const c of n.children ?? []) {
+      if (isControl(c)) continue;
+      const m = /^(\d+)\s+\p{L}+$/u.exec((c.name ?? "").trim());
+      if (m !== null) {
+        const texts = [c.text, ...(c.children ?? []).map((k) => k.text)];
+        if (texts.some((t) => (t ?? "").trim() === m[1]))
+          most = Math.max(most, Number(m[1]));
+      }
+      walk(c);
+    }
+  };
+  walk(row);
+  return most;
 }
 
 // ---------------------------------------------------------------------------

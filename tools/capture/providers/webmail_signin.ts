@@ -84,6 +84,7 @@ import { AUTOMATION_SWITCHES, sessionSwitches } from "./webmail_browser.ts";
 import {
   type ChallengeKind,
   MailboxCheck,
+  RELOAD_AFTER_MS,
   checkScreenName,
   classifyScreen,
   CONSENT_CONTROLS,
@@ -96,8 +97,20 @@ import {
   signInAgainHinted,
   signInAgainMovingOn,
   SKIP_CONTROLS,
+  splitLocation,
   type StepId,
 } from "./webmail_signin_steps.ts";
+
+// Whether the address bar is on one of the provider's mailbox hosts.
+function onMailHost(
+  p: ProviderSignin,
+  location: string | null | undefined,
+): boolean {
+  if (p.mailbox === undefined || location === null || location === undefined)
+    return false;
+  const l = splitLocation(location);
+  return l !== null && p.mailbox.hosts.includes(l.host);
+}
 
 /**
  * What the procedure acted on: a step, an interstitial it dismissed, or a
@@ -1292,6 +1305,14 @@ export interface VerifyContext extends ScreenReader {
    * below `timeoutMs`.
    */
   loadingTimeoutMs?: number;
+  /**
+   * Reloads the page (F5 into the browser window): called once, when the
+   * loading screen has shown without a break for RELOAD_AFTER_MS. None
+   * set: no reload.
+   */
+  reload?: () => Promise<void>;
+  /** When `reload` is set: after how long (default RELOAD_AFTER_MS). */
+  reloadAfterMs?: number;
   /** How long a sign-in, challenge or error screen must stay to count. */
   settleMs: number;
   pollMs: number;
@@ -1311,6 +1332,12 @@ export type VerifyOutcome =
       seen?: string;
       /** The kept screenshot, when `keepPath` was given and the guard kept it. */
       screen?: string | null;
+      /**
+       * false: the check ended at its bound (the loading screen's, or its
+       * budget on an unrecognised screen): the webmail did not load, and
+       * the session was not judged.
+       */
+      loaded?: false;
     };
 
 /**
@@ -1329,8 +1356,11 @@ export type VerifyOutcome =
  * - the webmail's loading screen (a page showing only its logo, on a
  *   mailbox address): never judged, waited on, its time not counted
  *   against `timeoutMs`, up to `loadingTimeoutMs`;
+ *   once it has shown without a break for RELOAD_AFTER_MS, the page is
+ *   reloaded once through `reload` (F5, the only key the check presses);
  * - neither within `timeoutMs`: not signed in, naming the last screen
- *   it recognised, the loading screen, or "unrecognised";
+ *   it recognised, the loading screen, or "unrecognised", with
+ *   `loaded: false` (the webmail did not load: nothing judged);
  * - a frame showing the password: not signed in (it never should here).
  * Not signed in (but for the password), the screen is kept at `keepPath`
  * through the guard; signed in, an older one there is removed. The
@@ -1347,12 +1377,17 @@ export async function verifySignedIn(
     ...(ctx.loadingTimeoutMs === undefined
       ? {}
       : { loadingTimeoutMs: ctx.loadingTimeoutMs }),
+    reloadAfterMs:
+      ctx.reload === undefined
+        ? Infinity
+        : (ctx.reloadAfterMs ?? RELOAD_AFTER_MS),
   });
   // Not signed in: the screen kept first (while the browser still shows it).
   const notSignedIn = async (
     reason: string,
     what: string,
     keep: boolean,
+    loaded = true,
   ): Promise<VerifyOutcome> => ({
     signedIn: false,
     reason,
@@ -1361,6 +1396,7 @@ export async function verifySignedIn(
       keep && ctx.keepPath !== undefined
         ? await keepScreen({ ...ctx, keepPath: ctx.keepPath })
         : null,
+    ...(loaded ? {} : { loaded: false as const }),
   });
   for (let n = 0; ; n++) {
     const text = await readScreen(ctx, n);
@@ -1390,7 +1426,23 @@ export async function verifySignedIn(
         ? { signedIn: true, by: "structure" }
         : { signedIn: true };
     }
-    if (v.kind === "not-signed-in") return notSignedIn(v.reason, v.seen, true);
+    // At its bound on the webmail's own host the webmail did not load;
+    // anywhere else (a sign-in host whose page was not recognised, an
+    // address not read) it may be signed out, so it says not signed in.
+    if (v.kind === "not-signed-in")
+      return notSignedIn(
+        v.reason,
+        v.seen,
+        true,
+        !(v.timedOut && onMailHost(ctx.provider, location)),
+      );
+    if (v.kind === "reload") {
+      ctx.log(
+        `check: reloaded the page once, after ${Math.round(v.afterMs / 1000)} s with the webmail's loading screen shown`,
+      );
+      await ctx.reload!();
+      continue;
+    }
     await sleep(ctx.pollMs);
   }
 }

@@ -1359,7 +1359,7 @@ describe("the check's decision, shared by the sign-in and the captures (MailboxC
     f.read(unknown, OUT, 3_000, true);
     assert.deepEqual(f.read(step, OUT, 6_000), { kind: "wait" });
     assert.equal(f.read(step, OUT, 11_000).kind, "not-signed-in");
-    // Its bound is never below the budget, and 120 s by default.
+    // Its bound is never below the budget, and 240 s by default (Outlook.com's took 119 s on a passing check, live 2026-11-13).
     const g = new MailboxCheck({
       start: 0,
       timeoutMs: 200_000,
@@ -1368,12 +1368,59 @@ describe("the check's decision, shared by the sign-in and the captures (MailboxC
     });
     assert.deepEqual(g.read(unknown, OUT, 150_000, true), { kind: "wait" });
     const h = check();
-    assert.deepEqual(h.read(unknown, OUT, 119_999, true), { kind: "wait" });
-    assert.equal(h.read(unknown, OUT, 120_000, true).kind, "not-signed-in");
+    assert.deepEqual(h.read(unknown, OUT, 239_999, true), { kind: "wait" });
+    assert.equal(h.read(unknown, OUT, 240_000, true).kind, "not-signed-in");
     // The mailbox by its phrases is never taken for the loading screen.
     assert.equal(
       check().read({ kind: "done" }, OUT, 0, true).kind,
       "signed-in",
     );
+  });
+
+  // Outlook.com's splash at load 60-70 (live 2026-11-13): 119 s on a
+  // passing check; it is reloaded once after a minute.
+  it("reloads a loading screen that stays reloadAfterMs without a break, once; a timeout is the webmail not loading, not a judged session", () => {
+    const unknown = { kind: "unknown" as const };
+    const c = new MailboxCheck({
+      start: 0,
+      timeoutMs: 10_000,
+      settleMs: 5_000,
+      loadingTimeoutMs: 100_000,
+      reloadAfterMs: 20_000,
+    });
+    // A break in the loading screen restarts its run.
+    assert.deepEqual(c.read(unknown, OUT, 1_000, true), { kind: "wait" });
+    assert.deepEqual(c.read(unknown, OUT, 15_000, true), { kind: "wait" });
+    assert.deepEqual(c.read(unknown, OUT, 16_000), { kind: "wait" });
+    assert.deepEqual(c.read(unknown, OUT, 17_000, true), { kind: "wait" });
+    assert.deepEqual(c.read(unknown, OUT, 36_999, true), { kind: "wait" });
+    assert.equal(c.reloadedAfterMs, null);
+    assert.deepEqual(c.read(unknown, OUT, 37_000, true), {
+      kind: "reload",
+      afterMs: 37_000,
+    });
+    assert.equal(c.reloadedAfterMs, 37_000);
+    // Once only.
+    for (const t of [60_000, 80_000, 99_999])
+      assert.deepEqual(c.read(unknown, OUT, t, true), { kind: "wait" }, `${t}`);
+    const end = c.read(unknown, OUT, 100_000, true);
+    assert.equal(end.kind, "not-signed-in");
+    // The bound reached: the webmail did not load (timedOut), never a
+    // named signed-out screen.
+    assert.equal((end as { timedOut: boolean }).timedOut, true);
+    // The default: a minute.
+    const d = check();
+    assert.deepEqual(d.read(unknown, OUT, 0, true), { kind: "wait" });
+    assert.deepEqual(d.read(unknown, OUT, 59_999, true), { kind: "wait" });
+    assert.equal(d.read(unknown, OUT, 60_000, true).kind, "reload");
+    // Off (Infinity): never.
+    const off = new MailboxCheck({
+      start: 0,
+      timeoutMs: 10_000,
+      settleMs: 5_000,
+      reloadAfterMs: Infinity,
+    });
+    for (const t of [0, 60_000, 200_000])
+      assert.deepEqual(off.read(unknown, OUT, t, true), { kind: "wait" });
   });
 });

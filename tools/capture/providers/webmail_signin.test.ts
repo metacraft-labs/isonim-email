@@ -2274,7 +2274,109 @@ describe("the automated sign-in procedure", () => {
       r.seen,
       "the webmail's loading screen (a page showing only its logo)",
     );
+    // The bound reached: the webmail did not load, nothing judged.
+    assert.equal(r.loaded, false);
     noInput(h2.log());
+  });
+
+  // Live 2026-11-13: 119 s on Outlook.com's loading screen at
+  // load 60-70): one reload after reloadAfterMs, and a check that ends
+  // at its bound says the webmail did not load.
+  it("reloads a loading screen that stays, once, through the caller; at the bound the webmail did not load (loaded: false)", async () => {
+    const h = harness({ start: "splash", screens: { splash: splash() } });
+    const logs: string[] = [];
+    let reloads = 0;
+    const r = await verifySignedIn(
+      verifyCtx(h, {
+        provider: OUTLOOK_SIGNIN,
+        browserPid: 4242,
+        timeoutMs: 300,
+        // Room for several readings after the reload's 1 s on a loaded
+        // host (each reading is an OCR, an address and a tree read: at
+        // load 160 a 4 s bound saw too few readings to reach 1 s of it).
+        loadingTimeoutMs: 15_000,
+        reloadAfterMs: 1_000,
+        reload: async () => {
+          reloads++;
+        },
+        log: (l: string) => logs.push(l),
+      }),
+    );
+    assert.equal(reloads, 1);
+    assert.ok(
+      logs.some((l) =>
+        /^check: reloaded the page once, after \d+ s with the webmail's loading screen shown$/.test(
+          l,
+        ),
+      ),
+      JSON.stringify(logs),
+    );
+    assert.ok(!r.signedIn);
+    assert.equal(r.loaded, false);
+    // Without a reload callback, nothing is reloaded (and nothing typed).
+    noInput(h.log());
+    // The splash gone after the reload: signed in.
+    const h2 = harness({
+      start: "splash",
+      screens: {
+        splash: { ...splash(), onKey: { F5: "inbox" } },
+        inbox: {
+          text: "Outlook\nNew mail\nInbox\nFocused\nOther",
+          location: OUTLOOK_AT,
+        },
+      },
+    });
+    let reloaded = false;
+    const ok = await verifySignedIn(
+      verifyCtx(h2, {
+        provider: OUTLOOK_SIGNIN,
+        browserPid: 4242,
+        timeoutMs: 300,
+        loadingTimeoutMs: 20_000,
+        reloadAfterMs: 1_000,
+        reload: async () => {
+          reloaded = true;
+          await h2.ga.key("F5");
+        },
+      }),
+    );
+    assert.equal(reloaded, true);
+    assert.deepEqual(ok, { signedIn: true });
+    // The one key pressed: F5.
+    assert.deepEqual(
+      h2
+        .log()
+        .filter((e) => ["type", "key", "click", "scroll"].includes(e.verb))
+        .map((e) => [e.verb, e.argv.at(-1)]),
+      [["key", "F5"]],
+    );
+  });
+
+  // A check that reaches its bound on a page it does not recognise is
+  // "not loaded" only on the webmail's own host: on a sign-in host (a
+  // sign-in page in a language the phrases miss) the profile may be
+  // signed out, so it stays "not signed in".
+  it("at its bound on an unrecognised page: not loaded on the mail host, not signed in off it", async () => {
+    for (const [location, loaded] of [
+      [OUTLOOK_AT, false],
+      ["login.live.com/oauth20_authorize.srf?x=1", undefined],
+    ] as const) {
+      const h = harness({
+        start: "x",
+        screens: { x: { text: "Zzyzx qwv", location } },
+      });
+      const r = await verifySignedIn(
+        verifyCtx(h, {
+          provider: OUTLOOK_SIGNIN,
+          browserPid: 4242,
+          timeoutMs: 1_500,
+        }),
+      );
+      assert.ok(!r.signedIn);
+      assert.equal(r.seen, "unrecognised", location);
+      assert.equal(r.loaded, loaded, location);
+      noInput(h.log());
+    }
   });
 
   it("reports an account-setup screen on the inbox URL as not the mailbox, and dismisses nothing", async () => {

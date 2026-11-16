@@ -242,9 +242,11 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   (the log line says `the mailbox (by its structure: …)`, and the
   record `verified_by: "structure"`). A webmail still showing its
   loading screen there (Outlook.com's logo and "Microsoft" on an
-  otherwise empty page, on a busy machine) is waited for, up to 120 s,
+  otherwise empty page, on a busy machine) is waited for, up to 240 s,
   and that time is not counted against `--timeout`; the log then says
-  `check: waited N s on the webmail's loading screen`.
+  `check: waited N s on the webmail's loading screen`. A loading screen
+  that stays a minute is reloaded once (F5, the only key the check
+  presses; the log says `check: reloaded the page once, after N s …`).
 - **1, `FAILED (wrong-password)`**: the provider refused the password.
   The account file does not hold the account's password. Do not run the
   sign-in again until it is fixed: see
@@ -272,6 +274,11 @@ Afterwards, `just email-webmail-checklist` shows each account's state.
   Read the reason; `--check-only` repeats the check, which types nothing.
   "signed out: Google asks to sign in again" is not a challenge: an
   automated attempt (after the cool-down) signs the profile in again.
+- **1, `NOT LOADED`**: the check reached its bound on the webmail's own
+  address without the mailbox and without any signed-out screen (a
+  sign-in page, a challenge): the webmail did not load, usually a loading screen on a busy machine. The
+  session was not judged and nothing is recorded. Run `--check-only`
+  again when the machine is quieter; it is not a reason to sign in.
 - **3, `PENDING`**: no account file, or one without a password.
 - **4, `CANNOT RUN`**: no usable browser sandbox, no `guiassert`, no
   webmail browser (outside the dev shell), or the display session would
@@ -571,8 +578,10 @@ Every PNG has a JSON file beside it. For a first capture, check:
   held, and `screen` is the check's window: the same 1280 x 900 the
   sign-in's `--check-only` uses, not the capture's own window;
   `loading` says how many readings showed the webmail's loading screen
-  and for how long (`ms`): that time is waited out (up to 120 s) and not
-  counted against the check's 45 s;
+  and for how long (`ms`): that time is waited out (up to 240 s) and not
+  counted against the check's 45 s; `loading.reloaded_after_ms` says
+  when the page was reloaded once because the loading screen stayed a
+  minute (null: no reload);
 - `settle.settled`: false means the body's pixels never held still
   within the bound (an animation, or images still loading);
 - `scheme_applied` (Outlook.com): the toggle's state and the crop's mean
@@ -594,12 +603,13 @@ Every PNG has a JSON file beside it. For a first capture, check:
   rather than taken for an empty one. Outlook.com shows its Inbox at
   `outlook.live.com/mail/0/`, which counts as the Inbox's address, and
   the new Yahoo Mail at `mail.yahoo.com/n/folders/00_1` with any query
-  after it. Yahoo's Spam and Trash URLs now lead to its Inbox: such a
-  folder is then opened by its entry in the folder list (`how: "link"`,
-  the `url` naming the entry) and `location` shows the address it led
-  to (worth noting: those `/n/` addresses are not known yet). Yahoo's
-  `rows` are read only in its message list, never the page's other
-  links;
+  after it, and its Spam at `mail.yahoo.com/n/folders/00_6` (with any
+  query). Yahoo's Trash URL leads to its Inbox: Trash, and any folder
+  whose URL leads elsewhere, is then opened by its entry in the folder
+  list (`how: "link"`, the `url` naming the entry) and `location` shows
+  the address it led to (worth noting: Trash's `/n/` address is not
+  known yet). Yahoo's `rows` are read only in its message list, never
+  the page's other links;
 - `scheme_applied` (Outlook.com): `browser` (the colour mode),
   `theme_luminance` (the subject heading's: below 128 is dark),
   `toggle` (`untouched` in light; `unchecked`, `switched` or `absent` in
@@ -631,18 +641,23 @@ done with it.
 
 ### When a capture fails
 
-- `session lost: …`: the profile is signed out; run the sign-in it
-  names. When the reason says `the inbox loaded on … but the mailbox did
-not show`, the line also names the kept `session-check` screen and
-  ends with the last reading: what the screen was recognised as, the
-  address bar, and the structural signals found. `the screen the
-webmail's loading screen` means the webmail never got past its
-  loading screen within 120 s (the machine, or the webmail, too slow);
-  the reason says how long it showed. If `--check-only`
-  passes on the same profile right after, the account is signed in and
-  the check is what failed: keep the frame and tree and report them. Run
-  `--check-only` once in any case, because the failed check marked the
-  account `needs-login` and only a passing check clears that.
+- `session lost: …`: the profile is signed out (the check saw a
+  sign-in page, a challenge or a consent page, or the inbox URL left the
+  webmail for its sign-in host); run the sign-in it names. The failed
+  check marked the account `needs-login`, and only a passing check
+  clears that.
+- `<set>/<account>: the webmail did not load: the inbox URL on … showed
+no mailbox within N s and no sign-in page (…) (the session was not
+judged; the account stays in selection)`: the check reached its bound
+  without seeing a signed-out screen. The line names the kept
+  `session-check` screen and ends with the last reading: what the
+  screen was recognised as, the address bar, and the structural signals
+  found. `the screen the webmail's loading screen` means the webmail
+  never got past its loading screen within 240 s, reloaded once after a
+  minute (the machine, or the webmail, too slow); the reason says how
+  long it showed. Nothing is marked: capture again when the machine is
+  quieter. If it keeps happening while `--check-only` passes, keep the
+  frame and tree and report them.
 - `the message body is N px wide, narrower than the requested 800 px
 …, in a window already widened from A to B px`: the reading pane did
   not grow as much as the window did. Raise the adapter's
@@ -691,7 +706,22 @@ longest L s)`. Its cleanup record is `not-found`; the message may still
   search's query, say) never counts as the opened subject, whatever it
   holds. `the message did not open: … none is new since the click`:
   the click on the row showed only the page's own headings (a slow
-  page, or the click missed). Neither deletes anything.
+  page, or the click missed). Neither deletes anything. A row is
+  clicked on its text, never on its check box or the actions shown
+  under the pointer. `the message did not open: the click selected the
+row instead of opening it; its check box was cleared`: the webmail
+  took the click as a selection; the selection was undone (that row's
+  check box only) and nothing was deleted: report the frame. `a row of
+the list is selected before the click … nothing is clicked`: another
+  row was selected already (a person over VNC, say); nothing was done.
+- `the message's row is a conversation of N messages (an earlier test
+message shares it): it is neither opened nor deleted`: the webmail
+  groups this run's message with earlier test messages (Yahoo groups
+  them by sender), and which message its view shows, or what its
+  delete removes, cannot be told. Older runs' messages are never
+  deleted automatically. Delete the earlier test messages by hand, see
+  [Removing earlier test messages](#removing-earlier-test-messages),
+  then capture again.
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
   mailbox; the line names the kept screen, and the cleanup record's
   `search` the looks that saw it. A removal's `via` says how it went:
@@ -725,6 +755,31 @@ empties Trash after 30 days)`: Gmail's "Delete forever" could not be
   what Gmail's Trash list offers.
 - `the capture browser cannot run: …`: no GuiAssert session or no
   sandbox, as for the sign-in (Prerequisites).
+
+### Removing earlier test messages
+
+A capture deletes only the message of its own run. Messages left by
+earlier runs (a cleanup that failed) stay where they are, and the next
+capture refuses a row that groups them with its own (`a conversation of
+N messages`). To remove them, by hand:
+
+1. Open the account's profile in a watched session that types nothing:
+   `just email-webmail-signin <set> <account> --manual --vnc`, and
+   connect a VNC viewer as it prints (`ssh -L 5901:<socket>
+you@capture-host`, then `localhost:5901`).
+2. In the webmail, open Spam (or Junk Email), then Trash (Deleted Items),
+   and select only the messages whose subject starts with `[es:` and
+   names `[shots]`, from the capture's sender. Leave everything else.
+3. Delete them, then delete them for good from Trash (Yahoo: open Trash,
+   select them, Delete, confirm).
+4. Press Enter alone in the terminal (the inbox shows): the recipe
+   stops the browser and checks the profile; it should end `SIGNED IN`.
+   Never type `p` here: the profile is already signed in.
+
+Success: Spam and Trash list no message whose subject starts with
+`[es:`. Run it after any `cleanup FAILED` line whose reason is not
+`in-trash`.
+
 - `delivery failed: token: cannot reach oauth2.googleapis.com: … (after
 one retry)`: the Workspace sender's token request got no answer twice,
   2 s apart (a network problem on this machine; nothing was sent). Run

@@ -95,6 +95,13 @@
 // - Outlook.com's loading screen: the session check waits on it without
 //   counting its time and records the wait; shown for ever, the check
 //   fails at its loading bound naming it.
+// - the live run of 2026-11-13: Gmail's banner heading holding the search box (its wrapper
+//   named after the token query) and a highlight nested in the subject
+//   are one subject; Yahoo's row is opened on its text, never its check
+//   box or hover actions, its own selection cleared first, a click that
+//   selects undone and failed, another row's selection or a conversation
+//   never opened or deleted; Outlook.com's loading screen reloaded once,
+//   and a check ending at its bound not a lost session (nothing marked).
 // - Gmail's Spam as live: the token search in Spam finds the message,
 //   its subject drawn seconds after the page's own headings ("Labels",
 //   "Why is this message in spam?") and named otherwise, the token in its
@@ -914,6 +921,178 @@ describe("hosted-webmail: Gmail's Spam as live", () => {
       );
       assert.equal(gm.destroyed.length, 1);
       assert.deepEqual(gm.messages, []);
+    } finally {
+      await w.stop();
+    }
+  });
+});
+
+describe("hosted-webmail: as the live run of 2026-11-13 08:44Z showed", () => {
+  // Gmail (live tree, 2026-11-13, run a1-20261113T084650Z): the banner
+  // heading holding the search box, whose wrapper is named after the
+  // token query, was counted as a second subject ("2 headings carry the
+  // run token"), and after the delete it kept "carrying" the token, so
+  // the delete "did not close the message".
+  it("Gmail: the search box's wrapper in the banner heading, named after the token query, and a highlight nested in the subject are one subject; captured, deleted, closed and removed", async () => {
+    const w = await world("gmail-banner", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.filing = () => "spam";
+      gm.rewriteMessageId = true;
+      gm.labelsHeading = true;
+      gm.bannerSearch = true;
+      gm.nestedHighlight = true;
+      const m = mimeArticle("banner");
+      const results = await captureAll(
+        w.provider(),
+        w,
+        [req("s", m, "gmail-web")],
+        [message("s", m)],
+      );
+      const r = results[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(prov(r).arrival.folder, "spam");
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.folder, c.via, c.permanent]),
+        [["removed", "spam", "trash", true]],
+      );
+      assert.equal(gm.destroyed.length, 1);
+      assert.deepEqual(gm.messages, []);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  // Yahoo (live, 2026-11-13, run a1-20261113T084752Z): the row's check
+  // box and hover actions are named after the message; the click went to
+  // the check box and selected the row; the row was a conversation of 2.
+  it("Yahoo: a row whose check box and hover actions carry the token is opened on its text; its own selection cleared first; a click that selects is undone and fails; another row's selection, or a conversation, is never opened or deleted", async () => {
+    const w = await world("yahoo-rows", { only: ["yahoo"] });
+    try {
+      const y = w.webmails.yahoo;
+      y.lang = "bg";
+      y.addresses = { qa1: QA.yahoo[0]! };
+      y.newUi = true;
+      y.liveRows = true;
+      y.filing = () => "spam";
+      const roomy = { timings: { arrivalTimeoutMs: 40_000 } };
+      const clicks = (): string[] =>
+        y.events.filter((e) =>
+          ["select", "unselect", "hover-action"].includes(e),
+        );
+
+      // 1. The hover actions shown, the token's own row selected: its
+      // check box cleared, then the row opened on its text; captured
+      // and removed. No hover action, and nothing selected, ever.
+      y.hoverAlways = true;
+      y.rowPreselect = "own";
+      const m = mime("liverow");
+      const done = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("s", m, "yahoo-web")],
+        [message("s", m)],
+      );
+      assert.equal(done[0]!.status, "done", done[0]!.reason);
+      assert.ok(clicks().length >= 1, y.events.join(","));
+      assert.deepEqual(
+        [...new Set(clicks())],
+        ["unselect"],
+        y.events.join(","),
+      );
+      assert.ok(
+        w.logs.some((l) =>
+          /yahoo\/qa1: the message's row was selected before the click; its check box was cleared$/.test(
+            l,
+          ),
+        ),
+        w.logs.join("\n"),
+      );
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+      assert.deepEqual(y.messages, []);
+
+      // 2. A click on the row selects it (as the live one did): the
+      // selection is cleared, that check box only, and the open fails
+      // saying so; nothing is captured or deleted.
+      y.hoverAlways = false;
+      y.rowPreselect = null;
+      y.rowClickSelects = true;
+      y.events = [];
+      const n = mime("selects");
+      const sel = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("n", n, "yahoo-web")],
+        [message("n", n)],
+        "t2",
+      );
+      const f = sel[0]!;
+      assert.equal(f.status, "failed");
+      assert.match(
+        f.reason!,
+        /Yahoo Mail: the message did not open: the click selected the row instead of opening it; its check box was cleared$/,
+      );
+      // Each open (the capture's, the cleanup's): selected, then cleared.
+      assert.ok(clicks().length >= 2, y.events.join(","));
+      for (let i = 0; i < clicks().length; i += 2)
+        assert.deepEqual(clicks().slice(i, i + 2), ["select", "unselect"]);
+      const rec = cleanup(w).at(-1)!;
+      assert.equal(rec.state, "failed");
+      assert.match(String(rec.reason), /the click selected the row/);
+      assert.equal(y.messages.length, 1, "nothing deleted");
+      assert.equal(y.destroyed.length, 1, "only (1)'s message destroyed");
+      y.rowClickSelects = false;
+
+      // 3. Conversations: this run's message and the one left from (2),
+      // from one sender, a conversation of 2: never opened, never
+      // deleted; the earlier message untouched.
+      y.conversations = true;
+      y.events = [];
+      const before = y.destroyed.length;
+      const c = mime("conversation");
+      const conv = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("c", c, "yahoo-web")],
+        [message("c", c)],
+        "t3",
+      );
+      const g = conv[0]!;
+      assert.equal(g.status, "failed");
+      assert.match(
+        g.reason!,
+        /the message's row is a conversation of 2 messages \(an earlier test message shares it\): it is neither opened nor deleted; delete the earlier test messages by hand/,
+      );
+      const crec = cleanup(w).at(-1)!;
+      assert.equal(crec.state, "failed");
+      assert.match(String(crec.reason), /a conversation of 2 messages/);
+      assert.deepEqual(clicks(), [], "nothing selected or acted on");
+      assert.equal(y.messages.length, 2, "both messages kept");
+      assert.equal(y.destroyed.length, before);
+      assert.ok(!y.events.includes("report-spam"));
+      y.conversations = false;
+
+      // 4. Another row selected: nothing is clicked.
+      y.rowPreselect = "other";
+      y.events = [];
+      const o = mime("other-selected");
+      const other = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("o", o, "yahoo-web")],
+        [message("o", o)],
+        "t4",
+      );
+      assert.equal(other[0]!.status, "failed");
+      assert.match(
+        other[0]!.reason!,
+        /Yahoo Mail: a row of the list is selected before the click \(1 check boxes checked\): nothing is clicked/,
+      );
+      assert.deepEqual(clicks(), []);
+      assert.equal(y.messages.length, 3);
     } finally {
       await w.stop();
     }
@@ -1877,6 +2056,9 @@ describe("hosted-webmail variants", () => {
       y.lang = "bg";
       y.addresses = { qa1: QA.yahoo[0]! };
       y.oldFolderUrlsGone = true;
+      // Spam's /n/ URL leading to the Inbox too (its id changed), so its
+      // link opens it.
+      y.movedIds = ["spam"];
       y.filing = () => "spam";
       const m = mime("bulgarian");
       const results = await captureAll(
@@ -1912,7 +2094,7 @@ describe("hosted-webmail variants", () => {
     }
   });
 
-  it("Yahoo's new UI (live 2026-11-13): its Inbox at /n/folders/00_1 with any query, Spam and Trash opened by their folder buttons when their URLs lead to the Inbox, rows only in the message list; a folder never shown is said so over the whole search", async () => {
+  it("Yahoo's new UI (live 2026-11-13): its Inbox at /n/folders/00_1 and its Spam at /n/folders/00_6 with any query, Trash opened by its folder button when its URL leads to the Inbox, rows only in the message list; a folder never shown is said so over the whole search", async () => {
     const w = await world("yahoo-new", { only: ["yahoo"] });
     try {
       const y = w.webmails.yahoo;
@@ -1948,16 +2130,15 @@ describe("hosted-webmail variants", () => {
             JSON.stringify(l),
           );
       }
-      // Spam's old URL led to the Inbox; its folder button opened it.
-      const away = looks.find((l) => l.folder === "spam" && l.how === "typed")!;
-      assert.equal(away.list.state, "elsewhere", JSON.stringify(looks));
-      assert.match(away.location, /\/n\/folders\/00_1\?\.src=ym/);
+      // Spam at its /n/ address (live, 2026-11-13), the query the new UI
+      // adds ignored: typed, and matched.
       const hit = looks.at(-1)!;
-      assert.equal(hit.how, "link");
-      assert.match(hit.url, /\(link Спам\)$/);
+      assert.equal(hit.folder, "spam");
+      assert.match(hit.how, /^typed/);
+      assert.match(hit.url, /\/n\/folders\/00_6$/);
       assert.equal(hit.token_rows, 1);
-      // The address the button led to is recorded.
-      assert.match(hit.location, /\/n\/folders\/00_6(\?\.src=ym)?$/);
+      assert.match(hit.location, /\/n\/folders\/00_6\?\.src=ym$/);
+      assert.equal(hit.location_matched, true, JSON.stringify(hit));
       // Deleted, then for good from Trash, opened by its button too; the
       // toolbar's "Спам" never clicked.
       assert.deepEqual(
@@ -1968,8 +2149,10 @@ describe("hosted-webmail variants", () => {
       assert.deepEqual(y.messages, []);
       assert.ok(!y.events.includes("report-spam"), y.events.join(","));
 
-      // Spam's button missing too: Spam is never shown, and the failure
-      // says so with its looks over the whole search.
+      // Spam's /n/ id moved and its button missing too: Spam is never
+      // shown, and the failure says so with its looks over the whole
+      // search.
+      y.movedIds = ["spam"];
       y.hiddenFolders = ["spam"];
       const n = mime("withheld");
       const failed = await captureAll(
@@ -2006,7 +2189,7 @@ describe("hosted-webmail variants", () => {
     }
   });
 
-  it("Outlook.com's loading screen: the session check waits on it, its time not counted, and records the wait; shown for ever, the check fails at the loading bound naming it", async () => {
+  it("Outlook.com's loading screen: the session check waits on it, its time not counted, and records the wait; one that stays is reloaded once; shown for ever, the check fails at the loading bound naming it, the webmail not loaded, the account not marked", async () => {
     const w = await world("outlook-splash", { only: ["outlook-com"] });
     try {
       const ol = w.webmails["outlook-com"];
@@ -2030,16 +2213,55 @@ describe("hosted-webmail variants", () => {
       assert.ok(sc.loading.ms >= 5_000, JSON.stringify(sc));
       assert.ok(sc.ms >= 15_000, JSON.stringify(sc));
       assert.equal(ol.splashLoads, 0, "the check's page was the splash");
+      assert.equal(sc.loading.reloaded_after_ms, null, JSON.stringify(sc));
+
+      // A splash that would stay for ever on its page load (live
+      // 2026-11-13: 119 s at load 60-70): reloaded once after
+      // signinReloadMs, the next load draws the mailbox.
+      ol.splashLoads = 1;
+      ol.splashMs = -1;
+      const re = mime("splash-reload");
+      const reloaded = await captureAll(
+        w.provider({
+          timings: {
+            signinCheckMs: 4_000,
+            signinLoadingMs: 60_000,
+            signinReloadMs: 6_000,
+          },
+        }),
+        w,
+        [req("re", re, "outlook-web")],
+        [message("re", re)],
+        "t-reload",
+      );
+      const rr = reloaded[0]!;
+      assert.equal(rr.status, "done", rr.reason);
+      const rsc = prov(rr).session_check;
+      assert.ok(rsc.loading.reloaded_after_ms >= 6_000, JSON.stringify(rsc));
+      assert.ok(rsc.loading.reloaded_after_ms < 60_000, JSON.stringify(rsc));
+      assert.ok(
+        w.logs.some((l) =>
+          /outlook-com\/qa1: the session check reloaded the page once, after \d+ s with the webmail's loading screen shown$/.test(
+            l,
+          ),
+        ),
+        w.logs.join("\n"),
+      );
 
       // For ever: the check ends at the loading bound, not the budget,
-      // naming the loading screen; the screen kept.
-      ol.splashLoads = 1;
+      // naming the loading screen; the screen kept. The webmail did not
+      // load: nothing judged, the account not marked.
+      ol.splashLoads = 1_000;
       ol.splashMs = -1;
       const n = mime("splash-forever");
       const t0 = Date.now();
       const failed = await captureAll(
         w.provider({
-          timings: { signinCheckMs: 4_000, signinLoadingMs: 20_000 },
+          timings: {
+            signinCheckMs: 4_000,
+            signinLoadingMs: 20_000,
+            signinReloadMs: 8_000,
+          },
         }),
         w,
         [req("n", n, "outlook-web")],
@@ -2050,7 +2272,13 @@ describe("hosted-webmail variants", () => {
       assert.equal(f.status, "failed");
       assert.match(
         f.reason!,
-        /session lost: outlook-com\/qa1 is not signed in any more \(the inbox loaded on 127\.0\.0\.1:\d+ but the mailbox did not show within 20 s \(the last reading: the screen the webmail's loading screen \(a page showing only its logo\), the address bar 127\.0\.0\.1:\d+\/mail\/0\/?, structure: none; the mailbox needs two of them, one the message list or the address in the title; the webmail's loading screen \(a page showing only its logo\) showed for \d+ s of it, not counted\)\)/,
+        /outlook-com\/qa1: the webmail did not load: the inbox URL on 127\.0\.0\.1:\d+ showed no mailbox within 20 s and no sign-in page \(the last reading: the screen the webmail's loading screen \(a page showing only its logo\), the address bar 127\.0\.0\.1:\d+\/mail\/0\/?, structure: none; the mailbox needs two of them, one the message list or the address in the title; the webmail's loading screen \(a page showing only its logo\) showed for \d+ s of it, not counted; reloaded once after \d+ s\) \(the session was not judged; the account stays in selection\)/,
+      );
+      assert.doesNotMatch(f.reason!, /session lost/);
+      assert.equal(
+        existsSync(join(w.profiles, "outlook-com", "qa1", "needs-login.json")),
+        false,
+        "a load failure marks nothing",
       );
       assert.ok(Date.now() - t0 >= 20_000, `${Date.now() - t0} ms`);
       const sum = evidence(w, prov(f).failure, 900);
@@ -2130,7 +2358,9 @@ describe("hosted-webmail variants", () => {
       y.keepDestroyed = false;
 
       // A mailbox shown at no size: the check fails at its deadline, on
-      // the mail host, naming its last reading, and keeps its screen.
+      // the mail host, naming its last reading, and keeps its screen. No
+      // sign-in page was seen, so the webmail did not load: the session
+      // is not judged and the account not marked.
       y.mailboxOnlyIn = { width: 100, height: 100 };
       const n = mime("never-mailbox");
       const failed = await captureAll(
@@ -2144,7 +2374,7 @@ describe("hosted-webmail variants", () => {
       assert.equal(f.status, "failed");
       assert.match(
         f.reason!,
-        /session lost: yahoo\/qa1 is not signed in any more \(the inbox loaded on 127\.0\.0\.1:\d+ but the mailbox did not show within 6 s \(the last reading: the screen unrecognised, the address bar 127\.0\.0\.1:\d+\/n\/folders\/00_1, structure: title-account; the mailbox needs two of them, one the message list or the address in the title\)\)/,
+        /yahoo\/qa1: the webmail did not load: the inbox URL on 127\.0\.0\.1:\d+ showed no mailbox within 6 s and no sign-in page \(the last reading: the screen unrecognised, the address bar 127\.0\.0\.1:\d+\/n\/folders\/00_1, structure: title-account; the mailbox needs two of them, one the message list or the address in the title\) \(the session was not judged; the account stays in selection\)/,
       );
       const sum = evidence(w, prov(f).failure, 900);
       assert.equal(prov(f).failure.step, "session-check");
@@ -2156,14 +2386,16 @@ describe("hosted-webmail variants", () => {
       );
       assert.ok(
         w.logs.some((l) =>
-          /session lost: yahoo\/qa1 .* \(the screen kept at .*session-check-\d+\.png\)$/.test(
+          /yahoo\/qa1: the webmail did not load: .* \(the screen kept at .*session-check-\d+\.png\)$/.test(
             l,
           ),
         ),
         w.logs.join("\n"),
       );
-      assert.ok(
+      assert.ok(!w.logs.some((l) => /session lost/.test(l)), w.logs.join("\n"));
+      assert.equal(
         existsSync(join(w.profiles, "yahoo", "qa1", "needs-login.json")),
+        false,
       );
       assert.equal(
         w.api.sent.filter((x) => x.raw.includes("never-mailbox")).length,

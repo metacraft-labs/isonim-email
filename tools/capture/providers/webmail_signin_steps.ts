@@ -620,17 +620,27 @@ export function notSignedInBecause(what: string): string {
 export type CheckVerdict =
   | { kind: "signed-in"; by: "ocr" | "structure"; signals: string[] }
   | { kind: "wait" }
+  // Reload the page once (F5): the loading screen showed without a break
+  // for `reloadAfterMs`.
+  | { kind: "reload"; afterMs: number }
   | {
       kind: "not-signed-in";
       reason: string;
       /** The screen it saw, classified ("unrecognised" when nothing matched). */
       seen: string;
-      /** It ended at the deadline (not on a named screen that stayed). */
+      /** It ended at the deadline (not on a named screen that stayed):
+       * the webmail did not load, and nothing was judged. */
       timedOut: boolean;
     };
 
-/** How long the check waits while the webmail's loading screen shows. */
-export const LOADING_TIMEOUT_MS = 120_000;
+/** How long the check waits while the webmail's loading screen shows
+ * (Outlook.com's took 119 s on a passing check at load 60-70 on 24
+ * cores, live 2026-11-13; a reload restarts its boot). */
+export const LOADING_TIMEOUT_MS = 240_000;
+
+/** How long the loading screen shows without a break before the check
+ * reloads the page, once. */
+export const RELOAD_AFTER_MS = 60_000;
 
 /** How the check names the webmail's loading screen. */
 export const LOADING_SCREEN =
@@ -652,18 +662,28 @@ export const LOADING_SCREEN =
  *   named screen's settle restarts, and the time it showed is not
  *   counted against `timeoutMs` (Outlook.com's splash on a loaded host,
  *   live 2026-11-13), up to `loadingTimeoutMs` from `start` (default
- *   LOADING_TIMEOUT_MS, never below `timeoutMs`);
+ *   LOADING_TIMEOUT_MS, never below `timeoutMs`); once it has shown
+ *   without a break for `reloadAfterMs` (default RELOAD_AFTER_MS), the
+ *   verdict is "reload", once: the caller reloads the page (F5) and
+ *   reads on;
  * - a screen the check names (a sign-in step, a challenge, an error, an
  *   account-setup screen, a consent page) that stays for `settleMs`: not
  *   signed in, naming it;
  * - neither by `timeoutMs` after `start` (plus the loading screen's
  *   time), or by `loadingTimeoutMs`: not signed in, naming the last
- *   screen it named, the loading screen, or "unrecognised".
+ *   screen it named, the loading screen, or "unrecognised", with
+ *   `timedOut`: the webmail did not load, which judges no session (only a
+ *   named screen that stayed, or a page off the mail hosts, does).
  */
 export class MailboxCheck {
   readings = 0;
   /** The readings that were the loading screen, and how long it showed. */
   loading = { readings: 0, ms: 0 };
+  /** When the check reloaded the page, in ms from `start` (null: never). */
+  reloadedAfterMs: number | null = null;
+  // Since when the loading screen has shown without a break (null: the
+  // previous reading was not it).
+  private loadingSince: number | null = null;
   private seen: { what: string; since: number } | null = null;
   // The address of the previous reading when it was the mailbox by its
   // structure (undefined: it was not).
@@ -675,6 +695,7 @@ export class MailboxCheck {
     timeoutMs: number;
     settleMs: number;
     loadingTimeoutMs: number;
+    reloadAfterMs: number;
   };
 
   constructor(o: {
@@ -682,6 +703,7 @@ export class MailboxCheck {
     timeoutMs: number;
     settleMs: number;
     loadingTimeoutMs?: number;
+    reloadAfterMs?: number;
   }) {
     this.o = {
       ...o,
@@ -689,6 +711,7 @@ export class MailboxCheck {
         o.timeoutMs,
         o.loadingTimeoutMs ?? LOADING_TIMEOUT_MS,
       ),
+      reloadAfterMs: o.reloadAfterMs ?? RELOAD_AFTER_MS,
     };
   }
 
@@ -715,6 +738,7 @@ export class MailboxCheck {
     if (isLoading) {
       this.loading.readings++;
       this.loadingAt = now;
+      this.loadingSince ??= now;
       this.seen = null;
       this.structureAt = undefined;
       if (now >= this.o.start + this.o.loadingTimeoutMs)
@@ -724,8 +748,16 @@ export class MailboxCheck {
           seen: LOADING_SCREEN,
           timedOut: true,
         };
+      if (
+        this.reloadedAfterMs === null &&
+        now - this.loadingSince >= this.o.reloadAfterMs
+      ) {
+        this.reloadedAfterMs = now - this.o.start;
+        return { kind: "reload", afterMs: this.reloadedAfterMs };
+      }
       return { kind: "wait" };
     }
+    this.loadingSince = null;
     const deadline = this.deadline;
     const byStructure = screen.kind === "done" && screen.by === "structure";
     const held = byStructure && this.structureAt === location;

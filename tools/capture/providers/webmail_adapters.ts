@@ -387,10 +387,13 @@ const YAHOO_DESKTOP: AdapterUi = {
     // The new Yahoo Mail's Inbox is /n/folders/00_1 (live, 2026-10-31;
     // on 2026-11-13 a typed /d/folders/1 and /d/folders/6 both led to
     // /n/folders/00_1?.src=ym&reason=unexpected_ymv), the old
-    // /d/folders/1 an alias. Spam's and Trash's /n/ ids are not known
-    // (none is guessed): their old URLs are tried, and where those lead
-    // elsewhere the folder is opened by its control (the look records
-    // the address it led to).
+    // /d/folders/1 an alias. Its Spam is /n/folders/00_6 (live,
+    // 2026-11-13: its folder button led to
+    // /n/folders/00_6?.src=ym&reason=unexpected_ymv), the address itself
+    // an alias (any query). Trash's /n/ id is not known (none is
+    // guessed): its old URL is tried. Where a URL leads elsewhere the
+    // folder is opened by its control (the look records the address it
+    // led to).
     inbox: folder(
       "Inbox",
       ["https://mail.yahoo.com/n/folders/00_1"],
@@ -403,9 +406,9 @@ const YAHOO_DESKTOP: AdapterUi = {
     ),
     spam: folder(
       "Spam",
-      ["https://mail.yahoo.com/d/folders/6"],
+      ["https://mail.yahoo.com/n/folders/00_6"],
       [],
-      [],
+      ["https://mail.yahoo.com/n/folders/00_6"],
       LOCALE_NAMES.spam,
     ),
     trash: folder(

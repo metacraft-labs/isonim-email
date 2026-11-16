@@ -167,7 +167,9 @@ signin.json.
                     focused password field on request (p, then Enter);
                     not an automated attempt
 --check-only        only check (and record) an existing profile; types
-                    nothing; not signed in, keeps check-screen.png
+                    nothing (one F5 on a loading screen that stays 60 s);
+                    not signed in, keeps check-screen.png; NOT LOADED
+                    when the webmail never loaded (nothing judged)
 --typing-check      contacts no provider: types the account's password
                     the way the sign-in does into a loopback page, which
                     compares a salted SHA-256 of what arrived with the
@@ -805,6 +807,9 @@ async function signInAccountOnce(
         timeoutMs: o.timeoutS * 1000,
         settleMs: 5000,
         pollMs: 1000,
+        // One reload of a loading screen that stays (F5, the only key the
+        // check presses).
+        reload: () => sga.key("F5"),
         log: (l) => say(`${label}: ${l}`),
       });
     } finally {
@@ -828,8 +833,15 @@ async function signInAccountOnce(
         ? ""
         : `${outcomeName(outcome)}, taken over; `;
     if (!checked.signedIn) {
-      finish(`${prefix}not-signed-in`);
-      say(`NOT SIGNED IN: ${label}: ${checked.reason}`);
+      // A check that ended at its bound did not load the webmail: it
+      // judged no session.
+      const notLoaded = !verified.signedIn && verified.loaded === false;
+      finish(`${prefix}${notLoaded ? "not-loaded" : "not-signed-in"}`);
+      say(
+        notLoaded
+          ? `NOT LOADED: ${label}: the webmail did not load: ${checked.reason}; the session was not judged`
+          : `NOT SIGNED IN: ${label}: ${checked.reason}`,
+      );
       if (!verified.signedIn)
         say(
           `${label}: the check saw: ${verified.seen ?? "unrecognised"}; ${verified.screen === undefined || verified.screen === null ? "no screenshot kept" : `screenshot: ${verified.screen}`}.`,

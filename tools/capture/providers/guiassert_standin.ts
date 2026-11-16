@@ -103,6 +103,8 @@ export interface StandinScreen {
   radios?: StandinRadio[];
   /** Moves on to `next` by itself after this many frames of it. */
   moveOn?: { frames: number; next: string };
+  /** Keys that move to another screen (F5: a reload that draws it). */
+  onKey?: Record<string, string>;
   /** The colour a region screenshot is filled with ([r, g, b]). */
   fill?: [number, number, number];
   /** Extra accessibility nodes `tree` reports (each with its children). */
@@ -521,7 +523,9 @@ export function main(argv: string[]): number {
     }
     case "key": {
       const s = screen();
-      if (positional[1] === "Return" && s.submit !== undefined) {
+      const to = s.onKey?.[positional[1] ?? ""];
+      if (to !== undefined) show(to);
+      else if (positional[1] === "Return" && s.submit !== undefined) {
         const sub = s.submit;
         if (typeof sub === "string") show(sub);
         else

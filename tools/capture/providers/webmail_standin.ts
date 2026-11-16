@@ -58,7 +58,14 @@
 //   reading pane's width a function of the window's; Yahoo in Bulgarian
 //   (its controls and folders so named, the account's address in the
 //   title), its old folder URLs sending to the Inbox, and its /n/ Inbox
-//   laid out as a mailbox only in a window no larger than a size.
+//   laid out as a mailbox only in a window no larger than a size;
+//   Gmail's search box in its banner heading (the box's wrapper named
+//   after the query) and the search's highlight as a heading nested in
+//   the subject; Yahoo's rows as live (a link holding a check box and
+//   hover actions named after the message, the subject hidden from the
+//   tree), a click on the row that selects it, a row selected when the
+//   list is drawn, a sender's messages as one conversation row with its
+//   count, and a folder whose /n/ id moved.
 // The webmail browser, GuiAssert, the profiles, TLS and the provider are
 // real.
 
@@ -320,6 +327,32 @@ export class StandinWebmail {
   // Gmail: a search list's heading echoing its query (which holds the
   // run token), a heading that is no opened message's subject.
   queryHeading = false;
+  // Gmail (live tree, 2026-11-13): the search box inside an unnamed
+  // banner heading, its wrapper named after the field's value (the token
+  // query); and the search's highlight in the opened subject drawn as a
+  // heading of its own nested in it (the token in both).
+  bannerSearch = false;
+  nestedHighlight = false;
+  // Yahoo (live tree, 2026-11-13): each row a link named after the
+  // message, holding its check box and, under the pointer, its hover
+  // actions, both named after the message too; the subject's text not
+  // in the tree. A click on the check box selects the row (never opens
+  // it), a hover action does nothing here; with rowClickSelects, a click
+  // anywhere on the row selects it instead of opening it. Events:
+  // "select", "unselect", "hover-action".
+  liveRows = false;
+  rowClickSelects = false;
+  // Yahoo, with liveRows: the hover actions shown whatever the pointer.
+  hoverAlways = false;
+  // Yahoo: the token's row's check box ("own") or another row's
+  // ("other") checked when a list is drawn.
+  rowPreselect: "own" | "other" | null = null;
+  // Yahoo: a folder's messages from one sender shown as one row, a
+  // conversation, its count shown ("2 messages"), opening its latest.
+  conversations = false;
+  // Yahoo: folders whose /n/ id now leads to the Inbox (their id
+  // changed), their controls pointing at the new one (mN).
+  movedIds: StandinFolder[] = [];
   // Gmail: how much longer an opened message's view takes than a list's.
   openDelayMs = 0;
 
@@ -534,6 +567,10 @@ export class StandinWebmail {
         const h = location.hash;
         const q = document.querySelector('[name="q"]');
         q.value = h.startsWith("#search/") ? decodeURIComponent(h.slice(8).replace(/[+]/g, " ")) : "";
+        // The search box's wrapper named after its value, as Chrome
+        // names Gmail's.
+        const wrap = document.getElementById("qwrap");
+        if (wrap !== null) { if (q.value === "") wrap.removeAttribute("aria-label"); else wrap.setAttribute("aria-label", q.value); }
         const r = await fetch("/api/view?hash=" + encodeURIComponent(h) + (id ? "&id=" + id : ""));
         if (r.status === 401) { location.href = ${JSON.stringify(this.signinUrl())}; return; }
         document.getElementById("main").innerHTML = await r.text();
@@ -596,7 +633,7 @@ export class StandinWebmail {
       200,
       "text/html",
       page(
-        `<div class="nav" role="navigation"><p>Gmail</p><p>Compose</p><p>Inbox</p>${this.labelsHeading ? "<h2>Labels</h2>" : ""}</div><div class="main"><form role="search"><input name="q" aria-label="Search mail"></form><div role="main" id="main"></div></div>`,
+        `<div class="nav" role="navigation"><p>Gmail</p><p>Compose</p><p>Inbox</p>${this.labelsHeading ? "<h2>Labels</h2>" : ""}</div><div class="main">${this.bannerSearch ? `<div role="heading" aria-level="1"><div role="button" tabindex="0" aria-label="Main menu">=</div> <a href="#inbox">Gmail</a> <form role="search"><div role="group" id="qwrap"><input name="q" aria-label="Search mail"></div></form></div>` : `<form role="search"><input name="q" aria-label="Search mail"></form>`}<div role="main" id="main"></div></div>`,
         script,
       ),
     );
@@ -677,7 +714,9 @@ export class StandinWebmail {
       const shown =
         this.subjectNamedOther && tok !== null
           ? `${esc(subject.slice(0, tok.index))}[<mark>${esc(tok[1]!)}</mark>]${esc(subject.slice(tok.index + tok[0].length))}`
-          : esc(subject);
+          : this.nestedHighlight && tok !== null
+            ? `${esc(subject.slice(0, tok.index))}<span role="heading" aria-level="3">${esc(tok[0])}</span>${esc(subject.slice(tok.index + tok[0].length))}`
+            : esc(subject);
       const named = this.subjectNamedOther ? ' aria-label="Conversation"' : "";
       const later =
         this.subjectLaterMs > 0
@@ -748,7 +787,14 @@ export class StandinWebmail {
       "00_1": "inbox",
       "00_6": "spam",
       "00_4": "trash",
+      m6: "spam",
+      m4: "trash",
     };
+    // A folder's /n/ id (its moved one for a folder of movedIds).
+    const nid = (f: StandinFolder): string =>
+      f === "inbox"
+        ? "00_1"
+        : `${this.movedIds.includes(f) ? "m" : "00_"}${f === "spam" ? "6" : "4"}`;
     const m1 = /^\/(d|n)\/folders\/(\w+)(?:\/messages\/([0-9a-f]+))?$/.exec(
       url.pathname,
     );
@@ -770,6 +816,16 @@ export class StandinWebmail {
       return this.send(res, 302, "text/plain", "", {
         location: "/n/folders/00_1",
       });
+    // A moved folder's old /n/ id sends to the Inbox.
+    if (
+      m1[1] === "n" &&
+      m1[3] === undefined &&
+      m1[2]!.startsWith("00_") &&
+      this.movedIds.includes(folders[m1[2]!]!)
+    )
+      return this.send(res, 302, "text/plain", "", {
+        location: "/n/folders/00_1?.src=ym&reason=unexpected_ymv",
+      });
     // The new Yahoo Mail: every old list URL sends to its Inbox.
     if (this.newUi && m1[1] === "d" && m1[3] === undefined)
       return this.send(res, 302, "text/plain", "", {
@@ -789,6 +845,9 @@ export class StandinWebmail {
           ok: "Добре",
           selected: "Избрано",
           navigation: "Навигация",
+          messages: "съобщения",
+          unread: "Непрочетено съобщение",
+          actions: ["Преместване", "Отговор", "Изтриване"],
           learn: "Научете още",
           subscribe: "Абониране",
         }
@@ -802,6 +861,9 @@ export class StandinWebmail {
           ok: "OK",
           selected: "Selected",
           navigation: "Navigation",
+          messages: "messages",
+          unread: "Unread message",
+          actions: ["Move", "Reply", "Delete"],
           learn: "Learn more",
           subscribe: "Subscribe",
         };
@@ -815,9 +877,9 @@ export class StandinWebmail {
         ? ""
         : `<li><button onclick="location.href='/n/folders/${id}'"${f === folder ? ` aria-label="${L.selected}, ${label}"` : ""}>${label}</button></li>`;
     const nav = this.newUi
-      ? `<div class="nav"><nav aria-label="${L.navigation}"><button>${L.compose}</button><ul>${folderButton("inbox", "00_1", L.inbox)}${folderButton("trash", "00_4", L.trash)}${folderButton("spam", "00_6", L.spam)}</ul></nav><input type="search" name="p" aria-label="${L.search}"></div>`
+      ? `<div class="nav"><nav aria-label="${L.navigation}"><button>${L.compose}</button><ul>${folderButton("inbox", "00_1", L.inbox)}${folderButton("trash", nid("trash"), L.trash)}${folderButton("spam", nid("spam"), L.spam)}</ul></nav><input type="search" name="p" aria-label="${L.search}"></div>`
       : bg
-        ? `<div class="nav" role="navigation"><button>${L.compose}</button><input type="search" name="p" aria-label="${L.search}"><ul><li><a href="/n/folders/00_1">${L.inbox}</a></li><li><a href="/n/folders/00_6">${L.spam}</a></li><li><a href="/n/folders/00_4">${L.trash}</a></li></ul></div>`
+        ? `<div class="nav" role="navigation"><button>${L.compose}</button><input type="search" name="p" aria-label="${L.search}"><ul><li><a href="/n/folders/00_1">${L.inbox}</a></li><li><a href="/n/folders/${nid("spam")}">${L.spam}</a></li><li><a href="/n/folders/${nid("trash")}">${L.trash}</a></li></ul></div>`
         : `<div class="nav" role="navigation"><p>Compose</p><p>Inbox</p><input type="search" name="p" aria-label="Search"></div>`;
     const title = bg
       ? `(1 непрочетен) – ${this.addresses[account] ?? account}`
@@ -873,12 +935,16 @@ export class StandinWebmail {
     );
     // Its message list: a list whose items hold a check box and the
     // message's link (as the live one's, in either language).
-    const rows = `<ul aria-label="">${list
-      .map(
-        (m) =>
-          `<li><input type="checkbox" aria-label=""> <a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a></li>`,
-      )
-      .join("")}</ul>`;
+    const plain =
+      !this.liveRows && !this.conversations && this.rowPreselect === null;
+    const rows = plain
+      ? `<ul aria-label="">${list
+          .map(
+            (m) =>
+              `<li><input type="checkbox" aria-label=""> <a data-test-id="message-list-item" href="${base}/messages/${m.id}"><span data-test-id="senders">${esc(m.fromName)}</span> <span data-test-id="message-subject">${esc(m.subject)}</span> <span data-test-id="snippet">${esc(m.preview)}</span></a></li>`,
+          )
+          .join("")}</ul>`
+      : this.liveList(list, base, L);
     // The new Yahoo Mail's banner and header links (never rows), and a
     // toolbar's "Spam" that reports a message as spam (never a folder).
     const chrome = this.newUi
@@ -891,13 +957,93 @@ export class StandinWebmail {
       page(
         `${nav}<div class="main" role="main">${chrome}${rows}</div>${sized}`,
         // The new Yahoo Mail adds a query to a folder's address.
-        this.newUi
-          ? `if (location.search === "") history.replaceState(null, "", location.pathname + "?.src=ym");`
-          : "",
+        `${
+          this.newUi
+            ? `if (location.search === "") history.replaceState(null, "", location.pathname + "?.src=ym");`
+            : ""
+        }${plain ? "" : this.liveRowScript()}`,
         true,
         title,
       ),
     );
+  }
+
+  // Yahoo's rows as live (liveRows, conversations, rowPreselect): a
+  // link per row (or conversation) named after the message, holding its
+  // check box and its hover actions named after it too, the subject's
+  // text hidden from the tree; a conversation's count as a group named
+  // "N <messages>" showing N.
+  private liveList(
+    list: StandinMessage[],
+    base: string,
+    L: { messages: string; unread: string; actions: string[] },
+  ): string {
+    type Row = { latest: StandinMessage; count: number; decoy: boolean };
+    let rows: Row[] = list.map((m) => ({ latest: m, count: 1, decoy: false }));
+    if (this.conversations) {
+      const by = new Map<string, Row>();
+      for (const m of list) {
+        const r = by.get(m.fromName);
+        if (r === undefined)
+          by.set(m.fromName, { latest: m, count: 1, decoy: false });
+        else {
+          r.count++;
+          if (m.deliveredAt >= r.latest.deliveredAt) r.latest = m;
+        }
+      }
+      rows = [...by.values()];
+    }
+    if (this.rowPreselect === "other")
+      rows.push({
+        latest: {
+          id: "decoy",
+          account: "",
+          folder: "spam",
+          fromName: "Someone else",
+          subject: "An older message",
+          preview: "not the run's",
+          html: "",
+          messageId: "<decoy@mail.invalid>",
+          deliveredAt: 0,
+        },
+        count: 1,
+        decoy: true,
+      });
+    const item = ({ latest: m, count, decoy }: Row): string => {
+      const named = `${m.fromName} ${m.subject}`;
+      const checked =
+        (this.rowPreselect === "own" && !decoy) ||
+        (this.rowPreselect === "other" && decoy);
+      const actions = L.actions
+        .map(
+          (a) =>
+            `<div role="button" tabindex="0" data-hover aria-label="${esc(`${a} ${m.subject}`)}" style="display:inline-block;width:40px;height:36px">${esc(a.slice(0, 1))}</div>`,
+        )
+        .join("");
+      return `<li><a data-test-id="message-list-item" href="${base}/messages/${m.id}" aria-label="${esc(`${L.unread} ${named}`)}" style="position:relative;display:block;height:44px;width:760px"><div role="checkbox" tabindex="0" aria-checked="${checked}" aria-label="${esc(named)}" data-sel style="display:inline-block;width:20px;height:20px;margin:12px"></div><span>${esc(m.fromName)}</span>${count > 1 ? ` <span role="group" aria-label="${count} ${L.messages}">${count}</span>` : ""} <span aria-hidden="true">${esc(m.subject)}</span><span class="hover" role="toolbar" aria-label="Message actions" style="position:absolute;right:0;top:4px;${this.hoverAlways ? "" : "display:none"}">${actions}</span></a></li>`;
+    };
+    return `<style>li:hover .hover{display:inline-block !important}</style><ul aria-label="">${rows.map(item).join("")}</ul>`;
+  }
+
+  // The live rows' behaviour: a check box selects its row (never opens
+  // it), a hover action does nothing, and with rowClickSelects a click
+  // on the row selects it too.
+  private liveRowScript(): string {
+    return `
+      for (const box of document.querySelectorAll("[data-sel]")) box.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const on = box.getAttribute("aria-checked") !== "true";
+        box.setAttribute("aria-checked", String(on));
+        fetch("/event?what=" + (on ? "select" : "unselect"));
+      });
+      for (const b of document.querySelectorAll("[data-hover]")) b.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        fetch("/event?what=hover-action");
+      });
+      if (${this.rowClickSelects}) for (const a of document.querySelectorAll('[data-test-id="message-list-item"]')) a.addEventListener("click", (e) => {
+        e.preventDefault();
+        a.querySelector("[data-sel]").click();
+      });`;
   }
 
   // --- Outlook.com: folders with Focused/Other, a background toggle -------

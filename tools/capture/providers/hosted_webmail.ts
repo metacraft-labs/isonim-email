@@ -86,12 +86,14 @@ import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  type A11yLocator,
   atAddress,
   carriesToken,
   clickTarget,
   clipText,
   closest,
   clippedBy,
+  conversationCount,
   type Flat,
   findShowing,
   findStoryArticle,
@@ -103,6 +105,7 @@ import {
   locateStoryRegion,
   locationHost,
   matches,
+  outermost,
   type ListState,
   mailboxSignals,
   meanLuminance,
@@ -182,7 +185,9 @@ import {
   checkScreenName,
   classifyScreen,
   LOADING_SCREEN,
+  LOADING_TIMEOUT_MS,
   MailboxCheck,
+  RELOAD_AFTER_MS,
   normalize,
   onMailboxAddress,
   PROVIDER_SIGNIN,
@@ -256,6 +261,9 @@ export interface HostedWebmailTimings {
   // counted against signinCheckMs; webmail_signin_steps.ts
   // `MailboxCheck`).
   signinLoadingMs: number;
+  // How long the loading screen shows without a break before the check
+  // reloads the page, once.
+  signinReloadMs: number;
   // How long a page off the mail hosts must stay to be a lost session.
   offHostMs: number;
   // The visual settle's bound (fonts and images: never a failure).
@@ -280,7 +288,8 @@ export const DEFAULT_TIMINGS: HostedWebmailTimings = {
   leaseWaitMs: 600_000,
   leasePollMs: 1_000,
   signinCheckMs: 45_000,
-  signinLoadingMs: 120_000,
+  signinLoadingMs: LOADING_TIMEOUT_MS,
+  signinReloadMs: RELOAD_AFTER_MS,
   offHostMs: 3_000,
   imageTimeoutMs: 5_000,
   stableMs: 300,
@@ -295,6 +304,9 @@ export const DEFAULT_TIMINGS: HostedWebmailTimings = {
 // "mixed", stand-in, 2026-11-13); the two names are kept for a reader
 // that does.
 const TICKED_STATES = ["checked", "indeterminate", "mixed"];
+
+// A check box (a row's selection, a list's select-all).
+const CHECK_BOX: A11yLocator = { role: "checkbox" };
 
 // The session check's: a named screen that is not the mailbox counts once
 // it stayed this long (the sign-in's check, email-webmail-signin.ts).
@@ -878,11 +890,13 @@ export class HostedWebmailProvider implements CaptureProvider {
           // An inbox that did not load at all (no network, the webmail
           // down) says nothing about the session: the account is not
           // marked, and the worker stops for this run.
-          if (!s.judged)
-            return stop(
-              `${a.set}/${a.name}: ${s.reason} (the session was not judged; the account stays in selection)`,
-              s.failure,
+          if (!s.judged) {
+            const why = `${a.set}/${a.name}: ${s.reason} (the session was not judged; the account stays in selection)`;
+            this.log(
+              `email-shots: hosted-webmail: ${why}${s.failure?.frame ? ` (the screen kept at ${join(this.runDir, s.failure.frame)})` : ""}`,
             );
+            return stop(why, s.failure);
+          }
           this.sessionLost(a, s.reason, s.failure);
           return stop(this.lostReason(a, s.reason), s.failure);
         }
@@ -1006,12 +1020,15 @@ export class HostedWebmailProvider implements CaptureProvider {
   // text classified with the mailbox phrases first and the page's
   // structure on a mailbox address last, a structural reading held over
   // two frames at one address, a named screen that stays 5 s, the
-  // webmail's loading screen never judged and its time not counted, up
-  // to signinLoadingMs), while the address bar is on a mail host. Off the mail hosts for offHostMs
-  // is signed out; the browser's own error page is a load failure,
-  // which judges nothing. Types, clicks and presses nothing. That
-  // browser and session stop before the capture's window starts; a
-  // failure keeps their last frame and tree first.
+  // webmail's loading screen never judged, read without OCR and its
+  // time not counted, up to signinLoadingMs, the page reloaded once
+  // after signinReloadMs of it), while the address bar is on a mail
+  // host. Off the mail hosts for offHostMs is signed out; the browser's
+  // own error page, and a check that ends at its bound with no signed-out
+  // screen seen, are a load failure, which judges nothing (the account
+  // is not marked). Types and clicks nothing; its one key is that F5.
+  // That browser and session stop before the capture's window starts;
+  // a failure keeps their last frame and tree first.
   private async checkSession(
     w: Worker,
     adapter: WebmailAdapter,
@@ -1070,6 +1087,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         timeoutMs: this.t.signinCheckMs,
         settleMs: CHECK_SETTLE_MS,
         loadingTimeoutMs: this.t.signinLoadingMs,
+        reloadAfterMs: this.t.signinReloadMs,
       });
       let offSince: number | null = null;
       for (;;) {
@@ -1077,15 +1095,24 @@ export class HostedWebmailProvider implements CaptureProvider {
         const host =
           snap.location === null ? null : locationHost(snap.location);
         const onMail = host !== null && adapter.signin.mailHosts.includes(host);
-        const text = await desk.ocrText();
+        const onBox =
+          rule !== undefined && onMailboxAddress(rule, snap.location);
+        // The webmail's loading screen, read where the structure is: on
+        // a mailbox address of a mail host. A page holding only its logo
+        // has no phrase to read, so it is not read by OCR (which costs a
+        // loaded host CPU the page's boot needs).
+        const blank =
+          onBox &&
+          onMail &&
+          snap.flat.length > 0 &&
+          loadingScreen(snap.flat[0]!.node);
+        const text = blank ? "" : await desk.ocrText();
         const norm = normalize(text);
         if (BROWSER_ERROR_PHRASES.some((p) => norm.includes(` ${p} `)))
           return await failed(
             false,
             `the inbox did not load (the browser's error page on ${host ?? "an unknown address"})`,
           );
-        const onBox =
-          rule !== undefined && onMailboxAddress(rule, snap.location);
         const signals =
           onBox && snap.flat.length > 0
             ? mailboxSignals(snap.flat[0]!.node, address)
@@ -1096,16 +1123,17 @@ export class HostedWebmailProvider implements CaptureProvider {
             : classifyScreen(rule, text, snap.location, signals);
         // The mailbox only on a mail host.
         if (screen.kind === "done" && !onMail) screen = { kind: "unknown" };
-        // The webmail's loading screen, read where the structure is: on
-        // a mailbox address of a mail host, the text naming nothing.
-        const loading =
-          onBox &&
-          onMail &&
-          screen.kind === "unknown" &&
-          snap.flat.length > 0 &&
-          loadingScreen(snap.flat[0]!.node);
+        // The loading screen, the text naming nothing.
+        const loading = blank && screen.kind === "unknown";
         const now = Date.now();
         const v = check.read(screen, snap.location, now, loading);
+        if (v.kind === "reload") {
+          this.log(
+            `email-shots: hosted-webmail: ${adapter.set}/${a.name}: the session check reloaded the page once, after ${Math.round(v.afterMs / 1000)} s with the webmail's loading screen shown`,
+          );
+          await desk.ga.key("F5");
+          continue;
+        }
         if (v.kind === "signed-in")
           return {
             signedIn: true,
@@ -1118,7 +1146,10 @@ export class HostedWebmailProvider implements CaptureProvider {
               },
               readings: check.readings,
               ms: Math.round(performance.now() - t0),
-              loading: { ...check.loading },
+              loading: {
+                ...check.loading,
+                reloaded_after_ms: check.reloadedAfterMs,
+              },
             },
           };
         if (host !== null && !onMail) {
@@ -1149,14 +1180,18 @@ export class HostedWebmailProvider implements CaptureProvider {
               ? Math.max(this.t.signinCheckMs, this.t.signinLoadingMs)
               : check.deadline - start) / 1000,
           );
+          // At its bound the check saw no signed-out screen: the webmail
+          // did not load, which judges no session (only a named screen
+          // that stayed, or a page off the mail hosts, does).
           return await failed(
-            onMail,
+            false,
             onMail
-              ? `the inbox loaded on ${host} but the mailbox did not show within ${secs} s (the last reading: the screen ${named}, the address bar ${at}, ${structure}${check.loadingNote()})`
+              ? `the webmail did not load: the inbox URL on ${host} showed no mailbox within ${secs} s and no sign-in page (the last reading: the screen ${named}, the address bar ${at}, ${structure}${check.loadingNote()}${check.reloadedAfterMs === null ? "" : `; reloaded once after ${Math.round(check.reloadedAfterMs / 1000)} s`})`
               : `the inbox did not load within ${secs} s (the address bar: ${host ?? "unread"})`,
           );
         }
-        await sleep(500);
+        // Slower over the loading screen: the page's boot needs the CPU.
+        await sleep(loading ? 1_000 : 500);
       }
     } finally {
       await desk.close().catch(() => undefined);
@@ -1275,11 +1310,38 @@ export class HostedWebmailProvider implements CaptureProvider {
   }
 
   // The headings (the opened subject) that carry the token in their
-  // accessible text (a11y_tree.ts `textCarriesToken`).
+  // accessible text (a11y_tree.ts `textCarriesToken`), one inside
+  // another counted once (`outermost`: the search's highlight nested in
+  // the subject). Every check of the opened subject counts with it.
   private tokenHeadings(snap: Snapshot, ui: AdapterUi, token: string): Flat[] {
-    return findShowing(snap.flat, ui.opened.subject).filter((f) =>
-      textCarriesToken(f.node, token),
+    return outermost(
+      findShowing(snap.flat, ui.opened.subject).filter((f) =>
+        textCarriesToken(f.node, token),
+      ),
     );
+  }
+
+  // The checked check boxes inside `scope` (the page when null).
+  private ticked(snap: Snapshot, scope: Flat | null): Flat[] {
+    return findShowing(snap.flat, CHECK_BOX, scope ?? this.page(snap)).filter(
+      (b) => b.node.states.some((st) => TICKED_STATES.includes(st)),
+    );
+  }
+
+  // Clears the token row's own check box (one click, then read
+  // unchecked); false when it stayed checked.
+  private async untick(
+    desk: WebmailDesktop,
+    ui: AdapterUi,
+    token: string,
+    box: Flat,
+  ): Promise<boolean> {
+    await desk.click(box.node.bounds!);
+    const r = await desk.waitFor((s) => {
+      const rows = this.tokenRows(s, ui, token);
+      return rows.length === 1 && this.ticked(s, rows[0]!).length === 0;
+    }, this.t.stepTimeoutMs);
+    return r.ok;
   }
 
   // What one look saw (the search record).
@@ -2225,6 +2287,35 @@ export class HostedWebmailProvider implements CaptureProvider {
     needBody = true,
   ): Promise<void> {
     const ui = adapter.desktop;
+    const who = `${adapter.set}/${a.name}`;
+    // A conversation is never opened: which of its messages the view
+    // shows, and what its delete removes, are not known.
+    const conversation = conversationCount(row.node);
+    if (conversation > 1)
+      throw new StepError(
+        `${adapter.label}: the message's row is a conversation of ${conversation} messages (an earlier test message shares it): it is neither opened nor deleted; delete the earlier test messages by hand`,
+      );
+    // No row selected before the click: the token row's own check box
+    // is cleared; any other selection fails with nothing clicked.
+    {
+      const pre = await desk.snapshot();
+      const sel = this.ticked(pre, null);
+      if (sel.length > 0) {
+        const mine = this.tokenRows(pre, ui, token);
+        const own = mine.length === 1 ? this.ticked(pre, mine[0]!) : [];
+        if (!(own.length === 1 && sel.length === 1 && own[0] === sel[0]))
+          throw new StepError(
+            `${adapter.label}: a row of the list is selected before the click (${sel.length} check boxes checked): nothing is clicked`,
+          );
+        if (!(await this.untick(desk, ui, token, own[0]!)))
+          throw new StepError(
+            `${adapter.label}: the message's row was selected before the click, and a click on its check box did not clear it: nothing more is clicked`,
+          );
+        this.log(
+          `email-shots: hosted-webmail: ${who}: the message's row was selected before the click; its check box was cleared`,
+        );
+      }
+    }
     // The page's headings before the click (the row's own tree).
     let top: Flat = row;
     while (top.parent !== null) top = top.parent;
@@ -2251,6 +2342,21 @@ export class HostedWebmailProvider implements CaptureProvider {
     const carrying = all.filter(isNew);
     if (carrying.length === 1) return;
     this.assertOnMailHost(adapter, r.snap, a);
+    // The click selected the row instead of opening it (its check box
+    // checked): that check box, and only it, is cleared, and the step
+    // fails saying so.
+    if (carrying.length === 0 && all.length !== 1) {
+      const rows = this.tokenRows(r.snap, ui, token);
+      const own = rows.length === 1 ? this.ticked(r.snap, rows[0]!) : [];
+      if (own.length === 1) {
+        const cleared = await this.untick(desk, ui, token, own[0]!);
+        const what = `the click selected the row instead of opening it; ${cleared ? "its check box was cleared" : "a click on its check box did not clear it"}`;
+        this.log(`email-shots: hosted-webmail: ${who}: ${what}`);
+        throw new StepError(
+          `${adapter.label}: the message did not open: ${what}`,
+        );
+      }
+    }
     if (carrying.length > 1)
       throw this.drift(
         adapter,

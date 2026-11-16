@@ -34,7 +34,11 @@
 // signals (a message list of selectable rows, a folder navigation, a
 // compose control in the upper left, the account's address in the
 // window's title) are read without any name, so a Bulgarian mailbox has
-// them all, and a sign-in page none that counts.
+// them all, and a sign-in page none that counts. A row is clicked on its
+// text, never a control (its check box, its hover actions), else on the
+// widest stretch no control covers; a conversation's count is read from
+// its row; a search box's wrapper, named after the query, is no text; a
+// token match nested in another counts once.
 // Run with:
 //   node --test tools/capture/providers/a11y_tree.test.ts
 
@@ -48,6 +52,7 @@ import {
   carriesToken,
   clickTarget,
   clipText,
+  conversationCount,
   findShowing,
   findStoryArticle,
   flatten,
@@ -63,6 +68,8 @@ import {
   meanLuminance,
   messageList,
   clippedBy,
+  outermost,
+  ROW_CLICK_BAND,
   overflowPast,
   paintMasks,
   percentDecoded,
@@ -567,7 +574,166 @@ describe("where a row is clicked", () => {
     assert.deepEqual(clickTarget(row, TOKEN), [600, 300, 200, 20]);
     subject.states = ["visible", "offscreen"];
     assert.deepEqual(clickTarget(row, TOKEN), [580, 296, 240, 28]);
-    assert.deepEqual(clickTarget(row, "[es:other]"), [220, 300, 800, 44]);
+    // No text carries it: the row's leftmost text (no control covers it).
+    assert.deepEqual(clickTarget(row, "[es:other]"), [220, 300, 60, 20]);
+  });
+
+  // Yahoo's row (live tree, 2026-11-13, run a1-20261113T084752Z): a
+  // link whose check box and hover actions are named after the message,
+  // its subject cell without text in the tree; the click went to the
+  // check box and selected the row.
+  const yahooRow = (hover: boolean) => {
+    const box = n(
+      "checkbox",
+      "check box",
+      `IsoNim ${TOKEN} [shots] receip…`,
+      [289, 371, 24, 25],
+    );
+    const actions = n(
+      "toolbar",
+      "tool bar",
+      "Действия със съобщение",
+      [710, 363, 240, 41],
+      ["Преместване", "Отговор", "Изтриване"].map((a, i) =>
+        n("button", "push button", `${a} ${TOKEN} [shots] receip…`, [
+          710 + 40 * i,
+          363,
+          40,
+          41,
+        ]),
+      ),
+    );
+    const row = n(
+      "link",
+      "link",
+      `Непрочетено съобщение IsoNim ${TOKEN} [shots] receiptTypical`,
+      [265, 362, 689, 44],
+      [
+        box,
+        n("group", "section", "", [369, 373, 46, 21], [], { text: "IsoNim" }),
+        n(
+          "group",
+          "section",
+          "2 съобщения",
+          [415, 373, 12, 21],
+          [text("2", [419, 374, 8, 17])],
+          { text: "2" },
+        ),
+        n("group", "section", "", [525, 373, 299, 21]),
+        n("group", "section", "", [872, 373, 58, 21], [], { text: "10:48" }),
+        ...(hover
+          ? [n("group", "section", "", [710, 366, 240, 35], [actions])]
+          : []),
+      ],
+    ) as GaNode & { bounds: Rect };
+    return row;
+  };
+
+  it("is never a control: a row whose check box and hover actions carry the token is clicked on its leftmost text past them, never the middle of the stretch no control covers", () => {
+    for (const hover of [false, true]) {
+      const row = yahooRow(hover);
+      const at = clickTarget(row, TOKEN);
+      const cx = at[0] + at[2] / 2;
+      const cy = at[1] + at[3] / 2;
+      // Inside the row, on no control: not the check box (289..313), not
+      // the hover actions (710..950).
+      assert.ok(cx > 265 && cx < 954 && cy > 362 && cy < 406, `${at}`);
+      assert.ok(!(cx >= 289 && cx <= 313), `${hover}: ${at}`);
+      assert.ok(!(cx >= 710 && cx <= 950), `${hover}: ${at}`);
+      // The sender's name, the leftmost text of the stretch.
+      assert.deepEqual(at, [369, 373, 46, 21]);
+    }
+    // A narrow row (400 px) without text in the tree: its hover actions
+    // (240 px at its right end, drawn only under the pointer, so not in
+    // the tree it is clicked from) start at 425; the click is at the
+    // left of the stretch past the check box, never its middle (489).
+    const narrow = n(
+      "link",
+      "link",
+      `IsoNim ${TOKEN}`,
+      [265, 362, 400, 44],
+      [
+        n("checkbox", "check box", `IsoNim ${TOKEN}`, [289, 371, 24, 25]),
+        n("group", "section", "", [369, 373, 200, 21]),
+      ],
+    ) as GaNode & { bounds: Rect };
+    const nat = clickTarget(narrow, TOKEN);
+    assert.deepEqual(nat, [313, 362, ROW_CLICK_BAND, 44]);
+    const ncx = nat[0] + nat[2] / 2;
+    assert.ok(ncx > 313 && ncx < 425, `${nat}`);
+    // A link inside the row carrying the token may be clicked (Gmail's
+    // Trash row's subject link), a button inside it never.
+    const subject = n(
+      "link",
+      "link",
+      `${TOKEN} Your receipt`,
+      [600, 300, 200, 20],
+    );
+    const gmail = n(
+      "row",
+      "table row",
+      "",
+      [220, 300, 800, 44],
+      [
+        n("checkbox", "check box", `Acme ${TOKEN}`, [230, 310, 14, 14]),
+        n("group", "section", "", [500, 296, 400, 28], [subject]),
+        n("button", "push button", `Star ${TOKEN}`, [960, 300, 40, 40]),
+      ],
+    ) as GaNode & { bounds: Rect };
+    assert.deepEqual(clickTarget(gmail, TOKEN), [600, 300, 200, 20]);
+    // Controls over all of it: the row's own box.
+    const covered = n(
+      "link",
+      "link",
+      TOKEN,
+      [0, 0, 100, 20],
+      [n("button", "push button", "x", [0, 0, 100, 20])],
+    ) as GaNode & { bounds: Rect };
+    assert.deepEqual(clickTarget(covered, TOKEN), [0, 0, 100, 20]);
+  });
+
+  it("reads a row's conversation count: a number and a word named, the number its text; never a control's", () => {
+    assert.equal(conversationCount(yahooRow(false)), 2);
+    assert.equal(conversationCount(yahooRow(true)), 2);
+    // A single message: no count.
+    const one = n(
+      "link",
+      "link",
+      `IsoNim ${TOKEN}`,
+      [0, 0, 600, 40],
+      [
+        n("group", "section", "", [0, 0, 60, 20], [], { text: "IsoNim" }),
+        n("group", "section", "", [500, 0, 60, 20], [], { text: "10:48" }),
+      ],
+    );
+    assert.equal(conversationCount(one), 1);
+    // A count named but not shown as its number, a subject that starts
+    // with a number, or a control so named: no count.
+    const look = n(
+      "link",
+      "link",
+      "x",
+      [0, 0, 600, 40],
+      [
+        n("group", "section", "3 messages", [0, 0, 60, 20], [], { text: "" }),
+        n("group", "section", "2 items", [0, 0, 60, 20], [], {
+          text: "2 items left in stock",
+        }),
+        n("button", "push button", "5 replies", [0, 0, 60, 20], [], {
+          text: "5",
+        }),
+      ],
+    );
+    assert.equal(conversationCount(look), 1);
+    // In English.
+    const en = n(
+      "link",
+      "link",
+      "x",
+      [0, 0, 600, 40],
+      [n("group", "section", "3 messages", [0, 0, 60, 20], [], { text: "3" })],
+    );
+    assert.equal(conversationCount(en), 3);
   });
 });
 
@@ -1188,6 +1354,116 @@ describe("part 3d: the loading screen, the subject heading, folder controls", ()
         TOKEN,
       ),
       false,
+    );
+  });
+
+  // Gmail's Spam message (live tree, 2026-11-13, run
+  // a1-20261113T084650Z): the subject heading with the search's
+  // highlight nested in it, and the banner heading holding the search
+  // box, whose wrapper is named after the token query.
+  it("counts a token match nested in another once, and never the token a search box's wrapper is named after", () => {
+    const field = n(
+      "text-field",
+      "entry",
+      "Search mail",
+      [315, 109, 424, 20],
+      [],
+      {
+        text: `in:spam "${TOKEN}"`,
+        value: `in:spam "${TOKEN}"`,
+      },
+    );
+    const banner = n(
+      "label",
+      "heading",
+      "",
+      [4, 87, 1231, 64],
+      [
+        n("button", "push button", "Main menu", [16, 95, 48, 48]),
+        n("link", "link", "Gmail", [68, 99, 109, 44]),
+        n(
+          "group",
+          "section",
+          "",
+          [315, 98, 424, 22],
+          [
+            n(
+              "group",
+              "section",
+              `in:spam "${TOKEN}"`,
+              [315, 98, 424, 22],
+              [n("group", "section", "", [315, 109, 424, 20], [field])],
+            ),
+          ],
+        ),
+      ],
+    );
+    assert.equal(textCarriesToken(banner, TOKEN), false);
+    assert.doesNotMatch(rowText(banner), /es run1|es:run1/);
+    // Its other children still count.
+    assert.match(rowText(banner), /Main menu Gmail/);
+    // The wrapper on its own, named after the query, does not carry it.
+    assert.equal(
+      textCarriesToken(banner.children[2]!.children[0]!, TOKEN),
+      false,
+    );
+    const subject = n(
+      "label",
+      "heading",
+      `${TOKEN} [shots] receiptTypical`,
+      [332, 219, 587, 27],
+      [
+        text("[", [332, 219, 7, 27]),
+        n("label", "static", "es:run1:abcd1234", [339, 219, 347, 27], [], {
+          text: "es:run1:abcd1234",
+        }),
+        text("] [shots] receiptTypical", [686, 219, 223, 27]),
+      ],
+      { text: `${TOKEN} [shots] receiptTypical` },
+    );
+    assert.equal(textCarriesToken(subject, TOKEN), true);
+    // Found as headings: the subject and a heading nested in it (as a
+    // highlight Chrome exposed as a heading would be) count once, as the
+    // outermost. A heading beside it in the tree whose bounds lie within
+    // the subject's (a results heading drawn over it) is another match,
+    // never merged by its bounds; nor is a heading elsewhere.
+    const inner = n(
+      "label",
+      "heading",
+      "es:run1:abcd1234",
+      [339, 219, 347, 27],
+    );
+    subject.children.push(inner);
+    const twin = n("label", "heading", TOKEN, [340, 220, 300, 20]);
+    const away = n("label", "heading", TOKEN, [332, 600, 300, 20]);
+    const doc = n(
+      "unknown",
+      "document web",
+      null,
+      [0, 80, 1240, 2300],
+      [banner, subject, twin, away],
+    );
+    const flat = flatten(doc);
+    const found = flat.filter(
+      (f) => f.node.nativeRole === "heading" && textCarriesToken(f.node, TOKEN),
+    );
+    assert.deepEqual(
+      found.map((f) => f.node.bounds),
+      [subject.bounds, inner.bounds, twin.bounds, away.bounds],
+    );
+    assert.deepEqual(
+      outermost(found).map((f) => f.node),
+      [subject, twin, away],
+    );
+    // Two siblings with the same bounds: two matches.
+    const a = n("label", "heading", TOKEN, [0, 0, 10, 10]);
+    const b = n("label", "heading", TOKEN, [0, 0, 10, 10]);
+    const both = flatten(
+      n("unknown", "document web", null, [0, 0, 99, 99], [a, b]),
+    );
+    assert.deepEqual(
+      outermost(both.filter((f) => f.node.role === "label")).map((f) => f.node),
+      [a, b],
     );
   });
 
