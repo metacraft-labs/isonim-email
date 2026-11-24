@@ -14,6 +14,9 @@ on:
   push:
     branches: [dev, stable]
   pull_request:
+    # Named bases: an unfiltered trigger also runs on pull requests into `agents`,
+    # which runs no CI (branching policy, "`agents` Has No CI").
+    branches: [dev, stable]
 
 jobs:
   lint:
