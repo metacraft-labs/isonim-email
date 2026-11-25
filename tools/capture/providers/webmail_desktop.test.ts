@@ -95,10 +95,25 @@ function harness(scenario: StandinScenario, env: Record<string, string> = {}) {
 }
 
 const URL_NOW = "127.0.0.1:4711/mail/u/0/#inbox";
+// The page Chrome has drawn: its document.
+const DOCUMENT = {
+  path: "/app[1]/doc",
+  role: "group",
+  nativeRole: "document web",
+  name: "Inbox",
+  bounds: [4, 87, 1232, 2308],
+  states: ["visible", "enabled"],
+  children: [],
+};
 const SCENARIO: StandinScenario = {
   start: "mail",
   screens: {
-    mail: { text: "Inbox Compose", location: URL_NOW, fill: [10, 20, 30] },
+    mail: {
+      text: "Inbox Compose",
+      location: URL_NOW,
+      fill: [10, 20, 30],
+      tree: [DOCUMENT],
+    },
   },
 };
 
@@ -192,6 +207,38 @@ describe("WebmailDesktop", () => {
         .map((e) => `${e.verb}:${e.argv.at(-1)}`);
       assert.deepEqual(after, ["key:F5"]);
       assert.equal((await d.snapshot()).location, URL_NOW);
+    } finally {
+      await d.close();
+    }
+  });
+
+  it("types a URL the address bar already holds while no page is drawn: F5 would reload the browser's blank first document", async () => {
+    const h = harness({
+      start: "mail",
+      screens: {
+        mail: { text: "", location: URL_NOW, fill: [10, 20, 30] },
+      },
+    });
+    const d = await openDesk(h);
+    try {
+      const before = h.log().length;
+      const r = await d.navigate(`http://${URL_NOW}`, () => true, 300);
+      assert.equal(r.how, "typed");
+      const input = h
+        .log()
+        .slice(before)
+        .filter((e) => ["click", "key", "type"].includes(e.verb))
+        .map((e) =>
+          e.verb === "type" ? "type" : `${e.verb}:${e.argv.at(-1)}`,
+        );
+      assert.ok(!input.includes("key:F5"), input.join(","));
+      assert.deepEqual(input.slice(0, 5), [
+        "click:590,63",
+        "key:ctrl+a",
+        "type",
+        "key:Delete",
+        "key:Return",
+      ]);
     } finally {
       await d.close();
     }

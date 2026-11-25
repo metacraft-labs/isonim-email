@@ -34,6 +34,12 @@ export interface A11yLocator {
   nameContains?: string;
   /** A regular expression over the accessible name (case-insensitive). */
   namePattern?: string;
+  /**
+   * A showing node inside the matched one (never the node itself) that
+   * this locator matches: a structure, e.g. a row's link that holds the
+   * row's check box.
+   */
+  holds?: A11yLocator;
 }
 
 /** A node of the tree with where it sits. */
@@ -69,7 +75,15 @@ export function matches(node: GaNode, loc: A11yLocator): boolean {
     !new RegExp(loc.namePattern, "iu").test(name)
   )
     return false;
+  if (loc.holds !== undefined && !holdsMatch(node, loc.holds)) return false;
   return true;
+}
+
+// Whether a showing node inside `node` (not `node` itself) matches `loc`.
+function holdsMatch(node: GaNode, loc: A11yLocator): boolean {
+  return (node.children ?? []).some(
+    (c) => (matches(c, loc) && showing(c)) || holdsMatch(c, loc),
+  );
 }
 
 /** Shown on the display: bounds of some size, visible, not off screen. */
@@ -749,8 +763,9 @@ export function mailboxSignals(
 export type ListState = "rows" | "empty" | "quiet" | "loading";
 
 /**
- * One reading of a folder's list: `loading` while a `loading` locator
- * shows in the list's scope; `rows` when a row locator matches inside
+ * One reading of a folder's list: `loading` when there is no page
+ * (`page` null: no showing `document web` node, a page not drawn yet)
+ * or while a `loading` locator shows in the list's scope; `rows` when a row locator matches inside
  * the page; `empty` when an `empty` notice shows in the scope; else
  * `loading` for an adapter that declares empty notices (a list drawn as
  * placeholders, which are not in the tree) and `quiet` for one that
@@ -784,7 +799,10 @@ export function readList(
   const shows = (locs: A11yLocator[]): boolean =>
     locs.some((l) => findShowing(flat, l, scope).length > 0);
   let state: ListState;
-  if (shows(o.loading)) state = "loading";
+  // No page in the tree: the browser has not drawn it yet (a restarted
+  // browser's first load), so no list is shown to be quiet or empty.
+  if (o.page === null) state = "loading";
+  else if (shows(o.loading)) state = "loading";
   else if (seen.length > 0) state = "rows";
   else if (shows(o.empty)) state = "empty";
   else state = o.empty.length > 0 ? "loading" : "quiet";

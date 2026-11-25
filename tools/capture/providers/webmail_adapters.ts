@@ -79,6 +79,7 @@ export function describeLocator(l: A11yLocator): string {
   if (l.nameContains !== undefined)
     parts.push(`name*=${JSON.stringify(l.nameContains)}`);
   if (l.namePattern !== undefined) parts.push(`name~/${l.namePattern}/i`);
+  if (l.holds !== undefined) parts.push(`holds(${describeLocator(l.holds)})`);
   return parts.join(" ");
 }
 
@@ -423,8 +424,16 @@ const YAHOO_DESKTOP: AdapterUi = {
   notices: [],
   // Each message of a folder is a link to it (or an option of a list),
   // matched only in the message list (live, 2026-11-13: the page's
-  // banner and header links are links too).
-  rows: [u({ role: "link" }), u({ role: "list-item" })],
+  // banner and header links are links too). The new UI's row first: a
+  // link spanning the row that holds the row's check box, both named
+  // after the message, the link's name led by "Непрочетено съобщение"
+  // while it is unread (live trees, 2026-11-13 and 2026-11-22); the old
+  // UI's list items hold the check box beside the link.
+  rows: [
+    u({ role: "link", holds: { role: "checkbox" } }),
+    u({ role: "link" }),
+    u({ role: "list-item" }),
+  ],
   rowsIn: "message-list",
   opened: {
     subject: u({ nativeRole: "heading" }),
@@ -449,7 +458,14 @@ const YAHOO_DESKTOP: AdapterUi = {
     mayBePermanentIn: ["spam"],
   },
   dark: null,
-  windowAllowance: 560,
+  // Live, 2026-11-22 (run a1-20261122T015845Z): at 560 the body
+  // measured 626 px in the 1360 px window. The opened message takes the
+  // message list's column (no pane beside the list) between the 260 px
+  // folder navigation and a 336 px side section; that column grew
+  // 190 px for 195 px of window (691 px at 1355, 881 px at 1550). 750
+  // is 560 plus the 190 px the widening added: a 1550 px window, the
+  // body about 816 px [measure: the next live capture's width_check].
+  windowAllowance: 750,
 };
 
 // Outlook.com shows its Inbox at the bare /mail/0/ (live, 2026-10-31:

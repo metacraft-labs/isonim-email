@@ -65,7 +65,14 @@
 //   hover actions named after the message, the subject hidden from the
 //   tree), a click on the row that selects it, a row selected when the
 //   list is drawn, a sender's messages as one conversation row with its
-//   count, and a folder whose /n/ id moved.
+//   count, and a folder whose /n/ id moved;
+//   as the live runs of 2026-11-16 and 2026-11-22: Gmail's Trash list
+//   redrawn once after a row is selected (the selection cleared) and its
+//   toolbar's action shown a while after a selection; Yahoo's reloaded
+//   list drawn with its rows named after their senders alone for a
+//   while, an opened message's row no longer "unread", its list pages
+//   answering late after a message was opened, and the column the list
+//   and the opened message take a function of the window's width.
 // The webmail browser, GuiAssert, the profiles, TLS and the provider are
 // real.
 
@@ -100,6 +107,8 @@ export interface StandinMessage {
   html: string;
   messageId: string;
   deliveredAt: number;
+  // Yahoo: opened once (its row no longer named "unread").
+  read?: boolean;
 }
 
 const esc = (s: string): string =>
@@ -355,6 +364,37 @@ export class StandinWebmail {
   movedIds: StandinFolder[] = [];
   // Gmail: how much longer an opened message's view takes than a list's.
   openDelayMs = 0;
+  // Gmail: after the first click on a Trash row's check box, the list
+  // redrawn this many ms later, every selection cleared (as a refresh
+  // of a search's results does), this many times in all ("redraw"
+  // events); null: never.
+  selectionLostAfterMs: number | null = null;
+  selectionLosses = 0;
+  // Gmail: the toolbar's action shown this long after a row is selected
+  // (0: at once).
+  bulkAfterMs = 0;
+  // Yahoo, with liveRows: a list loaded by a reload (F5) draws its rows
+  // named after their senders alone, read and unread alike (the link's
+  // name its "unread" word and sender, the check box's the sender, the
+  // hover actions' their action), for this long, then their full names
+  // (live, 2026-11-22: a reloaded Inbox read so twice 1.4 s after the
+  // reload, the token nowhere in the tree). 0: never.
+  partialOnReloadMs = 0;
+  // Yahoo (`slowAfterOpen`): once a message has been opened, the first
+  // list page asked for starts a slow spell of slowMs, and every list
+  // page asked for during it is answered only when it ends (a restarted
+  // browser shows no page meanwhile, as the live one after its widening
+  // restart did, 2026-11-22). By time, not by count: Chrome's address
+  // bar fetches a typed URL ahead of the Return, a request of its own.
+  private slowMs = 0;
+  private openedOnce = false;
+  private slowUntil: number | null = null;
+
+  slowAfterOpen(ms: number): void {
+    this.openedOnce = false;
+    this.slowMs = ms;
+    this.slowUntil = null;
+  }
 
   constructor(skin: Skin) {
     this.skin = skin;
@@ -470,6 +510,8 @@ export class StandinWebmail {
       return this.send(res, 204, "text/plain", "");
     }
     if (url.pathname === "/event") {
+      if (url.searchParams.get("what") === "redraw" && this.selectionLosses > 0)
+        this.selectionLosses--;
       this.events.push(url.searchParams.get("what") ?? "");
       return this.send(res, 204, "text/plain", "");
     }
@@ -588,6 +630,12 @@ export class StandinWebmail {
           e.stopPropagation();
           box.setAttribute("aria-checked", box.getAttribute("aria-checked") === "true" ? "false" : "true");
           const any = boxes().some((x) => x.getAttribute("aria-checked") === "true");
+          // The list redrawn after a selection (once per page, as many
+          // times in all as selectionLosses allows).
+          if (${this.selectionLostAfterMs !== null && this.selectionLosses > 0} && any && !window.__redrawn) {
+            window.__redrawn = true;
+            setTimeout(() => { fetch("/event?what=redraw"); render(null); }, ${this.selectionLostAfterMs ?? 0});
+          }
           if (${this.selectAllAfterMs} !== null) {
             setTimeout(() => {
               for (const x of boxes()) x.setAttribute("aria-checked", "true");
@@ -595,7 +643,11 @@ export class StandinWebmail {
             }, ${this.selectAllAfterMs ?? 0});
             return;
           }
-          for (const b of document.querySelectorAll("[data-bulk]")) b.hidden = !any;
+          const show = () => {
+            const now = boxes().some((x) => x.isConnected && x.getAttribute("aria-checked") === "true");
+            for (const b of document.querySelectorAll("[data-bulk]")) b.hidden = !now;
+          };
+          if (${this.bulkAfterMs} > 0) setTimeout(show, ${this.bulkAfterMs}); else show();
         });
         for (const b of document.querySelectorAll("[data-bulk]")) b.addEventListener("click", () => {
           const ids = boxes().filter((x) => x.getAttribute("aria-checked") === "true").map((x) => x.dataset.sel);
@@ -884,10 +936,19 @@ export class StandinWebmail {
     const title = bg
       ? `(1 непрочетен) – ${this.addresses[account] ?? account}`
       : "Mail";
+    // The column the list and the opened message take, when the test
+    // sets one (between the navigation and a side section, growing with
+    // the window).
+    const pane =
+      this.paneWidth === null
+        ? ""
+        : `<style>.main{width:${this.paneWidth}}</style>`;
     if (m1[3] !== undefined) {
       const m = this.find(account, m1[3]);
       if (m === undefined)
         return this.send(res, 302, "text/plain", "", { location: base });
+      m.read = true;
+      this.openedOnce = true;
       const trash = m.folder === "trash";
       const script = `
         const b = document.querySelector('[data-test-id="toolbar-delete"]');
@@ -912,7 +973,7 @@ export class StandinWebmail {
         200,
         "text/html",
         page(
-          `${nav}<div class="main"><div data-test-id="message-view"><button data-test-id="toolbar-delete">${L.del}</button><h2 data-test-id="message-group-subject-text">${esc(m.subject)}</h2><div data-test-id="message-view-body-content"${hidden}>${m.html}</div></div></div>`,
+          `${pane}${nav}<div class="main"><div data-test-id="message-view"><button data-test-id="toolbar-delete">${L.del}</button><h2 data-test-id="message-group-subject-text">${esc(m.subject)}</h2><div data-test-id="message-view-body-content"${hidden}>${m.html}</div></div></div>`,
           script,
           true,
           title,
@@ -950,12 +1011,18 @@ export class StandinWebmail {
     const chrome = this.newUi
       ? `<div><p>Yahoo <a href="#">${L.learn}</a></p></div><header><a href="#">Yahoo Mail</a> <a href="#">${L.subscribe}</a></header><div role="toolbar"><button onclick="fetch('/event?what=report-spam')">${L.spam}</button></div>`
       : "";
-    this.send(
-      res,
-      200,
-      "text/html",
+    if (this.openedOnce && this.slowMs > 0 && this.slowUntil === null) {
+      this.slowUntil = Date.now() + this.slowMs;
+      this.events.push("slow");
+    }
+    const wait = this.slowUntil === null ? 0 : this.slowUntil - Date.now();
+    const send = (body: string): void =>
+      wait > 0
+        ? void setTimeout(() => this.send(res, 200, "text/html", body), wait)
+        : this.send(res, 200, "text/html", body);
+    send(
       page(
-        `${nav}<div class="main" role="main">${chrome}${rows}</div>${sized}`,
+        `${pane}${nav}<div class="main" role="main">${chrome}${rows}</div>${sized}`,
         // The new Yahoo Mail adds a query to a folder's address.
         `${
           this.newUi
@@ -1017,10 +1084,12 @@ export class StandinWebmail {
       const actions = L.actions
         .map(
           (a) =>
-            `<div role="button" tabindex="0" data-hover aria-label="${esc(`${a} ${m.subject}`)}" style="display:inline-block;width:40px;height:36px">${esc(a.slice(0, 1))}</div>`,
+            `<div role="button" tabindex="0" data-hover aria-label="${esc(`${a} ${m.subject}`)}" data-partial="${esc(a)}" style="display:inline-block;width:40px;height:36px">${esc(a.slice(0, 1))}</div>`,
         )
         .join("");
-      return `<li><a data-test-id="message-list-item" href="${base}/messages/${m.id}" aria-label="${esc(`${L.unread} ${named}`)}" style="position:relative;display:block;height:44px;width:760px"><div role="checkbox" tabindex="0" aria-checked="${checked}" aria-label="${esc(named)}" data-sel style="display:inline-block;width:20px;height:20px;margin:12px"></div><span>${esc(m.fromName)}</span>${count > 1 ? ` <span role="group" aria-label="${count} ${L.messages}">${count}</span>` : ""} <span aria-hidden="true">${esc(m.subject)}</span><span class="hover" role="toolbar" aria-label="Message actions" style="position:absolute;right:0;top:4px;${this.hoverAlways ? "" : "display:none"}">${actions}</span></a></li>`;
+      // An unread message's link is named with the "unread" word first.
+      const unread = m.read === true ? "" : `${L.unread} `;
+      return `<li><a data-test-id="message-list-item" href="${base}/messages/${m.id}" aria-label="${esc(`${unread}${named}`)}" data-partial="${esc(`${unread}${m.fromName}`)}" style="position:relative;display:block;height:44px;width:760px"><div role="checkbox" tabindex="0" aria-checked="${checked}" aria-label="${esc(named)}" data-partial="${esc(m.fromName)}" data-sel style="display:inline-block;width:20px;height:20px;margin:12px"></div><span>${esc(m.fromName)}</span>${count > 1 ? ` <span role="group" aria-label="${count} ${L.messages}">${count}</span>` : ""} <span aria-hidden="true">${esc(m.subject)}</span><span class="hover" role="toolbar" aria-label="Message actions" style="position:absolute;right:0;top:4px;${this.hoverAlways ? "" : "display:none"}">${actions}</span></a></li>`;
     };
     return `<style>li:hover .hover{display:inline-block !important}</style><ul aria-label="">${rows.map(item).join("")}</ul>`;
   }
@@ -1030,6 +1099,15 @@ export class StandinWebmail {
   // on the row selects it too.
   private liveRowScript(): string {
     return `
+      // A list loaded by a reload: its rows named after their senders
+      // alone for a while (partialOnReloadMs).
+      const loadedBy = performance.getEntriesByType("navigation")[0];
+      if (${this.partialOnReloadMs} > 0 && loadedBy !== undefined && loadedBy.type === "reload") {
+        const els = [...document.querySelectorAll("[data-partial]")];
+        for (const el of els) { el.dataset.full = el.getAttribute("aria-label"); el.setAttribute("aria-label", el.dataset.partial); }
+        fetch("/event?what=partial");
+        setTimeout(() => { for (const el of els) el.setAttribute("aria-label", el.dataset.full); }, ${this.partialOnReloadMs});
+      }
       for (const box of document.querySelectorAll("[data-sel]")) box.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
         const on = box.getAttribute("aria-checked") !== "true";

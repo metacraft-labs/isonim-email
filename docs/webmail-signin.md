@@ -571,7 +571,13 @@ Every PNG has a JSON file beside it. For a first capture, check:
   shortfall, finds and opens the message again, and records it in
   `window.widened` (`from`, `to`, the width it `measured` first). A
   capture that needed widening means the adapter's `windowAllowance` in
-  `webmail_adapters.ts` should grow by `to - from`;
+  `webmail_adapters.ts` should grow by `to - from`. Yahoo's window is
+  1550 px: its opened message takes the message list's column, between
+  the folder list and a side section, and that column was 626 px in a
+  1360 px window. After the restart (and a dark request's restart) the
+  message is looked for until it shows, for up to the arrival's 60 s:
+  `widen.looks` (or `restart.looks`) lists every look, and a page still
+  loading reads as `list.state: "loading"`, never as an empty folder;
 - `session_check`: how the account's session was confirmed before the
   capture. `by` is `ocr` (the mailbox's English words) or `structure`
   (its layout, in any language), `signals` says which structural signals
@@ -724,7 +730,12 @@ message shares it): it is neither opened nor deleted`: the webmail
   then capture again.
 - `cleanup FAILED for <Message-ID>`: the message may still be in the
   mailbox; the line names the kept screen, and the cleanup record's
-  `search` the looks that saw it. A removal's `via` says how it went:
+  `search` the looks that saw it. `the message was not found in <folder>
+within 60 s (N looks)`: the cleanup looked for the message where it
+  arrived (it was not open) and read each list on until the row showed
+  or 60 s passed; Yahoo draws a reloaded list's rows with their senders
+  first and their subjects a moment later, so a short wait there is
+  normal. The `search` looks show what each list read. A removal's `via` says how it went:
   `trash` (deleted, then deleted again from Trash / Deleted Items. In
   Gmail the second delete is made from the `in:trash` search list: the
   message's row check box, then the toolbar's "Delete forever". It is
@@ -735,7 +746,12 @@ message shares it): it is neither opened nor deleted`: the webmail
   "Delete forever" is clicked from too. Otherwise the cleanup fails with
   `the row is not shown in Trash (the Trash guard …)`, `a selection was
 already made in the Trash list …` or `the selection changed before …`,
-  and nothing more is clicked),
+  and nothing more is clicked. A selection Gmail drops on its own (it
+  redraws a search list when it refreshes the results) is made once
+  more, behind the same guards, and the log says `the Trash row's
+selection was lost …; it is made once more`; lost a second time, the
+  cleanup ends `in-trash`. The keyboard (`x`, `#`) is never used: Gmail's
+  shortcuts are an account setting),
   or `permanent` (deleted from Outlook.com's Junk Email, Yahoo's Spam
   or Gmail's Spam, and never seen in Trash: the delete there was for
   good). Gmail's Spam is deleted like its Inbox: the open message's

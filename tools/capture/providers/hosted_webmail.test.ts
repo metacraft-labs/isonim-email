@@ -107,6 +107,14 @@
 //   "Why is this message in spam?") and named otherwise, the token in its
 //   children, is recognised; it is captured, then deleted with the open
 //   message's "Delete" to Trash and for good from the Trash list.
+// - the live runs of 2026-11-16 and 2026-11-22: Yahoo's first window
+//   wide enough for the column its opened message takes; after a
+//   widening restart, pages slow to load are waited for and the message
+//   looked for until it shows; a reloaded list whose rows are named after
+//   their senders alone is read on until the row shows, read or unread,
+//   in the cleanup's find; Gmail's Trash-list selection lost once (the
+//   list redrawn) made again behind every guard, the row deleted for
+//   good.
 //
 // Test doubles (justification, per the repository's mock policy): the
 // hosted webmails need a real account signed in and the Gmail API sends
@@ -319,6 +327,7 @@ const FAMILY: Record<string, string> = {
   "gmail-web": "gmailWeb",
   "gmail-list": "gmailWeb",
   "yahoo-web": "yahoo",
+  "yahoo-list": "yahoo",
   "outlook-web": "outlookWeb",
 };
 
@@ -1099,6 +1108,164 @@ describe("hosted-webmail: as the live run of 2026-11-13 08:44Z showed", () => {
   });
 });
 
+describe("hosted-webmail: as the live runs of 2026-11-16 and 2026-11-22 showed", () => {
+  // Yahoo (live, run a1-20261122T015845Z): the body measured 626 px in
+  // the 1360 px window; after the widening restart the page was still
+  // loading (no page in the tree) and one look read the list as quiet,
+  // settled: "not found"; the cleanup's look over a reloaded Inbox read
+  // every row named after its sender alone: "no longer in Inbox".
+  it("Yahoo: a first window wide enough for the list's column; after a widening restart a page slow to load is waited for; a reloaded list whose rows are named after their senders is read until the row shows, read or unread", async () => {
+    const w = await world("yahoo-3f", { only: ["yahoo"] });
+    try {
+      const y = w.webmails.yahoo;
+      y.lang = "bg";
+      y.addresses = { qa1: QA.yahoo[0]! };
+      y.newUi = true;
+      y.liveRows = true;
+      const roomy = { timings: { arrivalTimeoutMs: 40_000 } };
+
+      // 1. The column the window's width less 734 px (626 px in the
+      // 1360 px window of the live run): 816 px in the adapter's 1550,
+      // no widening. The row found by the link holding its check box.
+      y.paneWidth = "calc(100vw - 734px)";
+      const m = mimeArticle("column");
+      const first = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("s", m, "yahoo-web")],
+        [message("s", m)],
+      );
+      const r = first[0]!;
+      assert.equal(r.status, "done", r.reason);
+      assert.equal(
+        prov(r).window.widened,
+        null,
+        JSON.stringify(prov(r).window),
+      );
+      assert.equal(prov(r).window.width, 1550);
+      assert.ok(
+        w.argvs.some((a) => a.includes(`--window-size=1550,${WINDOW_HEIGHT}`)),
+      );
+      assert.ok(prov(r).width_check.measured >= 800);
+      assert.equal(
+        prov(r).arrival.row_locator,
+        "role=link holds(role=checkbox)",
+      );
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [["removed", "trash"]],
+      );
+
+      // 2. Narrower: widened, and the restarted browser's list pages
+      // answered only 20 s after its first asked, past a look's 8 s
+      // bound (the browser shows no page meanwhile): the re-find looks
+      // again until the row shows (read, now that it was opened).
+      y.paneWidth = "calc(100vw - 900px)";
+      y.slowAfterOpen(20_000);
+      const n = mimeArticle("slow");
+      const second = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("n", n, "yahoo-web")],
+        [message("n", n)],
+        "t2",
+      );
+      const s2 = second[0]!;
+      assert.equal(s2.status, "done", s2.reason);
+      const win = prov(s2).window;
+      assert.equal(win.widened.from, 1550, JSON.stringify(win));
+      const looks = prov(s2).widen.looks as Record<string, any>[];
+      assert.ok(looks.length >= 2, JSON.stringify(looks));
+      assert.equal(looks[0]!.token_rows, 0);
+      assert.equal(looks.at(-1)!.token_rows, 1);
+      assert.equal(looks.at(-1)!.row_locator, "role=link holds(role=checkbox)");
+      assert.ok(y.events.includes("slow"), y.events.join(","));
+      // The new UI's toolbar "Спам" is never clicked.
+      assert.ok(!y.events.includes("report-spam"), y.events.join(","));
+      assert.deepEqual(
+        cleanup(w).map((c) => c.state),
+        ["removed", "removed"],
+      );
+
+      // 3. The list row only (the message never opened): the cleanup
+      // finds it on the page it is on, by a reload, whose rows are named
+      // after their senders alone for 6 s; read on, the row shows
+      // (unread), is opened and removed.
+      y.paneWidth = null;
+      y.partialOnReloadMs = 6_000;
+      y.events = [];
+      const o = mime("reloaded");
+      const third = await captureAll(
+        w.provider(roomy),
+        w,
+        [req("o", o, "yahoo-list")],
+        [message("o", o)],
+        "t3",
+      );
+      assert.equal(third[0]!.status, "done", third[0]!.reason);
+      assert.ok(y.events.includes("partial"), y.events.join(","));
+      assert.ok(!y.events.includes("report-spam"), y.events.join(","));
+      assert.deepEqual(
+        cleanup(w).map((c) => [c.state, c.via]),
+        [
+          ["removed", "trash"],
+          ["removed", "trash"],
+          ["removed", "trash"],
+        ],
+      );
+      assert.deepEqual(y.messages, []);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  // Gmail (live, run a1-20261116T052413Z): the Trash row's check box
+  // was clicked and read selected, then no "Delete forever" showed
+  // within 20 s: the selection did not hold.
+  it("Gmail: a Trash-list selection lost once (the list redrawn) is made again behind every guard, and the row deleted for good", async () => {
+    const w = await world("gmail-3f", { only: ["gmail-workspace"] });
+    try {
+      const gm = w.webmails["gmail-workspace"];
+      gm.selectionLostAfterMs = 300;
+      gm.selectionLosses = 1;
+      gm.bulkAfterMs = 1_500;
+      gm.trashDecoy = true;
+      const m = mime("lost-once");
+      // Not a test of the arrival's bound: room for a loaded host.
+      const r = await captureAll(
+        w.provider({ timings: { arrivalTimeoutMs: 40_000 } }),
+        w,
+        [req("s", m, "gmail-web")],
+        [message("s", m)],
+      );
+      assert.equal(r[0]!.status, "done", r[0]!.reason);
+      const rec = cleanup(w).at(-1)! as Record<string, any>;
+      assert.deepEqual(
+        [rec.state, rec.via, rec.permanent],
+        ["removed", "trash", true],
+        JSON.stringify(rec),
+      );
+      assert.equal(
+        gm.events.filter((e) => e === "redraw").length,
+        1,
+        gm.events.join(","),
+      );
+      assert.ok(
+        w.logs.some((l) =>
+          /gmail-workspace\/qa1: the Trash row's selection was lost .*; it is made once more$/.test(
+            l,
+          ),
+        ),
+        w.logs.join("\n"),
+      );
+      assert.equal(gm.destroyed.length, 1);
+      assert.notEqual(gm.destroyed[0]!.id, "decoy");
+    } finally {
+      await w.stop();
+    }
+  });
+});
+
 describe("hosted-webmail session loss and UI drift", () => {
   it("a session lost before delivery marks the account needs-login, names the sign-in, and types nothing", async () => {
     const w = await world("lost", { only: ["yahoo"] });
@@ -1322,6 +1489,17 @@ describe("hosted-webmail session loss and UI drift", () => {
         /^Gmail: the selection changed before role=button name="Delete forever" was clicked \(2 rows of the Trash list selected, 1 carrying the run token\): nothing more is clicked$/,
       );
       untouched(c, "grows");
+
+      // The selection grows at once, before it has held over two
+      // readings: not taken for a lost one (made again), and nothing more
+      // is clicked.
+      gm.selectAllAfterMs = 0;
+      const e = await run("grows-at-once", "t5");
+      assert.match(
+        String(e.reason),
+        /^Gmail: a click on the row's check box did not select exactly that row \(2 rows of the Trash list selected, 1 carrying the run token\): nothing more is clicked$/,
+      );
+      untouched(e, "grows-at-once");
 
       // The control: no selection before, none that grows: only the run's
       // row deleted for good, the other row left.
@@ -2300,7 +2478,7 @@ describe("hosted-webmail variants", () => {
       y.lang = "bg";
       y.addresses = { qa1: QA.yahoo[0]! };
       // The /n/ Inbox a mailbox only in a viewport of the sign-in's
-      // window (1280 x 900); the capture's window (1360 x 1000) shows
+      // window (1280 x 900); the capture's window (1550 x 1000) shows
       // it without its folder list or compose button.
       y.mailboxOnlyIn = { width: 1300, height: 860 };
       // Not a test of the arrival's bound: room for a loaded host.
@@ -2323,7 +2501,7 @@ describe("hosted-webmail variants", () => {
       // The check's browser at the sign-in's size, then the capture's.
       assert.ok(w.argvs[0]!.includes("--window-size=1280,900"));
       assert.ok(
-        w.argvs[1]!.includes(`--window-size=1360,${WINDOW_HEIGHT}`),
+        w.argvs[1]!.includes(`--window-size=1550,${WINDOW_HEIGHT}`),
         w.argvs[1]!.join(" "),
       );
       const inbox = y.probes.filter((p) => p.page === "/n/folders/00_1");

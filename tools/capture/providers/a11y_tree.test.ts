@@ -87,7 +87,11 @@ import {
   visibleArea,
 } from "./a11y_tree.ts";
 import type { GaNode, Rect } from "./guiassert.ts";
-import { WEBMAIL_CHROME } from "./webmail_adapters.ts";
+import {
+  describeLocator,
+  WEBMAIL_ADAPTERS,
+  WEBMAIL_CHROME,
+} from "./webmail_adapters.ts";
 
 let paths = 0;
 function n(
@@ -1778,6 +1782,189 @@ describe("part 3d: the loading screen, the subject heading, folder controls", ()
     assert.equal(
       atAddress("mail.yahoo.com/n/folders/00_6?.src=ym", inbox, aliases),
       false,
+    );
+  });
+});
+
+describe("part 3f: Yahoo's row as a link holding its check box, a page not drawn", () => {
+  // Yahoo's new UI as the live trees of 2026-11-13 and 2026-11-22 show
+  // it: list items each holding one link that spans the row, which holds
+  // the row's check box; an unread message's link named with
+  // "Непрочетено съобщение" first, a read one's without it.
+  const row = (name: string, unread: boolean, y: number): GaNode =>
+    n(
+      "list-item",
+      "list item",
+      "",
+      [265, y, 879, 44],
+      [
+        n(
+          "link",
+          "link",
+          `${unread ? "Непрочетено съобщение " : ""}${name}`,
+          [265, y, 879, 44],
+          [
+            n("checkbox", "check box", name, [289, y + 9, 24, 25]),
+            text(name.split(" ")[0]!, [369, y + 11, 85, 17]),
+          ],
+        ),
+      ],
+    );
+  const page = (rows: GaNode[], extra: GaNode[] = []): GaNode =>
+    n(
+      "group",
+      "document web",
+      "Yahoo Mail",
+      [4, 87, 1541, 2308],
+      [
+        n("link", "link", "Научете още", [606, 138, 106, 20]),
+        n(
+          "list",
+          "list",
+          "Списък със съобщения",
+          [265, 318, 879, 836],
+          [...rows, ...extra],
+        ),
+      ],
+    );
+  const yahooRows = WEBMAIL_ADAPTERS.find((a) => a.id === "yahoo")!.desktop
+    .rows;
+
+  it("matches a link that holds a showing check box, never the node itself or a hidden one, and names the structure", () => {
+    const linkWith = flatten(row(`IsoNim Shots ${TOKEN}`, false, 318))[1]!;
+    const loc: A11yLocator = { role: "link", holds: { role: "checkbox" } };
+    assert.equal(matches(linkWith.node, loc), true);
+    const bare = n("link", "link", `IsoNim Shots ${TOKEN}`, [0, 0, 10, 10]);
+    assert.equal(matches(bare, loc), false);
+    // Only inside: a check box does not hold itself.
+    const box = n("checkbox", "check box", "x", [0, 0, 10, 10]);
+    assert.equal(
+      matches(box, { role: "checkbox", holds: { role: "checkbox" } }),
+      false,
+    );
+    // A check box not shown does not count.
+    const hidden = n(
+      "link",
+      "link",
+      "x",
+      [0, 0, 10, 10],
+      [
+        n("checkbox", "check box", "x", [0, 0, 10, 10], [], {
+          states: ["enabled"],
+        }),
+      ],
+    );
+    assert.equal(matches(hidden, loc), false);
+    // Deeper than a child counts.
+    const deep = n(
+      "link",
+      "link",
+      "x",
+      [0, 0, 10, 10],
+      [
+        n(
+          "group",
+          "section",
+          "",
+          [0, 0, 10, 10],
+          [n("checkbox", "check box", "x", [0, 0, 10, 10])],
+        ),
+      ],
+    );
+    assert.equal(matches(deep, loc), true);
+    assert.equal(
+      describeLocator(yahooRows[0]!),
+      "role=link holds(role=checkbox)",
+    );
+  });
+
+  it("finds Yahoo's row by its first locator, read or unread, only with the token and only in the message list", () => {
+    const tree = page([
+      row(`Anthropic Your receipt`, true, 362),
+      row(`IsoNim Shots ${TOKEN} [shots] receiptTypical`, false, 318),
+    ]);
+    const flat = flatten(tree);
+    const list = messageList(flat, flat[0]!);
+    assert.ok(list !== null);
+    const r = tokenRows(flat, yahooRows, TOKEN, list);
+    assert.equal(r.locator, 0);
+    assert.equal(r.rows.length, 1);
+    assert.equal(r.rows[0]!.node.role, "link");
+    assert.ok(
+      !r.seen.some((f) => f.node.name === "Научете още"),
+      "the banner's link is no row",
+    );
+    // Unread: the same.
+    const unread = flatten(
+      page([row(`IsoNim Shots ${TOKEN} [shots] receiptTypical`, true, 318)]),
+    );
+    const u = tokenRows(
+      unread,
+      yahooRows,
+      TOKEN,
+      messageList(unread, unread[0]!),
+    );
+    assert.deepEqual([u.locator, u.rows.length], [0, 1]);
+    // A reloaded list's rows named after their senders alone (live,
+    // 2026-11-22): no row carries the token.
+    const partial = flatten(
+      page([row("IsoNim Shots", false, 318), row("Anthropic", true, 362)]),
+    );
+    const p = tokenRows(
+      partial,
+      yahooRows,
+      TOKEN,
+      messageList(partial, partial[0]!),
+    );
+    assert.deepEqual([p.locator, p.rows.length], [null, 0]);
+  });
+
+  it("reads a tree with no page as a list still loading, never quiet or empty", () => {
+    // The live widen frame's tree: Chrome's toolbar and tab, no page.
+    const chrome = n(
+      "window",
+      "frame",
+      "Yahoo Mail - Google Chrome",
+      [0, 0, 1549, 2399],
+      [
+        n("group", "panel", "", [4, 87, 1541, 2308]),
+        n("button", "button", "Reload", [81, 46, 34, 34]),
+      ],
+    );
+    const flat = flatten(chrome);
+    const o = {
+      rows: yahooRows,
+      scope: null,
+      loading: [],
+      empty: [],
+    };
+    const none = readList(flat, { ...o, page: null, rowsIn: false });
+    assert.equal(none.state, "loading");
+    // Even for an adapter that declares an empty notice that shows.
+    const withNotice = n(
+      "window",
+      "frame",
+      "x",
+      [0, 0, 100, 100],
+      [text("Nothing in folder", [0, 0, 100, 20])],
+    );
+    assert.equal(
+      readList(flatten(withNotice), {
+        ...o,
+        empty: [{ name: "Nothing in folder" }],
+        page: null,
+      }).state,
+      "loading",
+    );
+    // A drawn page with no message list is quiet, as before.
+    const drawn = flatten(page([]));
+    assert.equal(
+      readList(drawn, {
+        ...o,
+        page: drawn[0]!,
+        rowsIn: messageList(drawn, drawn[0]!) ?? false,
+      }).state,
+      "quiet",
     );
   });
 });

@@ -1405,6 +1405,10 @@ export class HostedWebmailProvider implements CaptureProvider {
   // folder), bounded by listLoadMs, returning as soon as a row carries
   // the token. A look counts as "not there" only when `settled`. `until`:
   // a caller's own deadline (the arrival budget), never waited past.
+  // `present`: the message is known to be in the folder (a re-find), so
+  // a settled list without its row is read on, the same page, until the
+  // row shows or the bound (Yahoo draws a reloaded list's rows named
+  // after their senders alone for a while, live 2026-11-22).
   private async settleList(
     desk: WebmailDesktop,
     ui: AdapterUi,
@@ -1415,6 +1419,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     tab = false,
     anywhere = false,
     until = Infinity,
+    present = false,
   ): Promise<{ snap: Snapshot; found: boolean; list: ListReading }> {
     const t0 = Date.now();
     const deadline = Math.min(t0 + this.t.listLoadMs, until);
@@ -1450,7 +1455,7 @@ export class HostedWebmailProvider implements CaptureProvider {
         state !== "loading" && state !== "elsewhere" && key === prev;
       // Off the folder twice alike: the webmail sent the URL elsewhere.
       const away = state === "elsewhere" && key === prev;
-      if (settled || away || Date.now() >= deadline)
+      if ((settled && !present) || away || Date.now() >= deadline)
         return {
           snap,
           found: false,
@@ -1472,7 +1477,12 @@ export class HostedWebmailProvider implements CaptureProvider {
   // URLs in turn, and its tabs. Every look is appended to `looks`. A
   // look that ends over a list that never settled is not "not there":
   // its folder is returned in `unsettled`. `until`: no list is waited on
-  // to settle past it (the arrival budget).
+  // to settle past it (the arrival budget). `present`: the message is
+  // known to be there (`refind`): the folder's last place looked in (its
+  // last URL, or that URL's last tab, or its control) is read on past a
+  // settled list (`settleList`); the earlier ones settle as usual, so
+  // that a URL that finds nothing (Gmail's rfc822msgid: in Trash) does
+  // not hold the search.
   private async lookIn(
     adapter: WebmailAdapter,
     desk: WebmailDesktop,
@@ -1481,6 +1491,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     folders: FolderName[],
     looks: Look[],
     until = Infinity,
+    present = false,
   ): Promise<Search> {
     const a = w.account;
     const ui = adapter.desktop;
@@ -1498,6 +1509,7 @@ export class HostedWebmailProvider implements CaptureProvider {
       // Read only when every look of it settled.
       let settledHere = true;
       for (const url of urls) {
+        const last = present && url === urls[urls.length - 1];
         const r = await desk.navigate(url, has, this.t.listSettleMs, {
           reloadWhen: has,
           aliases: f.aliases,
@@ -1529,6 +1541,7 @@ export class HostedWebmailProvider implements CaptureProvider {
           false,
           false,
           until,
+          last && f.tabs.length === 0,
         );
         const l1 = this.look(ui, name, url, r.how, s1.snap, token, w.redact);
         l1.list = s1.list;
@@ -1539,7 +1552,7 @@ export class HostedWebmailProvider implements CaptureProvider {
             hit: { folder: name, rows: this.tokenRows(s1.snap, ui, token) },
             unsettled,
           };
-        for (const tab of f.tabs) {
+        for (const [ti, tab] of f.tabs.entries()) {
           const t = findShowing(s1.snap.flat, tab);
           if (t.length !== 1) continue;
           await desk.click(t[0]!.node.bounds!);
@@ -1556,6 +1569,7 @@ export class HostedWebmailProvider implements CaptureProvider {
                 true,
                 false,
                 until,
+                last && ti === f.tabs.length - 1,
               );
           // The look's URL names the tab: the location is the folder's.
           const l2 = this.look(
@@ -1597,6 +1611,7 @@ export class HostedWebmailProvider implements CaptureProvider {
             s1.snap,
             token,
             until,
+            last,
           );
           if (s3 !== null) {
             const l3 = this.look(
@@ -1644,6 +1659,7 @@ export class HostedWebmailProvider implements CaptureProvider {
     snap: Snapshot,
     token: string,
     until = Infinity,
+    present = false,
   ): Promise<{
     snap: Snapshot;
     found: boolean;
@@ -1679,6 +1695,7 @@ export class HostedWebmailProvider implements CaptureProvider {
           false,
           true,
           until,
+          present,
         );
     return { ...s3, link: link.node.name ?? "" };
   }
@@ -1704,6 +1721,43 @@ export class HostedWebmailProvider implements CaptureProvider {
         return `${label} never settled in ${open.length} of ${mine.length} looks (still loading, or read differently each time: ${secs(ms.reduce((a, b) => a + b, 0))} s of reading in all, the longest ${secs(Math.max(0, ...ms))} s)`;
       })
       .join("; ");
+  }
+
+  // Finds a message known to be in `folder` again: after a browser
+  // restart (a dark request's, a widened window's) and in the cleanup
+  // when it is not open. Looked for until it shows, each look reading
+  // the folder's list on past a settled one (`present`), bounded by the
+  // arrival budget, as the arrival's polls are; a page not drawn yet is
+  // a list still loading (a11y_tree.ts `readList`). Every look is
+  // appended to `looks`.
+  private async refind(
+    adapter: WebmailAdapter,
+    desk: WebmailDesktop,
+    w: Worker,
+    d: { messageId: string; subjectToken: string },
+    folder: FolderName,
+    looks: Look[],
+  ): Promise<Search> {
+    const deadline = Date.now() + this.t.arrivalTimeoutMs;
+    for (;;) {
+      const s = await this.lookIn(
+        adapter,
+        desk,
+        w,
+        d,
+        [folder],
+        looks,
+        deadline,
+        true,
+      );
+      if (s.hit !== null || Date.now() >= deadline) return s;
+      await sleep(this.t.pollMs);
+    }
+  }
+
+  // How long a re-find looked, for its failure: "within N s (K looks)".
+  private refindSpan(looks: Look[]): string {
+    return `within ${Math.round(this.t.arrivalTimeoutMs / 1000)} s (${looks.length} looks)`;
   }
 
   private async findArrival(
@@ -1972,19 +2026,12 @@ export class HostedWebmailProvider implements CaptureProvider {
             desk = await this.openDesktop(w, adapter, scheme);
             const looks: Look[] = [];
             const again = (
-              await this.lookIn(
-                adapter,
-                desk,
-                w,
-                delivery,
-                [found.folder],
-                looks,
-              )
+              await this.refind(adapter, desk, w, delivery, found.folder, looks)
             ).hit;
             prov.restart = { scheme, looks };
             if (again === null || again.rows.length !== 1)
               throw new StepError(
-                `${adapter.label}: after the browser restarted in ${scheme}, ${again === null ? "the message was not found" : `${again.rows.length} messages carry the run token`} in ${ui.folders[found.folder].label}`,
+                `${adapter.label}: after the browser restarted in ${scheme}, ${again === null ? `the message was not found in ${ui.folders[found.folder].label} ${this.refindSpan(looks)}` : `${again.rows.length} messages carry the run token in ${ui.folders[found.folder].label}`}`,
               );
             row = again.rows[0]!;
             opened = false;
@@ -2044,19 +2091,19 @@ export class HostedWebmailProvider implements CaptureProvider {
               desk = await this.openDesktop(w, adapter, scheme);
               const looks: Look[] = [];
               const again = (
-                await this.lookIn(
+                await this.refind(
                   adapter,
                   desk,
                   w,
                   delivery,
-                  [found.folder],
+                  found.folder,
                   looks,
                 )
               ).hit;
               prov.widen = { from, to, looks };
               if (again === null || again.rows.length !== 1)
                 throw new StepError(
-                  `${adapter.label}: after the browser restarted in a window widened to ${to} px, ${again === null ? "the message was not found" : `${again.rows.length} messages carry the run token`} in ${ui.folders[found.folder].label}`,
+                  `${adapter.label}: after the browser restarted in a window widened to ${to} px, ${again === null ? `the message was not found in ${ui.folders[found.folder].label} ${this.refindSpan(looks)}` : `${again.rows.length} messages carry the run token in ${ui.folders[found.folder].label}`}`,
                 );
               step = "open";
               await this.open(
@@ -2741,19 +2788,19 @@ export class HostedWebmailProvider implements CaptureProvider {
         del.length !== 1 ||
         this.tokenHeadings(snap, ui, d.subjectToken).length !== 1
       ) {
-        const where = await this.lookIn(
+        const where = await this.refind(
           adapter,
           desk,
           w,
           d,
-          [handle.folder],
+          handle.folder,
           looks,
         );
         if (where.hit === null)
           throw new StepError(
             where.unsettled.length > 0
               ? `the message could not be looked for: ${this.unsettledWhy(ui, where, looks)}`
-              : `the message is no longer in ${ui.folders[handle.folder].label}`,
+              : `the message was not found in ${ui.folders[handle.folder].label} ${this.refindSpan(looks)}`,
           );
         await this.open(
           adapter,
@@ -2977,33 +3024,10 @@ export class HostedWebmailProvider implements CaptureProvider {
     const guard = ui.remove.trashGuard;
     const token = d.subjectToken;
     const trash = ui.folders.trash.label;
-    const snap = await desk.snapshot();
-    this.assertOnMailHost(adapter, snap, a);
-    const rows = this.tokenRows(snap, ui, token);
-    if (rows.length !== 1)
-      throw new StepError(
-        `${adapter.label}: ${rows.length} rows of the ${trash} list carry the run token, expected one: nothing is clicked`,
-      );
-    const row = rows[0]!;
     const onTrash = (s: Snapshot): boolean =>
       guard === null ||
       (s.location !== null &&
         new RegExp(guard.location, "i").test(percentDecoded(s.location)));
-    const labelled =
-      findShowing(snap.flat, tl.rowLabel, row).filter((f) => f !== row).length >
-      0;
-    if (!onTrash(snap) || !labelled)
-      throw new StepError(
-        `${adapter.label}: the row is not shown in ${trash} (the Trash guard: ${guard === null ? "" : `the address bar matching /${guard.location}/ and `}the row's own label ${describeLocator(tl.rowLabel)}; the address bar: ${snap.location === null ? "unread" : clipText(snap.location, 200, w.redact)}; the row's label ${labelled ? "shown" : "not shown"}), so nothing is clicked`,
-      );
-    const boxes = findShowing(snap.flat, tl.select, row);
-    if (boxes.length !== 1)
-      throw this.drift(
-        adapter,
-        "remove.trashList.select",
-        tl.select,
-        `matched ${boxes.length} elements in the message's row, expected exactly one`,
-      );
     const isTicked = (b: Flat): boolean =>
       b.node.states.some((st) => TICKED_STATES.includes(st));
     // The page's check boxes that are checked: a row's, or the toolbar's
@@ -3025,34 +3049,143 @@ export class HostedWebmailProvider implements CaptureProvider {
         this.tokenRows(s, ui, token).length === 1
       );
     };
-    const before = ticked(snap);
-    if (before.length > 0)
-      throw new StepError(
-        `${adapter.label}: a selection was already made in the ${trash} list (check boxes checked: ${before.length}, of them in its rows: ${selected(snap).length}): nothing is clicked`,
+    // The selection lost: nothing of the page checked, the token's row
+    // still the only one carrying the token (Gmail redrew the list).
+    const lost = (s: Snapshot): boolean =>
+      ticked(s).length === 0 && this.tokenRows(s, ui, token).length === 1;
+    // The list read twice alike (its rows' text): Gmail redraws a search
+    // list when its results are refreshed, which clears a selection.
+    const listKey = (s: Snapshot): string =>
+      `${s.location ?? ""}|${this.rowsOf(s, ui, token)
+        .seen.map((f) => rowText(f.node))
+        .join("\u0001")}`;
+    const settled = async (first: Snapshot): Promise<Snapshot> => {
+      let prev = listKey(first);
+      let snap = first;
+      const end = Date.now() + this.t.stepTimeoutMs;
+      for (;;) {
+        await sleep(Math.max(this.t.stableMs, 250));
+        snap = await desk.snapshot();
+        const key = listKey(snap);
+        if (key === prev || Date.now() >= end) return snap;
+        prev = key;
+      }
+    };
+    // Every guard, then the click on the row's own check box. Before it:
+    // exactly one row carries the run token, the Trash guard holds (the
+    // address bar, the row's own Trash label), the row has one check
+    // box, and nothing of the page is checked.
+    const select = async (first: Snapshot): Promise<void> => {
+      const snap = await settled(first);
+      this.assertOnMailHost(adapter, snap, a);
+      const rows = this.tokenRows(snap, ui, token);
+      if (rows.length !== 1)
+        throw new StepError(
+          `${adapter.label}: ${rows.length} rows of the ${trash} list carry the run token, expected one: nothing is clicked`,
+        );
+      const row = rows[0]!;
+      const labelled =
+        findShowing(snap.flat, tl.rowLabel, row).filter((f) => f !== row)
+          .length > 0;
+      if (!onTrash(snap) || !labelled)
+        throw new StepError(
+          `${adapter.label}: the row is not shown in ${trash} (the Trash guard: ${guard === null ? "" : `the address bar matching /${guard.location}/ and `}the row's own label ${describeLocator(tl.rowLabel)}; the address bar: ${snap.location === null ? "unread" : clipText(snap.location, 200, w.redact)}; the row's label ${labelled ? "shown" : "not shown"}), so nothing is clicked`,
+        );
+      const boxes = findShowing(snap.flat, tl.select, row);
+      if (boxes.length !== 1)
+        throw this.drift(
+          adapter,
+          "remove.trashList.select",
+          tl.select,
+          `matched ${boxes.length} elements in the message's row, expected exactly one`,
+        );
+      const before = ticked(snap);
+      if (before.length > 0)
+        throw new StepError(
+          `${adapter.label}: a selection was already made in the ${trash} list (check boxes checked: ${before.length}, of them in its rows: ${selected(snap).length}): nothing is clicked`,
+        );
+      await desk.click(boxes[0]!.node.bounds!);
+    };
+    // After the click: exactly that row selected in two readings in a
+    // row. Null: held; otherwise the frame it did not hold on, and
+    // whether it was lost (rather than grown or moved).
+    const held = async (): Promise<{
+      snap: Snapshot;
+      lost: boolean;
+    } | null> => {
+      const r = await desk.waitFor(onlyThatRow, this.t.stepTimeoutMs);
+      if (!r.ok) return { snap: r.snap, lost: lost(r.snap) };
+      await sleep(Math.max(this.t.stableMs, 250));
+      const again = await desk.snapshot();
+      if (onlyThatRow(again)) return null;
+      return { snap: again, lost: lost(again) };
+    };
+    const changed = (s: Snapshot, when: string): StepError =>
+      new StepError(
+        `${adapter.label}: ${when} (${selected(s).length} rows of the ${trash} list selected, ${this.tokenRows(s, ui, token).length} carrying the run token): nothing more is clicked`,
       );
-    await desk.click(boxes[0]!.node.bounds!);
-    const r = await desk.waitFor(onlyThatRow, this.t.stepTimeoutMs);
-    if (!r.ok) {
-      const n = selected(r.snap).length;
-      throw new StepError(
-        `${adapter.label}: a click on the row's check box did not select exactly that row (${n} rows selected): nothing more is clicked`,
+    // The selection made at most twice: a selection lost (Gmail redrew
+    // the list) is made once more behind every guard; one that grew or
+    // moved fails with nothing more clicked.
+    let selections = 0;
+    let from: Snapshot = await desk.snapshot();
+    let button: { snap: Snapshot; ok: boolean } | null = null;
+    while (button === null) {
+      await select(from);
+      selections++;
+      const h = await held();
+      if (h !== null) {
+        if (!h.lost)
+          throw changed(
+            h.snap,
+            "a click on the row's check box did not select exactly that row",
+          );
+        if (selections >= 2)
+          return {
+            unconfirmed: `the row's selection was lost again after it was made a second time, before ${describeLocator(tl.button)} showed`,
+          };
+        this.log(
+          `email-shots: hosted-webmail: ${a.set}/${a.name}: the ${trash} row's selection was lost (the list redrawn); it is made once more`,
+        );
+        from = h.snap;
+        continue;
+      }
+      // The button, on a frame that still shows exactly that row
+      // selected (a selection that grew or moved since is not deleted);
+      // a selection lost meanwhile is made once more.
+      const b = await desk.waitFor(
+        (s) =>
+          (findShowing(s.flat, tl.button).length === 1 &&
+            onTrash(s) &&
+            onlyThatRow(s)) ||
+          !onlyThatRow(s),
+        this.t.stepTimeoutMs,
       );
+      if (b.ok && onlyThatRow(b.snap)) {
+        button = b;
+        break;
+      }
+      if (!b.ok)
+        return {
+          unconfirmed: `no ${describeLocator(tl.button)} showed once the row was selected (within ${this.t.stepTimeoutMs / 1000} s; the selection made ${selections} time${selections === 1 ? "" : "s"})`,
+        };
+      if (!lost(b.snap))
+        throw changed(
+          b.snap,
+          `the selection changed before ${describeLocator(tl.button)} was clicked`,
+        );
+      if (selections >= 2)
+        return {
+          unconfirmed: `the row's selection was lost again after it was made a second time, before ${describeLocator(tl.button)} showed`,
+        };
+      this.log(
+        `email-shots: hosted-webmail: ${a.set}/${a.name}: the ${trash} row's selection was lost before ${describeLocator(tl.button)} showed (the list redrawn); it is made once more`,
+      );
+      from = b.snap;
     }
-    const button = await desk.waitFor(
-      (s) => findShowing(s.flat, tl.button).length === 1 && onTrash(s),
-      this.t.stepTimeoutMs,
+    await desk.click(
+      findShowing(button!.snap.flat, tl.button)[0]!.node.bounds!,
     );
-    if (!button.ok)
-      return {
-        unconfirmed: `no ${describeLocator(tl.button)} showed once the row was selected (within ${this.t.stepTimeoutMs / 1000} s)`,
-      };
-    // The selection again, on the frame the button is clicked from: a
-    // selection that grew or moved since is not deleted.
-    if (!onlyThatRow(button.snap))
-      throw new StepError(
-        `${adapter.label}: the selection changed before ${describeLocator(tl.button)} was clicked (${selected(button.snap).length} rows of the ${trash} list selected, ${this.tokenRows(button.snap, ui, token).length} carrying the run token): nothing more is clicked`,
-      );
-    await desk.click(findShowing(button.snap.flat, tl.button)[0]!.node.bounds!);
     if (tl.confirm !== null) {
       const inDialog = (f: Flat): boolean => {
         for (let p = f.parent; p !== null; p = p.parent)

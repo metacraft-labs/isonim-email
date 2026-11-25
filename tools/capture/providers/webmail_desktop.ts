@@ -34,6 +34,7 @@ import {
   atAddress,
   type Flat,
   flatten,
+  pageOf,
 } from "./a11y_tree.ts";
 import {
   type GaSession,
@@ -226,8 +227,9 @@ export class WebmailDesktop {
   }
 
   /**
-   * Goes to `url` through the address bar (F5 when it already holds it),
-   * then reads until the address bar holds it and `ready` holds; `how`
+   * Goes to `url` through the address bar (F5 when it already holds it
+   * over a drawn page; typed again while no page is drawn: F5 then would
+   * reload the browser's blank first document, about:blank), then reads until the address bar holds it and `ready` holds; `how`
    * says which (the search record's). With `reloadWhen` holding for the
    * read before, a typed URL is reloaded (F5) once the address bar holds
    * it ("typed-reload"): a page that swaps its content a moment after
@@ -254,7 +256,7 @@ export class WebmailDesktop {
     const here = (loc: string | null): boolean =>
       atAddress(loc, url, opts.aliases ?? []);
     const now = await this.snapshot();
-    const reload = here(now.location);
+    const reload = here(now.location) && pageOf(now.flat) !== null;
     let how: "typed" | "reload" | "typed-reload" = reload ? "reload" : "typed";
     if (reload) await this.ga.key("F5");
     else {
